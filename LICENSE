@@ -1,0 +1,39 @@
+SeisConv — Proprietary Software License
+Copyright (c) 2026 Moshe Fridin. All rights reserved.
+
+This software and its source code (the "Software") are proprietary and
+confidential. The Software is made available for viewing on this repository
+for reference and evaluation purposes only. No license, right, or permission
+is granted by this publication except as expressly stated below.
+
+1. NO LICENSE GRANTED
+   Except for the limited permissions in Section 2, all rights are reserved by
+   the copyright holder. Publication of the source code does NOT make this
+   Software open source and does NOT grant any right to use, copy, modify,
+   merge, publish, distribute, sublicense, or sell copies of the Software, or
+   to create derivative works, in whole or in part.
+
+2. LIMITED PERMISSION
+   You may view and read the source code in this repository, and clone it
+   solely to read it locally. Any other use — including running the Software in
+   production, redistribution, modification for distribution, or commercial use
+   — requires a separate written agreement with the copyright holder.
+
+3. NO WARRANTY
+   THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+   IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+   FITNESS FOR A PARTICULAR PURPOSE, AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+   AUTHOR OR COPYRIGHT HOLDER BE LIABLE FOR ANY CLAIM, DAMAGES, OR OTHER
+   LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT, OR OTHERWISE, ARISING
+   FROM, OUT OF, OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS
+   IN THE SOFTWARE.
+
+4. THIRD-PARTY COMPONENTS
+   The Software depends on third-party open-source packages (see package.json
+   and the dependency lockfile). Those components remain governed by their own
+   respective licenses; this license applies only to the original SeisConv
+   source authored by the copyright holder.
+
+5. CONTACT
+   For licensing inquiries, contact the copyright holder via the repository's
+   contact channel.

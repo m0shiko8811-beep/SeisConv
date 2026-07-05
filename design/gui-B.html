@@ -1,0 +1,743 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>SeisConv — GUI Direction B · Instrument / Industrial</title>
+<style>
+/* ============================================================
+   SeisConv — DIRECTION B: "Instrument / Industrial"
+   High-contrast, dense, data-first acquisition/processing UI.
+   Static mockup. Inline CSS only, no JS.
+   Brand: deep navy canvas + teal(#1fc8c0) / cyan(#34dbd0) as
+   scarce SIGNAL accents. Scientific colormaps stay honest.
+============================================================ */
+:root{
+  /* Navy elevation ladder (never pure black) */
+  --bg:#0a1825;        /* deepest canvas              */
+  --surface:#0d1f33;   /* base surface                */
+  --panel:#13283f;     /* panel fill                  */
+  --raised:#182f48;    /* raised inputs/headers       */
+  --raised2:#20384f;   /* hover / selected raised     */
+  --hair:#26405a;      /* hairline border             */
+  --hair2:#33506e;     /* stronger border             */
+  /* Brand accents — SIGNAL only */
+  --teal:#1fc8c0;
+  --cyan:#34dbd0;
+  --teal-dim:rgba(31,200,192,0.14);
+  --teal-line:rgba(31,200,192,0.40);
+  /* Neutral text ladder = the workhorse */
+  --t-hi:#e6eef5;
+  --t-md:#9fb2c4;
+  --t-dim:#5f7a88;
+  --t-faint:#42596b;
+  /* Semantic — kept distinct from brand */
+  --green:#48d597;
+  --amber:#f0b549;
+  --red:#ff5d6c;
+  --blue:#3aa0e0;
+  /* Type */
+  --mono:'JetBrains Mono','Cascadia Mono','Consolas',ui-monospace,monospace;
+  --sans:'Inter','Segoe UI Variable','Segoe UI',system-ui,sans-serif;
+}
+*{box-sizing:border-box;margin:0;padding:0;}
+html,body{height:100%;}
+body{
+  background:var(--bg);
+  color:var(--t-hi);
+  font-family:var(--sans);
+  font-size:13px;line-height:1.45;
+  font-variant-numeric:tabular-nums lining-nums;
+  -webkit-font-smoothing:antialiased;
+  display:flex;justify-content:center;align-items:flex-start;
+  padding:18px;
+}
+.app{
+  width:1240px;height:860px;
+  background:
+    linear-gradient(180deg,rgba(31,200,192,0.05),transparent 120px),
+    var(--surface);
+  border:1px solid var(--hair2);
+  border-radius:8px;
+  display:grid;
+  grid-template-columns:54px 1fr;
+  grid-template-rows:46px 1fr 26px;
+  grid-template-areas:
+    "rail topbar"
+    "rail body"
+    "rail statusbar";
+  overflow:hidden;
+  box-shadow:0 24px 70px rgba(0,0,0,0.55);
+}
+.mono{font-family:var(--mono);font-feature-settings:"tnum" 1;}
+.tnum{font-variant-numeric:tabular-nums;}
+
+/* ====================== LEFT ICON RAIL ====================== */
+.rail{
+  grid-area:rail;
+  background:linear-gradient(180deg,var(--surface),var(--bg));
+  border-right:1px solid var(--hair2);
+  display:flex;flex-direction:column;align-items:center;
+  padding:8px 0;gap:4px;
+}
+.rail .logo{
+  width:34px;height:34px;border-radius:8px;margin-bottom:8px;
+  background:radial-gradient(120% 120% at 28% 22%,#1a3850,#0c1d30);
+  border:1px solid var(--teal-line);
+  display:flex;align-items:center;justify-content:center;
+  box-shadow:0 0 0 1px rgba(0,0,0,0.4),0 4px 12px rgba(0,0,0,0.5);
+}
+.rail .logo svg{display:block;}
+.rb{
+  width:40px;height:40px;border-radius:7px;
+  display:flex;flex-direction:column;align-items:center;justify-content:center;gap:3px;
+  color:var(--t-dim);cursor:default;position:relative;
+  border:1px solid transparent;
+}
+.rb svg{display:block;}
+.rb .rl{font-size:8px;letter-spacing:.4px;text-transform:uppercase;}
+.rb:hover{color:var(--t-md);background:var(--raised);}
+.rb.on{
+  color:var(--teal);background:var(--teal-dim);
+  border:1px solid var(--teal-line);
+}
+.rb.on::before{
+  content:"";position:absolute;left:-9px;top:7px;bottom:7px;width:3px;
+  background:var(--teal);border-radius:0 3px 3px 0;
+  box-shadow:0 0 8px var(--teal-line);
+}
+.rail .spacer{flex:1;}
+
+/* ====================== TOP BAR ====================== */
+.topbar{
+  grid-area:topbar;
+  display:flex;align-items:center;gap:14px;
+  padding:0 14px;
+  background:linear-gradient(180deg,var(--surface),rgba(13,31,51,0.6));
+  border-bottom:1px solid var(--hair2);
+}
+.title{display:flex;flex-direction:column;line-height:1.05;}
+.title .t1{font-size:14px;font-weight:700;letter-spacing:.2px;color:var(--t-hi);}
+.title .t1 b{color:var(--teal);font-weight:800;}
+.title .t2{font-size:9.5px;letter-spacing:1.4px;color:var(--t-dim);text-transform:uppercase;}
+.sep{width:1px;height:24px;background:var(--hair);}
+/* file ident pill */
+.fileid{
+  display:flex;align-items:center;gap:9px;
+  background:var(--panel);border:1px solid var(--hair);border-radius:6px;
+  padding:5px 11px;height:30px;
+}
+.fileid .dot{width:7px;height:7px;border-radius:50%;background:var(--green);box-shadow:0 0 7px var(--green);}
+.fileid .fname{font-family:var(--mono);font-size:12px;color:var(--t-hi);}
+.fileid .fmeta{font-family:var(--mono);font-size:11px;color:var(--t-dim);}
+.topbar .grow{flex:1;}
+.tbtn{
+  height:30px;padding:0 13px;border-radius:6px;
+  background:var(--raised);border:1px solid var(--hair2);color:var(--t-md);
+  font-family:var(--sans);font-size:12px;font-weight:600;cursor:default;
+  display:inline-flex;align-items:center;gap:7px;
+}
+.tbtn:hover{background:var(--raised2);color:var(--t-hi);}
+.tbtn svg{display:block;}
+.tbtn.primary{
+  background:linear-gradient(180deg,var(--teal),#16a59e);
+  border-color:#16a59e;color:#04181a;font-weight:700;
+  box-shadow:0 0 0 1px rgba(31,200,192,0.25),0 6px 16px rgba(31,200,192,0.18);
+}
+.tbtn.primary:hover{background:linear-gradient(180deg,#33d6ce,var(--teal));}
+.winbtns{display:flex;gap:8px;margin-left:2px;}
+.winbtns i{width:11px;height:11px;border-radius:50%;display:block;}
+.winbtns .w1{background:#3a5066;} .winbtns .w2{background:#3a5066;} .winbtns .w3{background:#3a5066;}
+
+/* ====================== BODY GRID ====================== */
+.body{
+  grid-area:body;overflow:hidden;
+  display:grid;
+  grid-template-columns:288px 1fr 252px;
+  grid-template-rows:1fr 188px;
+  grid-template-areas:
+    "left  stage right"
+    "left  spectrum right";
+  gap:1px;background:var(--hair);
+}
+.body>section,.body>aside{background:var(--surface);overflow:hidden;}
+
+/* panel scaffolding */
+.phead{
+  height:30px;display:flex;align-items:center;gap:8px;
+  padding:0 11px;background:var(--panel);
+  border-bottom:1px solid var(--hair);
+}
+.phead .ico{color:var(--teal);display:flex;}
+.phead .ttl{font-size:10.5px;font-weight:700;letter-spacing:1.2px;text-transform:uppercase;color:var(--t-md);}
+.phead .grow{flex:1;}
+.phead .tag{
+  font-family:var(--mono);font-size:10px;color:var(--t-dim);
+  border:1px solid var(--hair);border-radius:4px;padding:1px 6px;
+}
+.phead .tag.live{color:var(--teal);border-color:var(--teal-line);background:var(--teal-dim);}
+
+/* ---------- LEFT: parameter / convert column ---------- */
+.left{grid-area:left;display:flex;flex-direction:column;}
+.left .scroll{overflow:auto;flex:1;}
+.grp{padding:11px 12px;border-bottom:1px solid var(--hair);}
+.grp .glbl{
+  font-size:9.5px;letter-spacing:1.3px;text-transform:uppercase;color:var(--t-dim);
+  margin-bottom:9px;display:flex;align-items:center;gap:6px;
+}
+.grp .glbl::after{content:"";flex:1;height:1px;background:var(--hair);}
+/* format chips grid (9) */
+.chips{display:grid;grid-template-columns:1fr 1fr;gap:6px;}
+.chip{
+  height:30px;border-radius:5px;border:1px solid var(--hair2);
+  background:var(--raised);color:var(--t-md);
+  font-family:var(--mono);font-size:11px;font-weight:600;
+  display:flex;align-items:center;justify-content:center;cursor:default;
+  letter-spacing:.2px;
+}
+.chip:hover{background:var(--raised2);color:var(--t-hi);}
+.chip.sel{
+  background:var(--teal-dim);border-color:var(--teal);color:var(--teal);
+  box-shadow:inset 0 0 0 1px rgba(31,200,192,0.25);
+}
+.chip.wide{grid-column:span 2;}
+/* parameter rows */
+.prow{display:flex;align-items:center;justify-content:space-between;gap:8px;padding:5px 0;}
+.prow .k{font-size:12px;color:var(--t-md);}
+.prow .v{font-family:var(--mono);font-size:12px;color:var(--t-hi);}
+.field{
+  display:flex;align-items:center;height:28px;border-radius:5px;
+  background:var(--raised);border:1px solid var(--hair2);
+  padding:0 8px;color:var(--t-hi);font-family:var(--mono);font-size:12px;
+  min-width:0;
+}
+.field.sel{justify-content:space-between;}
+.field .car{color:var(--t-dim);}
+.numbox{width:78px;justify-content:flex-end;}
+.toggle{
+  width:34px;height:18px;border-radius:10px;background:var(--raised2);
+  border:1px solid var(--hair2);position:relative;flex:none;
+}
+.toggle::after{content:"";position:absolute;width:13px;height:13px;border-radius:50%;
+  background:var(--t-dim);top:1.5px;left:2px;}
+.toggle.on{background:var(--teal-dim);border-color:var(--teal);}
+.toggle.on::after{background:var(--teal);left:18px;box-shadow:0 0 6px var(--teal-line);}
+.cbtn{
+  width:100%;height:34px;border-radius:6px;margin-top:2px;
+  background:linear-gradient(180deg,var(--teal),#16a59e);border:1px solid #16a59e;
+  color:#04181a;font-weight:700;font-size:13px;font-family:var(--sans);cursor:default;
+  display:flex;align-items:center;justify-content:center;gap:8px;letter-spacing:.3px;
+  box-shadow:0 6px 16px rgba(31,200,192,0.16);
+}
+.cbtn svg{display:block;}
+.cbtn.ghost{
+  background:var(--raised);border-color:var(--hair2);color:var(--t-md);
+  font-weight:600;box-shadow:none;
+}
+/* convert progress meter */
+.meter{margin-top:10px;}
+.meter .mhdr{display:flex;justify-content:space-between;font-size:11px;color:var(--t-dim);margin-bottom:5px;}
+.meter .mhdr b{font-family:var(--mono);color:var(--teal);font-weight:600;}
+.bar{height:7px;border-radius:4px;background:var(--bg);border:1px solid var(--hair);overflow:hidden;}
+.bar i{display:block;height:100%;width:64%;border-radius:3px;
+  background:linear-gradient(90deg,var(--teal),var(--cyan));
+  box-shadow:0 0 8px var(--teal-line);}
+
+/* ---------- CENTER: STAGE (big section display) ---------- */
+.stage{grid-area:stage;display:flex;flex-direction:column;}
+.stage .stoolbar{
+  height:34px;display:flex;align-items:center;gap:6px;padding:0 10px;
+  background:var(--panel);border-bottom:1px solid var(--hair);
+}
+.seg{display:inline-flex;border:1px solid var(--hair2);border-radius:6px;overflow:hidden;background:var(--raised);}
+.seg button{
+  height:24px;padding:0 11px;background:transparent;border:none;
+  color:var(--t-dim);font-family:var(--sans);font-size:11.5px;font-weight:600;cursor:default;
+}
+.seg button+button{border-left:1px solid var(--hair2);}
+.seg button:hover{color:var(--t-md);}
+.seg button.on{background:var(--teal-dim);color:var(--teal);}
+.stoolbar .mini{
+  height:24px;display:inline-flex;align-items:center;gap:6px;padding:0 9px;border-radius:5px;
+  background:var(--raised);border:1px solid var(--hair2);color:var(--t-md);font-size:11.5px;
+}
+.stoolbar .mini b{font-family:var(--mono);color:var(--t-hi);font-weight:600;}
+.stoolbar .grow{flex:1;}
+.stoolbar .polarity{
+  height:24px;display:inline-flex;align-items:center;gap:6px;padding:0 9px;border-radius:5px;
+  background:var(--raised);border:1px solid var(--hair2);
+  font-size:11px;color:var(--t-md);font-family:var(--mono);
+}
+.stoolbar .polarity .pp{color:var(--teal);}
+/* the seismic canvas */
+.section-wrap{flex:1;position:relative;background:var(--bg);overflow:hidden;}
+.svg-stage{position:absolute;inset:0;width:100%;height:100%;display:block;}
+/* axes labels overlay */
+.axlabel{position:absolute;font-family:var(--mono);font-size:10px;color:var(--t-dim);pointer-events:none;}
+.ax-y{left:6px;top:6px;}
+.ax-x{right:8px;bottom:6px;}
+.ax-trace{left:50%;top:6px;transform:translateX(-50%);color:var(--t-md);}
+/* live trace cursor readout */
+.cursor-read{
+  position:absolute;top:8px;right:8px;
+  background:rgba(8,21,33,0.88);border:1px solid var(--teal-line);border-radius:6px;
+  padding:7px 9px;font-family:var(--mono);font-size:11px;color:var(--t-hi);
+  backdrop-filter:blur(4px);min-width:128px;
+}
+.cursor-read .cr{display:flex;justify-content:space-between;gap:14px;padding:1px 0;}
+.cursor-read .cr span{color:var(--t-dim);}
+.cursor-read .cr b{color:var(--teal);font-weight:600;}
+.cursor-read .crh{color:var(--teal);font-size:9px;letter-spacing:1px;text-transform:uppercase;margin-bottom:4px;border-bottom:1px solid var(--hair);padding-bottom:3px;}
+/* colorbar (RWB diverging, white=0) */
+.colorbar{
+  position:absolute;left:8px;bottom:10px;
+  display:flex;align-items:center;gap:7px;
+  background:rgba(8,21,33,0.85);border:1px solid var(--hair);border-radius:6px;padding:6px 8px;
+}
+.colorbar .cbstrip{
+  width:118px;height:9px;border-radius:3px;border:1px solid var(--hair2);
+  background:linear-gradient(90deg,#3a5fb0 0%,#7da0d8 24%,#ffffff 50%,#e58a8a 76%,#c43b3b 100%);
+}
+.colorbar .lab{font-family:var(--mono);font-size:9.5px;color:var(--t-dim);}
+.colorbar .lab.hi{color:var(--t-md);}
+
+/* ---------- BOTTOM CENTER: SPECTRUM strip ---------- */
+.spectrum{grid-area:spectrum;display:flex;flex-direction:column;}
+.spec-wrap{flex:1;position:relative;background:var(--bg);overflow:hidden;}
+.spec-svg{position:absolute;inset:0;width:100%;height:100%;}
+
+/* ---------- RIGHT: header dump + QC ---------- */
+.right{grid-area:right;display:flex;flex-direction:column;}
+.right .rscroll{flex:1;overflow:auto;}
+/* binary/trace header dump table */
+.hdr-table{width:100%;border-collapse:collapse;font-family:var(--mono);font-size:11px;}
+.hdr-table tr{border-bottom:1px solid rgba(38,64,90,0.45);}
+.hdr-table td{padding:3.5px 8px;white-space:nowrap;}
+.hdr-table td.off{color:var(--t-faint);width:42px;text-align:right;}
+.hdr-table td.key{color:var(--t-md);}
+.hdr-table td.val{color:var(--t-hi);text-align:right;}
+.hdr-table td.val.acc{color:var(--teal);}
+.hdr-table tr:hover{background:var(--raised);}
+/* QC flag rows */
+.qc{padding:9px 11px;border-top:1px solid var(--hair);}
+.qcrow{
+  display:grid;grid-template-columns:14px 1fr auto;gap:8px;align-items:center;
+  padding:5px 0;border-bottom:1px solid rgba(38,64,90,0.4);font-size:11.5px;
+}
+.qcrow:last-child{border-bottom:none;}
+.qcrow .sv{width:8px;height:8px;border-radius:2px;}
+.qcrow.ok .sv{background:var(--green);box-shadow:0 0 6px rgba(72,213,151,0.5);}
+.qcrow.warn .sv{background:var(--amber);box-shadow:0 0 6px rgba(240,181,73,0.5);}
+.qcrow.err .sv{background:var(--red);box-shadow:0 0 6px rgba(255,93,108,0.5);}
+.qcrow .qt{color:var(--t-md);}
+.qcrow .qn{font-family:var(--mono);font-size:11px;color:var(--t-hi);}
+.qcrow.warn .qn{color:var(--amber);}
+.qcrow.err .qn{color:var(--red);}
+
+/* ====================== STATUS BAR ====================== */
+.statusbar{
+  grid-area:statusbar;
+  display:flex;align-items:center;gap:0;
+  background:linear-gradient(180deg,var(--panel),var(--surface));
+  border-top:1px solid var(--hair2);
+  font-family:var(--mono);font-size:11px;color:var(--t-md);
+}
+.sb{display:flex;align-items:center;gap:7px;padding:0 12px;height:100%;border-right:1px solid var(--hair);}
+.sb .sk{color:var(--t-dim);font-family:var(--sans);font-size:10px;letter-spacing:.6px;text-transform:uppercase;}
+.sb .sv{color:var(--t-hi);}
+.sb .sv.acc{color:var(--teal);}
+.sb.ok{color:var(--green);}
+.sb .led{width:7px;height:7px;border-radius:50%;background:var(--green);box-shadow:0 0 7px var(--green);}
+.statusbar .grow{flex:1;}
+.sb.crs{border-right:none;border-left:1px solid var(--hair);}
+
+/* tiny tick marks for charts (decorative svg uses currentColor) */
+</style>
+</head>
+<body>
+<div class="app">
+
+  <!-- ========================= LEFT ICON RAIL ========================= -->
+  <nav class="rail">
+    <div class="logo" title="SeisConv">
+      <svg width="22" height="22" viewBox="0 0 24 24" fill="none">
+        <defs><linearGradient id="lg" x1="0" y1="0" x2="1" y2="1">
+          <stop offset="0" stop-color="#34dbd0"/><stop offset="1" stop-color="#1fc8c0"/></linearGradient></defs>
+        <path d="M2 13 L6 13 L8 6 L11 18 L14 9 L16 13 L22 13" stroke="url(#lg)" stroke-width="2.2"
+              stroke-linecap="round" stroke-linejoin="round" fill="none"/>
+      </svg>
+    </div>
+
+    <!-- Converter (active in chrome, but Stage shows File Viewer) -->
+    <div class="rb" title="Converter">
+      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M14 3 H7 a2 2 0 0 0-2 2 v14 a2 2 0 0 0 2 2 h10 a2 2 0 0 0 2-2 V8 z"/>
+        <path d="M14 3 v5 h5"/><path d="M9 14 h6 M13 12 l2 2-2 2"/>
+      </svg>
+      <span class="rl">Conv</span>
+    </div>
+
+    <!-- Trace Inspector -->
+    <div class="rb" title="Trace Inspector">
+      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M2 12 h3 l2-6 3 12 2-9 2 5 h3"/>
+        <circle cx="18.5" cy="16.5" r="3.2"/><path d="M20.8 18.8 L23 21"/>
+      </svg>
+      <span class="rl">Trace</span>
+    </div>
+
+    <!-- File Viewer  (SELECTED — the big stage) -->
+    <div class="rb on" title="File Viewer">
+      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+        <rect x="3.5" y="3.5" width="17" height="17" rx="2"/>
+        <path d="M7 7 v10 M11 7 v10 M15 7 v10 M19 7"/>
+      </svg>
+      <span class="rl">View</span>
+    </div>
+
+    <!-- SPS 2.1 -->
+    <div class="rb" title="SPS 2.1">
+      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M4 7 h16 M4 12 h16 M4 17 h16 M8 4 v16 M14 4 v16" opacity="0.5"/>
+        <path d="M12 8 a3 3 0 0 1 3 3 c0 2.2-3 5-3 5 s-3-2.8-3-5 a3 3 0 0 1 3-3z" fill="currentColor" stroke="none"/>
+      </svg>
+      <span class="rl">SPS</span>
+    </div>
+
+    <!-- Velocity -->
+    <div class="rb" title="Velocity">
+      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M4 4 C9 9 9 15 12 21 C15 15 15 9 20 4"/>
+        <path d="M7 7 C10 10 10 14 12 18" opacity="0.55"/>
+      </svg>
+      <span class="rl">Vel</span>
+    </div>
+
+    <div class="spacer"></div>
+    <div class="rb" title="Settings">
+      <svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+        <circle cx="12" cy="12" r="3"/>
+        <path d="M12 2 v2.5 M12 19.5 V22 M22 12 h-2.5 M4.5 12 H2 M19 5 l-1.8 1.8 M6.8 17.2 5 19 M19 19 l-1.8-1.8 M6.8 6.8 5 5"/>
+      </svg>
+    </div>
+  </nav>
+
+  <!-- ========================= TOP BAR ========================= -->
+  <header class="topbar">
+    <div class="title">
+      <div class="t1">SEIS<b>CONV</b></div>
+      <div class="t2">File Viewer · Section Display</div>
+    </div>
+    <div class="sep"></div>
+    <div class="fileid">
+      <span class="dot"></span>
+      <span class="fname">Line_4821_shot.sgy</span>
+      <span class="fmeta">· SEG-Y r1 · 4-byte IBM float</span>
+    </div>
+    <div class="grow"></div>
+    <button class="tbtn">
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 4 h7 l2 2 h7 v12 H4 z"/></svg>
+      Open file…
+    </button>
+    <button class="tbtn primary">
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 13 h6 M13 11 l2 2-2 2"/><path d="M5 4 h9 l5 5 v11 H5 z"/></svg>
+      Convert &amp; Save
+    </button>
+    <div class="sep"></div>
+    <div class="winbtns"><i class="w1"></i><i class="w2"></i><i class="w3"></i></div>
+  </header>
+
+  <!-- ========================= BODY ========================= -->
+  <div class="body">
+
+    <!-- ---------- LEFT PARAMETER / CONVERT COLUMN ---------- -->
+    <section class="left">
+      <div class="phead">
+        <span class="ico"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M5 4 h9 l5 5 v11 H5 z"/><path d="M9 13 h6 M13 11 l2 2-2 2"/></svg></span>
+        <span class="ttl">Convert Target</span>
+        <span class="grow"></span>
+        <span class="tag">9 formats</span>
+      </div>
+      <div class="scroll">
+        <!-- 9 format chips -->
+        <div class="grp">
+          <div class="glbl">Output format</div>
+          <div class="chips">
+            <div class="chip sel">SEG-Y r1</div>
+            <div class="chip">SEG-Y r0</div>
+            <div class="chip">SEG-Y r2</div>
+            <div class="chip">Seismic Unix</div>
+            <div class="chip">SEG-2 / .dat</div>
+            <div class="chip">SEG-D r1</div>
+            <div class="chip">SEG-D r3</div>
+            <div class="chip">Tape Image</div>
+            <div class="chip wide">CSV / ASCII</div>
+          </div>
+        </div>
+
+        <!-- sample/format parameters -->
+        <div class="grp">
+          <div class="glbl">Sample format</div>
+          <div class="prow"><span class="k">Data sample</span>
+            <span class="field sel" style="width:128px">IBM float 32 <span class="car">▾</span></span></div>
+          <div class="prow"><span class="k">Byte order</span>
+            <span class="field sel" style="width:128px">Big-endian <span class="car">▾</span></span></div>
+          <div class="prow"><span class="k">Sample int.</span>
+            <span class="field numbox">2000 µs</span></div>
+          <div class="prow"><span class="k">Samples / trc</span>
+            <span class="field numbox">1500</span></div>
+          <div class="prow"><span class="k">Remap headers</span>
+            <span class="toggle on"></span></div>
+        </div>
+
+        <!-- run convert -->
+        <div class="grp">
+          <div class="glbl">Run</div>
+          <div class="cbtn">
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 4 l13 8-13 8 z"/></svg>
+            Convert &amp; Save…
+          </div>
+          <div class="meter">
+            <div class="mhdr"><span>Worker thread · off-UI</span><b>64%</b></div>
+            <div class="bar"><i></i></div>
+            <div class="mhdr" style="margin-top:5px;margin-bottom:0"><span>1 480 / 2 312 traces</span><span class="mono" style="color:var(--t-dim)">~3.1 s left</span></div>
+          </div>
+          <div class="cbtn ghost" style="margin-top:12px;">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 4 h6 v6 H4 z M14 14 h6 v6 h-6 z M10 7 h7 v7"/></svg>
+            Batch → ZIP…
+          </div>
+        </div>
+
+        <!-- display params for the stage -->
+        <div class="grp">
+          <div class="glbl">Display</div>
+          <div class="prow"><span class="k">Mode</span>
+            <span class="field sel" style="width:128px">Variable density <span class="car">▾</span></span></div>
+          <div class="prow"><span class="k">Colormap</span>
+            <span class="field sel" style="width:128px">Red-White-Blue <span class="car">▾</span></span></div>
+          <div class="prow"><span class="k">Gain</span>
+            <span class="field numbox">1.8×</span></div>
+          <div class="prow"><span class="k">AGC (500 ms)</span>
+            <span class="toggle on"></span></div>
+          <div class="prow"><span class="k">Clip</span>
+            <span class="field numbox">98%</span></div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ---------- CENTER STAGE: BIG SECTION DISPLAY ---------- -->
+    <section class="stage">
+      <div class="stoolbar">
+        <span class="seg">
+          <button class="on">VarDensity</button>
+          <button>Wiggle</button>
+          <button>Var-Area</button>
+          <button>VD+Wig</button>
+        </span>
+        <span class="mini">Traces <b>2 312</b></span>
+        <span class="mini">CDP <b>1 — 578</b></span>
+        <span class="mini">Δt <b>2.000 ms</b></span>
+        <span class="grow"></span>
+        <span class="polarity">POLARITY <span class="pp">SEG NORMAL ▲</span></span>
+      </div>
+
+      <div class="section-wrap">
+        <!-- Big seismic variable-density + wiggle composite, drawn with SVG (RWB, white=0) -->
+        <svg class="svg-stage" viewBox="0 0 920 460" preserveAspectRatio="none">
+          <defs>
+            <!-- subtle vignette so edges read as plot area -->
+            <radialGradient id="vig" cx="50%" cy="42%" r="75%">
+              <stop offset="60%" stop-color="rgba(0,0,0,0)"/>
+              <stop offset="100%" stop-color="rgba(0,0,0,0.30)"/>
+            </radialGradient>
+            <!-- reusable variable-area wiggle trace (deflects right at reflector packets) -->
+            <path id="wg" d="M0 0 v40 c14 6 14 18 0 24 v14 c-9 5-9 13 0 18 v22 c16 7 16 20 0 27 v12 c-8 5-8 12 0 17 v18 c13 6 13 17 0 23 v16 c-7 4-7 11 0 16 v28 c11 6 11 16 0 22 v44 V460 z"/>
+          </defs>
+          <rect x="0" y="0" width="920" height="460" fill="#0a1825"/>
+
+          <!-- VARIABLE-DENSITY bands: alternating warm/cool dim columns to suggest a reflectivity section.
+               Generated as many thin vertical strips with banded reflectors. -->
+          <g opacity="0.92">
+            <!-- background light reflectors (white=0 around mid) -->
+            <g>
+              <rect x="0" y="40"  width="920" height="9"  fill="#cfd9e6" opacity="0.10"/>
+              <rect x="0" y="78"  width="920" height="14" fill="#5c7fc4" opacity="0.30"/>
+              <rect x="0" y="120" width="920" height="8"  fill="#b9544f" opacity="0.32"/>
+              <rect x="0" y="150" width="920" height="16" fill="#3a5fb0" opacity="0.34"/>
+              <rect x="0" y="196" width="920" height="10" fill="#c96a64" opacity="0.30"/>
+              <rect x="0" y="232" width="920" height="13" fill="#5278bd" opacity="0.32"/>
+              <rect x="0" y="276" width="920" height="9"  fill="#b9544f" opacity="0.30"/>
+              <rect x="0" y="312" width="920" height="15" fill="#3a5fb0" opacity="0.30"/>
+              <rect x="0" y="356" width="920" height="11" fill="#c2615b" opacity="0.28"/>
+              <rect x="0" y="398" width="920" height="14" fill="#4a6cb6" opacity="0.28"/>
+            </g>
+            <!-- structural dip: skewed reflector packets -->
+            <g opacity="0.5">
+              <path d="M0 96 Q230 78 460 102 T920 92 L920 110 Q460 122 0 116 Z" fill="#3a5fb0"/>
+              <path d="M0 172 Q230 198 460 168 T920 184 L920 200 Q460 184 0 192 Z" fill="#b9544f"/>
+              <path d="M0 258 Q300 232 600 262 T920 250 L920 268 Q600 280 0 280 Z" fill="#3a5fb0"/>
+              <path d="M0 336 Q260 360 520 330 T920 348 L920 366 Q520 348 0 360 Z" fill="#b9544f"/>
+            </g>
+          </g>
+
+          <!-- WIGGLE overlay: a comb of variable-area wiggles (neutral ink), so the
+               section reads as VarDensity + wiggle composite. Each trace is a vertical
+               line that deflects right around the same reflector packets. -->
+          <g stroke="#0a1825" stroke-width="0.7" fill="#0a1825" fill-opacity="0.32" opacity="0.7">
+            <use href="#wg" x="28"/><use href="#wg" x="76"/><use href="#wg" x="124"/>
+            <use href="#wg" x="172"/><use href="#wg" x="220"/><use href="#wg" x="268"/>
+            <use href="#wg" x="316"/><use href="#wg" x="364"/><use href="#wg" x="412"/>
+            <use href="#wg" x="518"/><use href="#wg" x="566"/><use href="#wg" x="614"/>
+            <use href="#wg" x="662"/><use href="#wg" x="710"/><use href="#wg" x="758"/>
+            <use href="#wg" x="806"/><use href="#wg" x="854"/>
+          </g>
+
+          <!-- LIVE selected-trace cursor (teal) -->
+          <line x1="470" y1="0" x2="470" y2="460" stroke="#1fc8c0" stroke-width="1.4" opacity="0.85"/>
+          <line x1="470" y1="0" x2="470" y2="460" stroke="#1fc8c0" stroke-width="6" opacity="0.10"/>
+          <!-- horizontal time marker -->
+          <line x1="0" y1="206" x2="920" y2="206" stroke="#34dbd0" stroke-width="0.8" stroke-dasharray="4 5" opacity="0.55"/>
+
+          <rect x="0" y="0" width="920" height="460" fill="url(#vig)"/>
+          <!-- thin plot frame -->
+          <rect x="0.5" y="0.5" width="919" height="459" fill="none" stroke="#26405a" stroke-width="1"/>
+        </svg>
+
+        <!-- axis labels -->
+        <div class="axlabel ax-y mono">TWT (ms)<br>0 → 3000</div>
+        <div class="axlabel ax-trace mono">CDP 1 ── 578</div>
+        <div class="axlabel ax-x mono">offset →</div>
+
+        <!-- live cursor readout -->
+        <div class="cursor-read">
+          <div class="crh">Cursor · live</div>
+          <div class="cr"><span>Trace</span><b>1 184</b></div>
+          <div class="cr"><span>CDP</span><b>296</b></div>
+          <div class="cr"><span>TWT</span><b>820 ms</b></div>
+          <div class="cr"><span>Ampl</span><b>+0.4127</b></div>
+          <div class="cr"><span>X</span><b class="mono">684 213.4</b></div>
+          <div class="cr"><span>Y</span><b class="mono">3 551 902.1</b></div>
+        </div>
+
+        <!-- colorbar -->
+        <div class="colorbar">
+          <span class="lab">−1.0</span>
+          <div class="cbstrip"></div>
+          <span class="lab">+1.0</span>
+          <span class="lab hi" style="margin-left:5px;">RWB · 0=white · norm.</span>
+        </div>
+      </div>
+    </section>
+
+    <!-- ---------- RIGHT: HEADER DUMP + QC ---------- -->
+    <aside class="right">
+      <div class="phead">
+        <span class="ico"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M5 4 h14 v16 H5 z"/><path d="M8 8 h8 M8 12 h8 M8 16 h5"/></svg></span>
+        <span class="ttl">Header Dump</span>
+        <span class="grow"></span>
+        <span class="tag live">trace 1184</span>
+      </div>
+      <div class="rscroll">
+        <table class="hdr-table">
+          <tr><td class="off">001</td><td class="key">TRACSEQ</td><td class="val">1184</td></tr>
+          <tr><td class="off">005</td><td class="key">FFID</td><td class="val">4821</td></tr>
+          <tr><td class="off">013</td><td class="key">CHAN</td><td class="val">96</td></tr>
+          <tr><td class="off">017</td><td class="key">SOU_SP</td><td class="val">2390</td></tr>
+          <tr><td class="off">021</td><td class="key">CDP</td><td class="val acc">296</td></tr>
+          <tr><td class="off">025</td><td class="key">TRACECODE</td><td class="val">1 · seismic</td></tr>
+          <tr><td class="off">037</td><td class="key">OFFSET</td><td class="val">1 425 m</td></tr>
+          <tr><td class="off">041</td><td class="key">RECV_ELEV</td><td class="val">312 m</td></tr>
+          <tr><td class="off">073</td><td class="key">SOU_X</td><td class="val">684 010</td></tr>
+          <tr><td class="off">077</td><td class="key">SOU_Y</td><td class="val">3551740</td></tr>
+          <tr><td class="off">081</td><td class="key">REC_X</td><td class="val">684 213</td></tr>
+          <tr><td class="off">085</td><td class="key">REC_Y</td><td class="val">3551902</td></tr>
+          <tr><td class="off">089</td><td class="key">COORD_SCL</td><td class="val">−100</td></tr>
+          <tr><td class="off">115</td><td class="key">NSAMP</td><td class="val acc">1500</td></tr>
+          <tr><td class="off">117</td><td class="key">DT (µs)</td><td class="val acc">2000</td></tr>
+          <tr><td class="off">157</td><td class="key">YEAR</td><td class="val">2026</td></tr>
+        </table>
+      </div>
+      <div class="qc">
+        <div class="glbl" style="font-size:9.5px;letter-spacing:1.3px;text-transform:uppercase;color:var(--t-dim);margin-bottom:6px;display:flex;align-items:center;gap:6px;">
+          QC Flags
+        </div>
+        <div class="qcrow ok"><span class="sv"></span><span class="qt">Sample interval consistent</span><span class="qn">PASS</span></div>
+        <div class="qcrow ok"><span class="sv"></span><span class="qt">CDP monotonic</span><span class="qn">PASS</span></div>
+        <div class="qcrow warn"><span class="sv"></span><span class="qt">Coord scalar mixed sign</span><span class="qn">3 trc</span></div>
+        <div class="qcrow err"><span class="sv"></span><span class="qt">Null SOU_X / SOU_Y</span><span class="qn">7 trc</span></div>
+        <div class="qcrow ok"><span class="sv"></span><span class="qt">Polarity (SEG normal)</span><span class="qn">OK</span></div>
+      </div>
+    </aside>
+
+    <!-- ---------- BOTTOM CENTER: AMPLITUDE SPECTRUM ---------- -->
+    <section class="spectrum">
+      <div class="phead">
+        <span class="ico"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 20 V8 M8 20 V4 M13 20 V11 M18 20 V6 M23 20"/></svg></span>
+        <span class="ttl">Amplitude Spectrum (FFT)</span>
+        <span class="grow"></span>
+        <span class="tag">trace 1184 · Hann</span>
+        <span class="tag live">peak 28 Hz</span>
+      </div>
+      <div class="spec-wrap">
+        <svg class="spec-svg" viewBox="0 0 920 150" preserveAspectRatio="none">
+          <rect x="0" y="0" width="920" height="150" fill="#0a1825"/>
+          <!-- grid -->
+          <g stroke="#1a3146" stroke-width="1">
+            <line x1="0" y1="38"  x2="920" y2="38"/>
+            <line x1="0" y1="76"  x2="920" y2="76"/>
+            <line x1="0" y1="114" x2="920" y2="114"/>
+            <line x1="153" y1="0" x2="153" y2="150"/>
+            <line x1="306" y1="0" x2="306" y2="150"/>
+            <line x1="460" y1="0" x2="460" y2="150"/>
+            <line x1="613" y1="0" x2="613" y2="150"/>
+            <line x1="766" y1="0" x2="766" y2="150"/>
+          </g>
+          <!-- spectrum fill -->
+          <defs>
+            <linearGradient id="specg" x1="0" y1="0" x2="0" y2="1">
+              <stop offset="0" stop-color="rgba(31,200,192,0.55)"/>
+              <stop offset="1" stop-color="rgba(31,200,192,0.04)"/>
+            </linearGradient>
+          </defs>
+          <path d="M0 150
+                   L0 132 C40 128 70 96 110 70
+                   C150 44 190 30 230 36
+                   C300 46 330 110 380 120
+                   C440 132 470 92 520 96
+                   C600 104 640 134 720 138
+                   C800 142 860 146 920 147
+                   L920 150 Z"
+                fill="url(#specg)"/>
+          <path d="M0 132 C40 128 70 96 110 70 C150 44 190 30 230 36
+                   C300 46 330 110 380 120 C440 132 470 92 520 96
+                   C600 104 640 134 720 138 C800 142 860 146 920 147"
+                fill="none" stroke="#34dbd0" stroke-width="1.6"/>
+          <!-- peak marker -->
+          <line x1="215" y1="0" x2="215" y2="150" stroke="#1fc8c0" stroke-width="1" stroke-dasharray="3 4" opacity="0.7"/>
+          <circle cx="215" cy="33" r="3" fill="#1fc8c0"/>
+          <rect x="0.5" y="0.5" width="919" height="149" fill="none" stroke="#26405a" stroke-width="1"/>
+        </svg>
+        <div class="axlabel mono" style="left:6px;top:6px;color:var(--t-dim)">dB</div>
+        <div class="axlabel mono" style="left:6px;bottom:5px;color:var(--t-dim)">0</div>
+        <div class="axlabel mono" style="right:8px;bottom:5px;color:var(--t-dim)">250 Hz · Nyquist</div>
+        <div class="axlabel mono" style="left:200px;top:6px;color:var(--teal)">28 Hz peak</div>
+      </div>
+    </section>
+  </div>
+
+  <!-- ========================= STATUS BAR ========================= -->
+  <footer class="statusbar">
+    <div class="sb ok"><span class="led"></span><span class="sv" style="color:var(--green)">READY</span></div>
+    <div class="sb"><span class="sk">path</span><span class="sv" style="color:var(--t-md)">D:\surveys\NW-block\Line_4821_shot.sgy</span></div>
+    <div class="sb"><span class="sk">traces</span><span class="sv">2 312</span></div>
+    <div class="sb"><span class="sk">Δt</span><span class="sv">2.000 ms</span></div>
+    <div class="sb"><span class="sk">nsamp</span><span class="sv">1500</span></div>
+    <div class="sb"><span class="sk">format</span><span class="sv acc">IBM float 32 · BE</span></div>
+    <div class="grow"></div>
+    <div class="sb crs"><span class="sk">CRS</span><span class="sv acc">EPSG:32636 · WGS84 / UTM 36N · m</span></div>
+    <div class="sb"><span class="sk">mem</span><span class="sv">214 MB</span></div>
+  </footer>
+
+</div>
+</body>
+</html>

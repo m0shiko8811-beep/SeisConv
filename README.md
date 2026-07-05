@@ -1,0 +1,339 @@
+<p align="center">
+  <img src="build/icon.png" alt="SeisConv" width="140"/>
+</p>
+
+<h1 align="center">SeisConv</h1>
+<p align="center">
+  Desktop seismic data toolkit — convert, inspect, view, and QC seismic files.<br/>
+  Automatic format and byte-order detection. No configuration needed to open a file.
+</p>
+
+<p align="center">
+  <img src="https://img.shields.io/badge/Electron-33-47848F?logo=electron&logoColor=white" alt="Electron 33"/>
+  <img src="https://img.shields.io/badge/TypeScript-core-3178C6?logo=typescript&logoColor=white" alt="TypeScript"/>
+  <img src="https://img.shields.io/badge/Formats-SEG--Y_·_SEG--D_·_SEG--2_·_SU-00C853" alt="Formats"/>
+  <img src="https://img.shields.io/badge/WiFiSync-peer--to--peer_file_sync-0EA5A5" alt="WiFiSync peer-to-peer file sync"/>
+  <img src="https://img.shields.io/badge/Platform-Windows_·_macOS_·_Linux-lightgrey" alt="Platform"/>
+  <img src="https://img.shields.io/badge/license-proprietary-red" alt="Proprietary"/>
+</p>
+
+Proprietary, source-available — see [LICENSE](LICENSE).
+
+---
+
+## What it does
+
+SeisConv is a cross-platform Electron desktop application for working with seismic data files. Drop in any file and SeisConv identifies the format revision, sample encoding (IBM float vs IEEE), and byte order automatically — before you choose an output format. All parsing runs on a worker thread; the UI stays responsive on multi-gigabyte files.
+
+Twelve tabs cover the full office-and-field seismic workflow: format conversion incl. batch → single tape-image combine (Converter), per-trace inspection with FFT QC (Trace Inspector), section visualization with first-break picking and trace-health QC (File Viewer), multi-format survey-geometry QC (SPS), survey design from a map (SPS Creation), SEG-Y↔SPS cross-validation (Geometry QC), a vibroseis sweep designer + sweep QC (Sweeps), NMO velocity analysis (Velocity), multi-trace comparison and correlation (Trace Workbench), configurable field-log grid (Observer's Log), frequency/wavenumber analysis (Spectrum Analysis), and peer-to-peer folder sync over local WiFi (WiFiSync). Multi-gigabyte files open through a streaming trace index, and any operation that can take more than a few seconds shows a progress bar.
+
+<p align="center">
+  <img src="design/screenshots/fileviewer.png" width="92%" alt="SeisConv File Viewer — variable-density seismic section"/>
+</p>
+<p align="center"><sub>File Viewer — full-record variable-density section with gain + AGC · real SEG-Y Rev 2, 222 traces</sub></p>
+
+<table align="center">
+  <tr>
+    <td align="center" width="50%"><img src="design/screenshots/converter.png" alt="Converter"/><br/><sub><b>Converter</b> — auto-detect + 8 single-file output writers</sub></td>
+    <td align="center" width="50%"><img src="design/screenshots/trace.png" alt="Trace Inspector"/><br/><sub><b>Trace Inspector</b> — waveform + live SEG-Y trace header</sub></td>
+  </tr>
+  <tr>
+    <td align="center" width="50%"><img src="design/screenshots/spectrum.png" alt="Spectrum Analysis"/><br/><sub><b>Spectrum Analysis</b> — amplitude spectrum / FFT QC</sub></td>
+    <td align="center" width="50%"><img src="design/screenshots/velocity.png" alt="Velocity semblance"/><br/><sub><b>Velocity</b> — NMO semblance panel</sub></td>
+  </tr>
+  <tr>
+    <td align="center" width="50%"><img src="design/screenshots/sweeps.png" alt="Sweeps designer"/><br/><sub><b>Sweeps</b> — vibroseis sweep designer: signal, freq-vs-time, spectrum, Klauder wavelet</sub></td>
+    <td align="center" width="50%"><img src="design/screenshots/sweeps-klauder.png" alt="Klauder wavelet"/><br/><sub><b>Sweep autocorrelation</b> — Klauder wavelet + side-lobe metrics</sub></td>
+  </tr>
+</table>
+
+<p align="center">
+  <img src="design/screenshots/sps.png" width="640" alt="SPS — survey geometry and QC"/>
+</p>
+<p align="center"><sub>SPS — multi-format survey geometry &amp; QC on a real acquisition line (UTM survey grid)</sub></p>
+
+---
+
+## Format support
+
+| Format | Read | Write | Notes |
+|---|:---:|:---:|---|
+| SEG-Y Rev 0 | Yes | Yes | IBM float + IEEE float; EBCDIC / ASCII text header |
+| SEG-Y Rev 1 | Yes | Yes | Extended text headers |
+| SEG-Y Rev 2 | Yes | Yes | Rev 2.0 / 2.1; all rev-2 sample-format codes |
+| SEG-D Rev 2.1 | Yes | Yes | Spec-conformant reader (GH1/GH2, channel sets, trace-header extensions) — validated **bit-identical** against paired vendor SEG-Y on real recorder field data |
+| SEG-D Rev 3.0 | Yes | Yes | Same validation; legacy SeisConv-written SEG-D still reads via a compatibility decoder |
+| SEG-2 / Geode `.dat` | Yes | Yes | |
+| Seismic Unix (SU) | Yes | Yes | |
+| Tape Image `.tpimage` | Yes | Yes | Single-file tape images and **batch → one combined multi-record tape** (streamed, memory-bounded); multi-GB tapes open via a streaming trace index. Unsupported vendor SEG-D tape containers fail fast with an honest message |
+| CSV | — | Yes | Export / analysis |
+
+### Survey geometry / positioning formats
+
+| Format | Read | Write | Notes |
+|---|:---:|:---:|---|
+| SEG-P1 | Yes | — | Deprecated by IOGP (succeeded by P1/11); read only by design. Fixed-column post-plot point file. Geographic records auto-projected lat/long → E/N; F-format metres vs integer-decimetres auto-detected. |
+| IOGP P1/11 | Yes | Yes | Modern comma-delimited relational positioning standard (supersedes UKOOA P1/90 and SEG-P1; v1.1 added land/OBC). Source, receiver, and relation records map onto SeisConv's SPS data model; CRS round-trips. |
+| IOGP P6/11 | Yes | — | Bin-grid definition (origin, rotation, inline/crossline numbering, bin size, CRS). Rendered as a bin-grid overlay on the SPS survey-grid and Leaflet map; rotation and crossline-axis aware. No writer yet. |
+| Coordinate CSV (CRS-tagged) | Yes | Yes | Generic point CSV with an explicit CRS tag (ITM / UTM / WGS84) and flexible column-synonym mapping (line, point, type, easting/x, northing/y, elevation/z). |
+
+**Automatic detection:** format revision, sample format (IBM 4-byte float, IEEE float, 2-byte int, etc.), and byte order (big/little-endian) are detected from the file header before conversion. No manual override required for well-formed files.
+
+**Two conversion modes:** convert a **single file** (with a native save dialog), or point at a **folder** and batch-convert every seismic file in it — with a format/destination wizard, a live per-file progress bar, and a Cancel button.
+
+---
+
+## Features
+
+### Converter
+
+Two modes selected from the top of the tab.
+
+**Single file:** open a file (`Ctrl+O` or drag-and-drop), review the auto-detected **File summary** (traces, samples per trace, sample interval, record length, data format, revision, byte order, CRS) and **Header QC** flags. Pick an output format chip from the nine available, then **Convert & Save...** via a native save dialog.
+
+**Folder (batch):** pick a source folder — SeisConv lists every recognized seismic file. A short wizard asks for the output format and a destination folder, then runs the batch. A **live progress bar** tracks `Converting X / N · <filename> · FORMAT`. A per-file result list marks each file QUEUED → CONVERTING → DONE / ERROR. **Cancel** stops after the current file; completed files are kept. Choosing **Tape Image** combines the whole batch into **one multi-record tape** — written to disk file-by-file (memory-bounded), so multi-GB tapes work.
+
+Output names are assembled from a **checklist of variable parts** ({name}, {format}, {date}, {time}, {seq}, custom text) with live examples. An **Open folder** button at the end of both wizards jumps to the results. Additional controls: **Clear** (reset state and worker cache), in-app **Manual** (Help / `?`), **Send Feedback** (opens your mail app), light/dark theme toggle, OS-aware keyboard shortcuts.
+
+---
+
+### Trace Inspector
+
+Per-trace canvas wiggle with prev/next navigation buttons and a slider. Includes a **Hann-windowed FFT amplitude spectrum** panel — toggle between waveform and spectrum view for per-trace frequency QC.
+
+<p align="center">
+  <img src="design/previews/gui-B.png" width="85%" alt="SeisConv — Trace Inspector with FFT spectrum"/>
+</p>
+<p align="center"><sub>Trace Inspector — wiggle + FFT amplitude spectrum (Hann window)</sub></p>
+
+---
+
+### File Viewer
+
+Full seismic section rendered in four display modes:
+
+- Variable-density (heatmap)
+- Wiggle trace
+- Variable-area (filled wiggle)
+- VD + wiggle overlay
+
+Four colormaps: Seismic (blue-white-red), Gray, Amber, Viridis. Adjustable gain slider and automatic AGC. Section pan and zoom, a **magnifier box-zoom** popup with its own wheel-zoom / ± / reset / drag-pan, hover readout (trace, time, amplitude, FFID/CDP), Next/Prev file navigation, and **block paging** through multi-gigabyte files (streamed trace index — a 1.7 GB tape opens in seconds and pages smoothly).
+
+**First Breaks mode** — a seeded, moveout-guided first-break picker on the same section: drop a few seed picks, hit *Assisted fill*, and the pick line follows the refraction moveout inside a guide window (no scatter into deep reflections); drag to edit, export picks as CSV.
+
+**Trace-health QC** — scans the gather with robust local-median statistics and flags dead, noisy, hot/weak, clipped/spiky, and reversed-polarity traces, each with the metric-vs-local-baseline evidence, a confidence score, a coverage banner, tunable per-detector sensitivity with live re-count, and a sortable/filterable findings table that locates each flagged trace on the section.
+
+<p align="center">
+  <img src="design/previews/gui-A.png" width="85%" alt="SeisConv — File Viewer section display"/>
+</p>
+<p align="center"><sub>File Viewer — variable-density section with colormap, gain, and AGC</sub></p>
+
+---
+
+### SPS
+
+The SPS tab accepts SPS 2.1 S/R/X triplets and four additional positioning formats via the same Open dialog (`.p1`, `.segp1`, `.p111`, `.p611`, `.csv`): **SEG-P1** (read only — deprecated fixed-column post-plot file), **IOGP P1/11** (read + write — the current relational standard), **IOGP P6/11** (read only — bin-grid definition), and **CRS-tagged coordinate CSV** (read + write). All formats feed the same SPS data model, so the survey-grid, map, QC checks, fold map, and coordinate-reprojection features work identically regardless of which format was loaded. A format badge in the tab header indicates what is currently loaded.
+
+**Header Viewer / Editor:** a modal over the SPS panel lets you view the full H-record block grouped by purpose (Project/Admin, CRS/Projection, and others), edit CRS and Admin fields via structured forms, and edit every raw H-record in a Raw tab. Changes can be applied and exported as a corrected ZIP containing the updated S/R/X files.
+
+**Bin-grid overlay:** when an IOGP P6/11 file is loaded, the survey-grid canvas and the Leaflet real map display a bin-grid overlay (origin, rotation, and crossline-axis aware) on top of the station positions.
+
+**Exports** (toolbar buttons):
+- KML (Google Earth geometry overlay)
+- GeoJSON (GIS-ready)
+- CSV (sources, receivers, or relations)
+- IOGP P1/11
+- CRS-tagged coordinate CSV
+- Full QC report
+
+Load an SPS 2.1 survey (S-file, R-file, X-file). Two geometry views:
+
+- **Survey grid** — offline pan/zoom canvas showing source (S) and receiver (R) stations, color-coded by type
+- **Real map** — live Leaflet basemap (Dark / Satellite / Streets tile layers) with stations plotted at their geographic coordinates. A bearing slider (with reset-to-North button) rotates the map via the leaflet-rotate plugin.
+
+**Station Inspector:** click any source or receiver to open a panel showing the full parsed SPS header for that station.
+
+**X-ref spider:** select a station to draw offset lines to every related station in the X-file — shows the actual coverage geometry for that point.
+
+**CMP fold/coverage map:** plots every CMP mid-point bin and colors it by fold count, giving a quick visual QC of coverage uniformity across the survey.
+
+**QC checks** flag:
+- Duplicate source / receiver IDs
+- Station numbering gaps
+- Irregular station intervals
+- Missing X-file references
+- Elevation outliers
+- Offset range violations
+
+**Coordinate reprojection:** transform any SPS dataset to a target EPSG (UTM zones, ITM, BNG, RD New, ED50, and others). Output is a ZIP with reprojected S/R/X files ready for import into processing software.
+
+---
+
+### SPS Creation
+
+Design a survey from scratch: pick line vertices on a live map (with live coordinates and distance-from-last-point readouts), choose 2D or 3D layout parameters in a wizard (line/station numbering, intervals, receiver patch), pick the CRS from a searchable EPSG list, and generate a complete SPS 2.1 triplet (with H00 + full header block) — auto-loaded into the SPS tab and exportable as a ZIP.
+
+---
+
+### Geometry QC
+
+Cross-validates a SEG-Y file against the loaded SPS survey: source/receiver coverage, coordinate agreement (scalar-aware), stack-type detection (pre-stack vs CMP-stacked), and an as-laid vs pre-plot **delta check** with an offenders table. Can also **load geometry into SEG-Y** — stamp SPS coordinates, elevations, offsets, and scalars into the trace headers and save a corrected copy.
+
+---
+
+### Sweeps
+
+A vibroseis sweep **designer and QC** tool (built around Pelton/SSC Vib Pro-class vibrator electronics):
+
+- **Builder** — linear, dB/Hz, dB/Oct, and T-Power sweep laws, up to 16 phase-continuous segments, cosine/Blackman tapers, initial phase, pilot sample interval (0.25–2 ms), per-survey **presets** (save/load/share as JSON).
+- **Live plots** — pilot signal, frequency-vs-time, amplitude spectrum, and the autocorrelation **Klauder wavelet** with peak-to-side-lobe metrics.
+- **Exports** — pilot trace (SEG-Y Rev 2 / SU / CSV), a **SCIO `.SV` sweep-definition file** (loads into the vibrator toolchain), and a printable **sweep sheet** with embedded plots.
+- **Sweep QC** — load a recorded sweep (pilot/ground-force/similarity) and compare against the design: phase-error vs time, THD vs time, envelope and spectrum overlays, designed×measured correlation wavelet, with tunable pass/fail thresholds stored in the preset.
+
+---
+
+### Velocity
+
+NMO semblance panel computed from CMP gathers in the loaded file. Click the semblance display to pick velocity-time pairs. Export the picked velocity function as a CSV for use in processing software.
+
+---
+
+### Trace Workbench
+
+Collect traces from one file or many and view them side-by-side or overlaid on a shared time axis with synchronized zoom. Per-trace operations include cross-correlation and difference; a stats panel shows per-trace and aggregate amplitude statistics. Click-to-add works directly from the File Viewer section display and the Trace Inspector. The collected set can be exported as a seismic file (all supported output formats).
+
+Manual X (time) and Y (amplitude) axis range boxes — with an Auto reset — control the shared display window.
+
+---
+
+### Observer's Log
+
+A configurable field-log grid for recording shot-by-shot or point-by-point acquisition metadata. Column behavior is driven by a ROLE system: counter (auto-increment), Now/NTP time stamping, status dropdown (pick list), and SPS-linked cells that pull a named field (line, point, easting, northing, elevation, uphole, static, source type) from the loaded SPS survey with live per-row lookup. A Columns manager adds, removes, and reorders columns. Multiple templates can be saved in-app or shared as `.json` files. Source points can be imported from the loaded SPS survey. Exports to `.xlsx`, `.csv`, `.ods`, and a printable report — implemented without additional runtime dependencies.
+
+---
+
+### WiFiSync
+
+Native **peer-to-peer file and data sharing over the local WiFi** — no router, no cloud, no configuration. Point two machines at a shared folder and WiFiSync keeps them mirror-identical in the field: crews swap shot records, SPS updates, and observer logs directly, machine-to-machine.
+
+- **Zero-config LAN discovery** — instances announce themselves with a small UDP beacon and find each other automatically on the same subnet; a manual "add peer" and a subnet scan are there as fallbacks.
+- **Two-way or master/slave** — the default is symmetric two-way sync; roles can be pinned to master (serve only) or slave (receive only), with automatic role negotiation between peers.
+- **Instant, with a safety net** — an OS file-watcher pushes changes the moment a file lands; an interval poll is the fallback so nothing is missed if a watch event is dropped.
+- **Integrity you can trust** — every file is verified with a per-file **SHA** hash, written **atomically** (temp-then-rename, so a half-copied file is never seen), and transfers are **resumable** after an interruption.
+- **No-router hotspot mode** — on Windows, WiFiSync can start the built-in **Mobile Hotspot** so two laptops link up with no access point at all; a one-click helper opens the right firewall ports.
+- **Auditable** — a live activity log and a transfer-history table show exactly what was pulled or pushed, when, from which peer, and at what size.
+
+<p align="center">
+  <img src="design/screenshots/wifisync.png" width="92%" alt="SeisConv WiFiSync — peer-to-peer folder sync over local WiFi"/>
+</p>
+<p align="center"><sub>WiFiSync — shared folder + two-way role, a discovered peer, the no-router hotspot card, and the live activity / transfer log</sub></p>
+
+> **Platform note:** cross-machine sync, discovery, and transfers work anywhere the app runs; the **no-router Mobile-Hotspot** convenience is **Windows-only** (it drives the Windows hotspot API). On macOS/Linux, join the peers to any shared WiFi network and sync works the same.
+
+---
+
+### Spectrum Analysis
+
+Three frequency-domain views of the loaded seismic data:
+
+- **Average amplitude spectrum** — mean power across all traces, displayed in dB or linear scale, with peak-frequency and -6 dB bandwidth markers.
+- **STFT spectrogram** — short-time Fourier transform of a single trace: a time × frequency heatmap showing how the spectrum evolves down the record.
+- **F-K (2-D FFT)** — wavenumber × frequency panel for apparent-velocity, dip, and spatial-aliasing analysis.
+
+All three views share the manual X/Y axis range boxes (with Auto reset) and support interactive wheel zoom and zoom-in / zoom-out buttons.
+
+---
+
+### Viewer controls
+
+Every seismic viewer (File Viewer, Trace Inspector, Spectrum Analysis, Velocity, Trace Workbench) provides manual X-axis and Y-axis range boxes (min / max numeric inputs) plus an **Auto** button that clears the overrides and reverts to auto-fit. This makes it straightforward to compare the same time window across tabs or to zoom into a specific frequency band in the Spectrum views.
+
+---
+
+## Architecture
+
+```
+.                   # repo root — the SeisConv desktop app
+├── core/           Pure TypeScript engine — no Electron or DOM dependency
+│   ├── binary/     Typed buffer readers (big/little-endian, IBM float)
+│   ├── detect/     Format and byte-order auto-detection
+│   ├── formats/    segy · segd · seg2 · su · tapeimage parsers + writers
+│   ├── coords/     TM / UTM / ITM + Helmert 7-parameter transforms
+│   ├── dsp/        AGC · interpolation · NMO semblance · Hann FFT ·
+│   │               avgspectrum · spectrogram · fk · correlate ·
+│   │               sweepgen (vibroseis) · hilbert · firstbreak/fbassist ·
+│   │               tracehealth · robuststats
+│   ├── render/     Colormaps and display model
+│   ├── export/     xlsx · ods hand-rolled writers (no runtime deps)
+│   ├── sps/        SPS 2.1 parse · QC · reproject ·
+│   │               formats/ (segp1 · p111 · p611 · coordcsv + bingrid)
+│   └── field/      WiFiSync pure protocol — mtime diff · role negotiation ·
+│                   UDP discovery packet · manifest/tombstones · rate limiter ·
+│                   TCP transfer frames · path-containment guard
+├── workers/
+│   └── parse.worker.ts   Long-lived stateful worker: parses once, serves
+│                         summary / trace / section / convert / SPS / semblance /
+│                         spectrum / workbench requests via transferable ArrayBuffers
+├── electron/
+│   ├── main/       BrowserWindow, native dialogs, worker lifecycle
+│   ├── preload/    Sandboxed contextBridge (contextIsolation; no nodeIntegration;
+│   │               window navigation blocked; CSP default-src 'none')
+│   └── field/      WiFiSync host process — engine · UDP discovery · TCP transport ·
+│                   fs watcher · file utils · Windows Mobile-Hotspot control
+└── renderer/       esbuild-bundled modular TypeScript UI (12-tab shell)
+```
+
+The `core/` package has no Electron or DOM imports — it can run in Node, a worker thread, or a browser. The WiFiSync protocol lives in `core/field` as pure, testable algorithms; the OS-facing sockets, file-watching, and hotspot control live in `electron/field`.
+
+---
+
+## Build and run
+
+Requires Node.js 18+ and npm.
+
+```bash
+npm install             # install Electron and toolchain
+npm run test:core       # run the 214 core unit tests (file-backed tests skip without sample data)
+npm run typecheck       # TypeScript check (core + renderer + electron)
+npm start               # build and launch the desktop app
+npm run dist            # package an installer with electron-builder
+```
+
+**Test data:** most unit tests run with no external files. The file-backed format tests and the real-data QC harness read a local corpus — point them at your seismic files with:
+
+```bash
+SEISCONV_DATA=/path/to/segy-files \
+SEISCONV_QC_ROOT=/path/to/corpus \
+npx tsx scripts/realdata-qc.ts
+```
+
+---
+
+## Installer
+
+`npm run dist` produces:
+
+- **Windows:** assisted NSIS installer (`dist/*.exe`) — lets you **choose the installation directory** (per-user by default, with an elevation option).
+  _Not code-signed. Windows SmartScreen will warn on first run — click "More info" then "Run anyway"._
+- **macOS:** DMG target defined; not currently built or distributed.
+- **Linux:** AppImage target defined; not currently built or distributed.
+
+---
+
+## SEG standards note
+
+The SEG standards are the yardstick throughout. The **SEG-D reader** (rev 2.1 / 3.0) is written to the spec's field map and validated on real recorder field data — decoded samples are **bit-identical** to the same shots' vendor-written SEG-Y. **SEG-Y writers** preserve the standard trace-header fields (coordinate scalar, offset, source point), emit EBCDIC textual headers for rev ≤ 1, are byte-verified at the standard binary-header offsets, and refuse (rather than silently truncate) traces beyond the 65,535-sample field limit. SEG-D write mirrors the verified vendor layout and round-trips through the reader, but interchange with acquisition vendor software has **not** been independently verified — verify before feeding SeisConv-written SEG-D to an acquisition system.
+
+---
+
+## Roadmap
+
+- Streaming (index-based) open for vendor SEG-D tape containers (they currently fail fast with a clear message)
+- SEG-D write interchange validation against vendor acquisition tools
+- IOGP P6/11 writer
+- Vibrator attribute (VAPS/PSS) ingest for per-VP source QC
+- WiFiSync hotspot parity on macOS/Linux
+
+---
+
+<p align="center"><sub>Built by Moshe Fridin.</sub></p>

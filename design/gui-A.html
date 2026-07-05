@@ -1,0 +1,672 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>SeisConv — GUI Direction A · Refined Signature</title>
+<style>
+/* ============================================================
+   SEISCONV — GUI DIRECTION A: "REFINED SIGNATURE"
+   Static, self-contained mockup. No JS, no external deps.
+   Evolves the current navy/teal look into a premium, calm,
+   field-grade QC instrument. Target frame ~1240 x 860.
+   ============================================================ */
+
+:root{
+  /* --- Navy elevation ladder (depth from layered navy, never #000) --- */
+  --canvas:#0d1f33;     /* deepest base                */
+  --surface:#13283f;    /* app shell / rails           */
+  --panel:#182f48;      /* cards & panels              */
+  --raised:#20384f;     /* hovered / raised controls   */
+  --hair:#2a4257;       /* hairline borders            */
+  --hair-soft:#223a51;  /* dimmer hairline             */
+
+  /* --- Brand accents: scarce signal, not paint --- */
+  --teal:#1fc8c0;       /* primary action / active     */
+  --cyan:#34dbd0;       /* hover / live data partner   */
+  --teal-dim:rgba(31,200,192,.14);
+  --teal-glow:rgba(31,200,192,.30);
+
+  /* --- Neutral text ladder (carries ~90% of hierarchy) --- */
+  --tx-hi:#e6eef5;
+  --tx-md:#9fb2c4;
+  --tx-dim:#5f7a88;
+
+  /* --- Semantic (kept distinct from brand) --- */
+  --ok:#46d18a;
+  --warn:#f2b955;
+  --err:#ff5d6c;
+
+  --radius:10px;
+  --radius-sm:7px;
+  --shadow-card:0 1px 0 rgba(255,255,255,.025), 0 10px 30px rgba(0,0,0,.38);
+  --font-ui:'Inter','Segoe UI Variable','Segoe UI',system-ui,Roboto,sans-serif;
+  --font-mono:'JetBrains Mono','IBM Plex Mono','Consolas','SFMono-Regular',monospace;
+}
+
+*{box-sizing:border-box;margin:0;padding:0;}
+html,body{height:100%;}
+body{
+  background:#070f1a;
+  color:var(--tx-hi);
+  font-family:var(--font-ui);
+  font-size:13px;
+  line-height:1.45;
+  -webkit-font-smoothing:antialiased;
+  display:flex;align-items:center;justify-content:center;
+  min-height:100vh;padding:24px;
+}
+body{font-variant-numeric:tabular-nums;}
+
+/* ---- The app frame (mock window) ---- */
+.app{
+  width:1240px;height:860px;
+  display:flex;flex-direction:column;
+  background:
+    radial-gradient(1200px 460px at 78% -12%, rgba(31,200,192,.10), transparent 62%),
+    radial-gradient(900px 380px at 6% -6%, rgba(52,219,208,.05), transparent 60%),
+    var(--canvas);
+  border:1px solid #243a52;
+  border-radius:14px;
+  overflow:hidden;
+  box-shadow:0 40px 120px rgba(0,0,0,.6), 0 0 0 1px rgba(255,255,255,.02) inset;
+  position:relative;
+}
+
+/* =====================================================
+   TITLE BAR (slim header — part of the single inverted-L)
+   ===================================================== */
+.titlebar{
+  height:46px;flex:none;
+  display:flex;align-items:center;gap:14px;
+  padding:0 16px;
+  background:linear-gradient(180deg, rgba(19,40,63,.92), rgba(15,36,56,.78));
+  border-bottom:1px solid var(--hair);
+  backdrop-filter:blur(12px);
+}
+.win-dots{display:flex;gap:8px;}
+.win-dots i{width:11px;height:11px;border-radius:50%;display:block;}
+.win-dots i:nth-child(1){background:#ff5f57;}
+.win-dots i:nth-child(2){background:#febc2e;}
+.win-dots i:nth-child(3){background:#28c840;}
+
+.brand{display:flex;align-items:center;gap:10px;}
+.brand .logo{
+  width:26px;height:26px;border-radius:7px;flex:none;
+  background:linear-gradient(135deg,#13344e,#0e2236);
+  border:1px solid #2c4a64;
+  display:flex;align-items:center;justify-content:center;
+  box-shadow:0 2px 6px rgba(0,0,0,.4), inset 0 1px 0 rgba(255,255,255,.06);
+}
+.brand .wordmark{font-size:14px;font-weight:800;letter-spacing:2.4px;color:var(--tx-hi);}
+.brand .wordmark b{color:var(--teal);font-weight:800;}
+.brand .sub{
+  font-size:10px;letter-spacing:1.4px;color:var(--tx-dim);text-transform:uppercase;
+  padding-left:12px;margin-left:2px;border-left:1px solid var(--hair);
+}
+
+.titlebar .spacer{flex:1;}
+.crumb{
+  display:flex;align-items:center;gap:7px;
+  font-family:var(--font-mono);font-size:11.5px;color:var(--tx-md);
+  background:rgba(13,31,51,.6);
+  border:1px solid var(--hair-soft);
+  padding:5px 11px;border-radius:7px;max-width:430px;
+}
+.crumb .dot{width:6px;height:6px;border-radius:50%;background:var(--ok);box-shadow:0 0 7px var(--ok);}
+.crumb .path{color:var(--tx-dim);}
+.crumb .file{color:var(--cyan);}
+
+/* =====================================================
+   BODY = LEFT ICON RAIL (primary nav) + WORKSPACE
+   ===================================================== */
+.body{flex:1;display:flex;min-height:0;}
+
+.rail{
+  width:64px;flex:none;
+  display:flex;flex-direction:column;align-items:center;
+  padding:12px 0 10px;gap:5px;
+  background:linear-gradient(180deg, var(--surface), #11253b);
+  border-right:1px solid var(--hair);
+}
+.rail .nav-btn{
+  width:46px;height:46px;border-radius:11px;
+  display:flex;flex-direction:column;align-items:center;justify-content:center;gap:3px;
+  color:var(--tx-dim);cursor:pointer;position:relative;
+  border:1px solid transparent;
+  transition:.15s;
+}
+.rail .nav-btn svg{width:21px;height:21px;stroke:currentColor;stroke-width:1.6;fill:none;
+  stroke-linecap:round;stroke-linejoin:round;}
+.rail .nav-btn .lab{font-size:8.5px;letter-spacing:.3px;font-weight:600;}
+.rail .nav-btn:hover{color:var(--tx-md);background:rgba(32,56,79,.5);}
+.rail .nav-btn.on{
+  color:var(--teal);
+  background:linear-gradient(180deg, rgba(31,200,192,.16), rgba(31,200,192,.05));
+  border-color:rgba(31,200,192,.30);
+  box-shadow:0 0 0 1px rgba(31,200,192,.12), 0 6px 16px rgba(0,0,0,.35);
+}
+.rail .nav-btn.on::before{
+  content:"";position:absolute;left:-12px;top:9px;bottom:9px;width:3px;border-radius:3px;
+  background:linear-gradient(180deg,var(--teal),var(--cyan));box-shadow:0 0 10px var(--teal-glow);
+}
+.rail .sep{width:30px;height:1px;background:var(--hair);margin:6px 0;}
+.rail .grow{flex:1;}
+.rail .nav-btn.mini{height:40px;}
+
+/* =====================================================
+   WORKSPACE
+   ===================================================== */
+.workspace{flex:1;display:flex;flex-direction:column;min-width:0;min-height:0;}
+
+/* --- View header: title + actions + inline status --- */
+.view-head{
+  flex:none;padding:16px 22px 14px;
+  display:flex;align-items:flex-start;gap:18px;
+  border-bottom:1px solid var(--hair-soft);
+}
+.view-head .h-title{font-size:18px;font-weight:700;letter-spacing:.2px;color:var(--tx-hi);}
+.view-head .h-sub{font-size:11.5px;color:var(--tx-md);margin-top:3px;max-width:560px;}
+.view-head .spacer{flex:1;}
+
+/* --- Buttons --- */
+.btn{
+  font-family:inherit;font-size:12.5px;font-weight:600;letter-spacing:.2px;
+  height:32px;padding:0 15px;border-radius:8px;cursor:pointer;
+  display:inline-flex;align-items:center;gap:8px;border:1px solid transparent;
+  transition:.14s;white-space:nowrap;
+}
+.btn svg{width:15px;height:15px;stroke:currentColor;stroke-width:1.7;fill:none;
+  stroke-linecap:round;stroke-linejoin:round;}
+.btn.ghost{background:rgba(20,42,68,.55);color:var(--tx-md);border-color:var(--hair);}
+.btn.ghost:hover{background:var(--raised);color:var(--tx-hi);border-color:#34546f;}
+.btn.primary{
+  color:#06201e;font-weight:700;
+  background:linear-gradient(180deg,var(--cyan),var(--teal));
+  border-color:rgba(52,219,208,.5);
+  box-shadow:0 6px 18px rgba(31,200,192,.28), inset 0 1px 0 rgba(255,255,255,.25);
+}
+.btn.primary:hover{filter:brightness(1.06);}
+.btn.lg{height:38px;padding:0 20px;font-size:13.5px;}
+
+/* =====================================================
+   CONVERTER VIEW — bento layout
+   ===================================================== */
+.conv-grid{
+  flex:1;min-height:0;
+  display:grid;
+  grid-template-columns:1fr 416px;
+  grid-template-rows:auto 1fr;
+  gap:14px;padding:16px 22px 18px;
+}
+.card{
+  background:linear-gradient(180deg, rgba(24,47,72,.92), rgba(20,40,62,.92));
+  border:1px solid var(--hair);
+  border-radius:var(--radius);
+  box-shadow:var(--shadow-card);
+  display:flex;flex-direction:column;min-height:0;
+}
+.card .card-hd{
+  display:flex;align-items:center;gap:9px;
+  padding:12px 16px;border-bottom:1px solid var(--hair-soft);
+}
+.card .card-hd .ttl{font-size:11px;font-weight:700;letter-spacing:1.4px;text-transform:uppercase;color:var(--tx-md);}
+.card .card-hd .ttl b{color:var(--teal);}
+.card .card-hd .pill{
+  margin-left:auto;font-family:var(--font-mono);font-size:10.5px;color:var(--tx-dim);
+  background:rgba(13,31,51,.6);border:1px solid var(--hair-soft);padding:2px 8px;border-radius:20px;
+}
+.card .card-bd{padding:16px;flex:1;min-height:0;}
+
+/* span helpers */
+.span-src{grid-column:1;grid-row:1;}
+.span-fmt{grid-column:1;grid-row:2;}
+.span-side{grid-column:2;grid-row:1 / span 2;display:flex;flex-direction:column;gap:14px;}
+
+/* --- Source drop zone --- */
+.drop{
+  border:1.5px dashed #34546f;border-radius:9px;
+  background:rgba(13,31,51,.4);
+  padding:18px;display:flex;align-items:center;gap:18px;
+}
+.drop .ic{
+  width:54px;height:54px;border-radius:13px;flex:none;
+  background:linear-gradient(135deg, rgba(31,200,192,.16), rgba(52,219,208,.04));
+  border:1px solid rgba(31,200,192,.28);
+  display:flex;align-items:center;justify-content:center;
+}
+.drop .ic svg{width:26px;height:26px;stroke:var(--cyan);stroke-width:1.5;fill:none;stroke-linecap:round;stroke-linejoin:round;}
+.drop .d-main{font-size:14px;font-weight:600;color:var(--tx-hi);}
+.drop .d-sub{font-size:11.5px;color:var(--tx-md);margin-top:3px;}
+.drop .d-sub b{color:var(--cyan);font-weight:600;}
+.drop .spacer{flex:1;}
+
+/* loaded-file meta strip */
+.meta-strip{
+  display:grid;grid-template-columns:repeat(4,1fr);gap:1px;
+  margin-top:14px;background:var(--hair-soft);
+  border:1px solid var(--hair-soft);border-radius:8px;overflow:hidden;
+}
+.meta-strip .m{background:var(--panel);padding:9px 12px;}
+.meta-strip .m .k{font-size:9.5px;letter-spacing:.8px;text-transform:uppercase;color:var(--tx-dim);}
+.meta-strip .m .v{font-family:var(--font-mono);font-size:13px;color:var(--tx-hi);margin-top:2px;}
+.meta-strip .m .v small{color:var(--tx-md);font-size:10.5px;}
+
+/* --- Format chips --- */
+.section-lbl{
+  font-size:10.5px;font-weight:700;letter-spacing:1.4px;text-transform:uppercase;
+  color:var(--tx-dim);margin-bottom:11px;display:flex;align-items:center;gap:8px;
+}
+.section-lbl::after{content:"";flex:1;height:1px;background:var(--hair-soft);}
+.chips{display:grid;grid-template-columns:repeat(3,1fr);gap:10px;}
+.chip{
+  position:relative;
+  background:linear-gradient(180deg, rgba(20,40,62,.85), rgba(17,35,55,.85));
+  border:1px solid var(--hair);border-radius:9px;
+  padding:12px 13px;cursor:pointer;transition:.14s;text-align:left;
+  display:flex;flex-direction:column;gap:3px;
+}
+.chip:hover{border-color:#3a5a76;background:var(--raised);transform:translateY(-1px);}
+.chip .c-name{font-size:13px;font-weight:600;color:var(--tx-hi);display:flex;align-items:center;gap:7px;}
+.chip .c-ext{font-family:var(--font-mono);font-size:10.5px;color:var(--tx-dim);letter-spacing:.4px;}
+.chip .c-ic{width:15px;height:15px;stroke:var(--tx-dim);stroke-width:1.6;fill:none;stroke-linecap:round;stroke-linejoin:round;}
+.chip.on{
+  border-color:rgba(31,200,192,.55);
+  background:linear-gradient(180deg, rgba(31,200,192,.16), rgba(31,200,192,.05));
+  box-shadow:0 0 0 1px rgba(31,200,192,.18), 0 8px 22px rgba(0,0,0,.35);
+}
+.chip.on .c-name{color:#d8fbf8;}
+.chip.on .c-ext{color:var(--cyan);}
+.chip.on .c-ic{stroke:var(--teal);}
+.chip.on::after{
+  content:"";position:absolute;top:10px;right:10px;width:15px;height:15px;border-radius:50%;
+  background:radial-gradient(circle at 35% 30%, var(--cyan), var(--teal));
+  box-shadow:0 0 0 3px rgba(31,200,192,.18);
+}
+.chip .check{position:absolute;top:13px;right:13px;width:9px;height:9px;stroke:#06201e;stroke-width:2.4;
+  fill:none;stroke-linecap:round;stroke-linejoin:round;display:none;z-index:2;}
+.chip.on .check{display:block;}
+
+/* convert footer inside fmt card */
+.conv-footer{
+  display:flex;align-items:center;gap:14px;
+  padding:14px 16px;border-top:1px solid var(--hair-soft);margin-top:auto;
+}
+.conv-footer .route{
+  display:flex;align-items:center;gap:9px;font-family:var(--font-mono);font-size:12px;color:var(--tx-md);
+}
+.conv-footer .route b{color:var(--tx-hi);}
+.conv-footer .route .arrow{color:var(--teal);}
+.conv-footer .route .to{color:var(--cyan);}
+.conv-footer .spacer{flex:1;}
+
+/* --- Side column: preview + batch/log --- */
+.preview-wrap{flex:1;display:flex;flex-direction:column;min-height:0;}
+.preview{
+  flex:1;position:relative;border-radius:8px;overflow:hidden;min-height:0;
+  background:#0a1828;border:1px solid var(--hair-soft);
+}
+.preview svg{display:block;width:100%;height:100%;}
+.preview .pv-overlay{
+  position:absolute;left:10px;top:9px;display:flex;gap:6px;align-items:center;
+  font-family:var(--font-mono);font-size:10px;color:var(--tx-md);
+  background:rgba(8,18,30,.72);border:1px solid var(--hair-soft);
+  padding:3px 8px;border-radius:6px;backdrop-filter:blur(4px);
+}
+.preview .pv-overlay .live{width:6px;height:6px;border-radius:50%;background:var(--teal);box-shadow:0 0 7px var(--teal);}
+.preview .cbar{
+  position:absolute;right:10px;top:10px;bottom:10px;width:13px;border-radius:4px;
+  background:linear-gradient(180deg,#c8331f 0%,#e88a78 24%,#ffffff 50%,#7fb6e6 76%,#1d4d8c 100%);
+  border:1px solid rgba(255,255,255,.18);
+}
+.preview .cbar-tx{
+  position:absolute;right:28px;top:10px;font-family:var(--font-mono);font-size:9px;color:var(--tx-md);
+  display:flex;flex-direction:column;justify-content:space-between;height:calc(100% - 20px);text-align:right;
+}
+.pv-foot{
+  display:flex;gap:14px;padding:9px 2px 2px;font-family:var(--font-mono);font-size:10.5px;color:var(--tx-dim);
+}
+.pv-foot b{color:var(--tx-md);font-weight:500;}
+
+/* batch / log list */
+.log{font-family:var(--font-mono);font-size:11.5px;display:flex;flex-direction:column;gap:0;}
+.log .row{
+  display:grid;grid-template-columns:16px 1fr auto;gap:9px;align-items:center;
+  padding:7px 4px;border-bottom:1px solid var(--hair-soft);
+}
+.log .row:last-child{border-bottom:none;}
+.log .row .ico{width:13px;height:13px;}
+.log .row .nm{color:var(--tx-hi);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+.log .row .nm small{color:var(--tx-dim);}
+.log .row .st{font-size:10.5px;letter-spacing:.3px;}
+.dot{width:7px;height:7px;border-radius:50%;display:inline-block;}
+.st-ok{color:var(--ok);} .st-warn{color:var(--warn);} .st-run{color:var(--cyan);}
+.bar{height:3px;border-radius:3px;background:var(--hair-soft);overflow:hidden;margin-top:2px;}
+.bar i{display:block;height:100%;background:linear-gradient(90deg,var(--teal),var(--cyan));}
+
+/* =====================================================
+   STATUS STRIP (bottom of single inverted-L)
+   ===================================================== */
+.statusbar{
+  height:30px;flex:none;
+  display:flex;align-items:center;gap:0;
+  padding:0 14px;font-family:var(--font-mono);font-size:11px;color:var(--tx-md);
+  background:linear-gradient(180deg,#11253b,var(--surface));
+  border-top:1px solid var(--hair);
+}
+.statusbar .seg{display:flex;align-items:center;gap:7px;padding:0 14px;height:100%;}
+.statusbar .seg + .seg{border-left:1px solid var(--hair-soft);}
+.statusbar .seg .k{color:var(--tx-dim);}
+.statusbar .seg .v{color:var(--tx-hi);}
+.statusbar .seg svg{width:13px;height:13px;stroke:currentColor;stroke-width:1.6;fill:none;stroke-linecap:round;stroke-linejoin:round;}
+.statusbar .spacer{flex:1;}
+.statusbar .flag{display:flex;align-items:center;gap:6px;color:var(--warn);}
+.statusbar .flag .dot{background:var(--warn);box-shadow:0 0 7px var(--warn);}
+.statusbar .ok-flag{color:var(--ok);}
+.statusbar .ok-flag .dot{background:var(--ok);box-shadow:0 0 7px var(--ok);}
+.statusbar .conv{display:flex;align-items:center;gap:9px;color:var(--cyan);}
+.statusbar .conv .mini-bar{width:90px;height:4px;border-radius:3px;background:var(--hair-soft);overflow:hidden;}
+.statusbar .conv .mini-bar i{display:block;height:100%;width:68%;background:linear-gradient(90deg,var(--teal),var(--cyan));}
+</style>
+</head>
+<body>
+<div class="app">
+
+  <!-- ===================== TITLE BAR ===================== -->
+  <div class="titlebar">
+    <div class="win-dots"><i></i><i></i><i></i></div>
+    <div class="brand">
+      <div class="logo">
+        <!-- waveform signature mark -->
+        <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
+          <path d="M1 8 L3 8 L4.2 3 L6 13 L7.6 5.5 L9 10.5 L10.4 7 L12 8 L15 8"
+                stroke="url(#g1)" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/>
+          <defs><linearGradient id="g1" x1="0" y1="0" x2="16" y2="16">
+            <stop offset="0" stop-color="#34dbd0"/><stop offset="1" stop-color="#1fc8c0"/>
+          </linearGradient></defs>
+        </svg>
+      </div>
+      <div class="wordmark">SEIS<b>CONV</b></div>
+      <div class="sub">Desktop · SeisConv</div>
+    </div>
+    <div class="spacer"></div>
+    <div class="crumb">
+      <span class="dot"></span>
+      <span class="path">D:\surveys\line-217\raw\</span><span class="file">shot_0418.dat</span>
+    </div>
+  </div>
+
+  <!-- ===================== BODY ===================== -->
+  <div class="body">
+
+    <!-- ----- LEFT ICON RAIL (primary nav) ----- -->
+    <nav class="rail">
+      <!-- Converter (active): convert / arrow-through-file -->
+      <div class="nav-btn on" title="Converter">
+        <svg viewBox="0 0 24 24"><path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z"/><path d="M14 3v5h5"/><path d="M9.5 14h5"/><path d="M12.5 12l2 2-2 2"/></svg>
+        <span class="lab">Convert</span>
+      </div>
+      <!-- Trace Inspector: wiggle + magnifier -->
+      <div class="nav-btn" title="Trace Inspector">
+        <svg viewBox="0 0 24 24"><path d="M3 12h2l2-6 3 12 2.5-9 2 5 1.5-3H21"/></svg>
+        <span class="lab">Trace</span>
+      </div>
+      <!-- File Viewer: stacked traces -->
+      <div class="nav-btn" title="File Viewer">
+        <svg viewBox="0 0 24 24"><path d="M4 5h16M4 9h16M4 13h16M4 17h16"/></svg>
+        <span class="lab">Viewer</span>
+      </div>
+      <!-- SPS: map pin on grid -->
+      <div class="nav-btn" title="SPS 2.1">
+        <svg viewBox="0 0 24 24"><path d="M12 21s6-5.3 6-10a6 6 0 1 0-12 0c0 4.7 6 10 6 10z"/><circle cx="12" cy="11" r="2"/></svg>
+        <span class="lab">SPS</span>
+      </div>
+      <!-- Velocity: moveout / semblance -->
+      <div class="nav-btn" title="Velocity">
+        <svg viewBox="0 0 24 24"><path d="M4 4v16h16"/><path d="M7 17c3-7 7-9 11-11"/><path d="M7 12c2-3 4-4 6-5"/></svg>
+        <span class="lab">Velocity</span>
+      </div>
+
+      <div class="grow"></div>
+      <div class="sep"></div>
+      <div class="nav-btn mini" title="Settings">
+        <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M19 12a7 7 0 0 0-.1-1.3l2-1.5-2-3.4-2.3 1a7 7 0 0 0-2.3-1.3L13.7 2h-3.4l-.3 2.5A7 7 0 0 0 7.7 5.8l-2.3-1-2 3.4 2 1.5A7 7 0 0 0 5.3 12c0 .4 0 .9.1 1.3l-2 1.5 2 3.4 2.3-1a7 7 0 0 0 2.3 1.3l.3 2.5h3.4l.3-2.5a7 7 0 0 0 2.3-1.3l2.3 1 2-3.4-2-1.5c.1-.4.1-.9.1-1.3z"/></svg>
+      </div>
+    </nav>
+
+    <!-- ----- WORKSPACE ----- -->
+    <div class="workspace">
+
+      <!-- view header -->
+      <div class="view-head">
+        <div>
+          <div class="h-title">Converter</div>
+          <div class="h-sub">Read once, write anywhere. Parsing runs off the UI thread, so large field files stay responsive.</div>
+        </div>
+        <div class="spacer"></div>
+        <button class="btn ghost">
+          <svg viewBox="0 0 24 24"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><path d="M7 10l5 5 5-5"/><path d="M12 15V3"/></svg>
+          Batch → ZIP
+        </button>
+        <button class="btn ghost">
+          <svg viewBox="0 0 24 24"><path d="M5 12h14M13 6l6 6-6 6"/></svg>
+          Open file…
+        </button>
+      </div>
+
+      <!-- bento grid -->
+      <div class="conv-grid">
+
+        <!-- SOURCE card -->
+        <div class="card span-src">
+          <div class="card-hd">
+            <span class="ttl">Source <b>·</b> input file</span>
+            <span class="pill">parsed off-thread</span>
+          </div>
+          <div class="card-bd">
+            <div class="drop">
+              <div class="ic">
+                <svg viewBox="0 0 24 24"><path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z"/><path d="M14 3v5h5"/><path d="M9 13l3 3 3-3"/><path d="M12 16V9"/></svg>
+              </div>
+              <div>
+                <div class="d-main">shot_0418.dat</div>
+                <div class="d-sub">Detected <b>SEG-2 / Geode .dat</b> · drag a new file here or <b>browse…</b></div>
+              </div>
+              <div class="spacer"></div>
+              <button class="btn ghost">Replace</button>
+            </div>
+
+            <div class="meta-strip">
+              <div class="m"><div class="k">Traces</div><div class="v">1 024</div></div>
+              <div class="m"><div class="k">Samples / tr</div><div class="v">3 000</div></div>
+              <div class="m"><div class="k">Interval</div><div class="v">0.500 <small>ms</small></div></div>
+              <div class="m"><div class="k">Record</div><div class="v">1.500 <small>s</small></div></div>
+            </div>
+          </div>
+        </div>
+
+        <!-- FORMAT card -->
+        <div class="card span-fmt">
+          <div class="card-hd">
+            <span class="ttl">Convert to <b>·</b> output format</span>
+            <span class="pill">9 targets</span>
+          </div>
+          <div class="card-bd" style="display:flex;flex-direction:column;">
+            <div class="section-lbl">SEG-Y family</div>
+            <div class="chips" style="margin-bottom:14px;">
+              <button class="chip on">
+                <svg class="check" viewBox="0 0 12 12"><path d="M2 6.5 5 9.5 10 3"/></svg>
+                <span class="c-name"><svg class="c-ic" viewBox="0 0 24 24"><path d="M4 4h16v16H4z"/><path d="M8 9h8M8 13h8"/></svg>SEG-Y Rev 1</span>
+                <span class="c-ext">.sgy · IBM/IEEE</span>
+              </button>
+              <button class="chip">
+                <span class="c-name"><svg class="c-ic" viewBox="0 0 24 24"><path d="M4 4h16v16H4z"/><path d="M8 9h8M8 13h8"/></svg>SEG-Y Rev 0</span>
+                <span class="c-ext">.sgy · legacy</span>
+              </button>
+              <button class="chip">
+                <span class="c-name"><svg class="c-ic" viewBox="0 0 24 24"><path d="M4 4h16v16H4z"/><path d="M8 9h8M8 13h8"/></svg>SEG-Y Rev 2</span>
+                <span class="c-ext">.sgy · extended</span>
+              </button>
+            </div>
+
+            <div class="section-lbl">Other targets</div>
+            <div class="chips">
+              <button class="chip">
+                <span class="c-name"><svg class="c-ic" viewBox="0 0 24 24"><path d="M3 12h3l2-5 3 10 2-7 2 4h6"/></svg>Seismic Unix</span>
+                <span class="c-ext">.su</span>
+              </button>
+              <button class="chip">
+                <span class="c-name"><svg class="c-ic" viewBox="0 0 24 24"><path d="M5 4h14v16H5z"/><path d="M9 8h6M9 12h6M9 16h4"/></svg>SEG-2 / .dat</span>
+                <span class="c-ext">.dat · Geode</span>
+              </button>
+              <button class="chip">
+                <span class="c-name"><svg class="c-ic" viewBox="0 0 24 24"><path d="M5 4h14v16H5z"/><path d="M9 8h6M9 12h6"/></svg>SEG-D Rev 1</span>
+                <span class="c-ext">.segd</span>
+              </button>
+              <button class="chip">
+                <span class="c-name"><svg class="c-ic" viewBox="0 0 24 24"><path d="M5 4h14v16H5z"/><path d="M9 8h6M9 12h6"/></svg>SEG-D Rev 3</span>
+                <span class="c-ext">.segd · rev3</span>
+              </button>
+              <button class="chip">
+                <span class="c-name"><svg class="c-ic" viewBox="0 0 24 24"><path d="M5 7c0-1.7 3-3 7-3s7 1.3 7 3-3 3-7 3-7-1.3-7-3z"/><path d="M5 7v10c0 1.7 3 3 7 3s7-1.3 7-3V7"/></svg>Tape Image</span>
+                <span class="c-ext">.tp · raw</span>
+              </button>
+              <button class="chip">
+                <span class="c-name"><svg class="c-ic" viewBox="0 0 24 24"><path d="M4 4h16v16H4z"/><path d="M4 9h16M9 4v16"/></svg>CSV / ASCII</span>
+                <span class="c-ext">.csv · text</span>
+              </button>
+            </div>
+          </div>
+
+          <div class="conv-footer">
+            <div class="route">
+              <b>shot_0418.dat</b><span class="arrow">→</span><span class="to">SEG-Y Rev 1</span>
+            </div>
+            <div class="spacer"></div>
+            <button class="btn primary lg">
+              <svg viewBox="0 0 24 24"><path d="M5 12h14M13 6l6 6-6 6"/></svg>
+              Convert &amp; Save…
+            </button>
+          </div>
+        </div>
+
+        <!-- SIDE column: preview + batch -->
+        <div class="span-side">
+
+          <!-- preview card -->
+          <div class="card" style="flex:1.4;">
+            <div class="card-hd">
+              <span class="ttl">Preview <b>·</b> variable density</span>
+              <span class="pill">RWB · white = 0</span>
+            </div>
+            <div class="card-bd" style="display:flex;flex-direction:column;">
+              <div class="preview-wrap">
+                <div class="preview">
+                  <div class="pv-overlay"><span class="live"></span> trace 512 · t = 0.742 s</div>
+                  <!-- inline CSS-free seismic section -->
+                  <svg viewBox="0 0 320 220" preserveAspectRatio="none">
+                    <defs>
+                      <linearGradient id="vd" x1="0" y1="0" x2="0" y2="1">
+                        <stop offset="0" stop-color="#0a1828"/><stop offset="1" stop-color="#0a1828"/>
+                      </linearGradient>
+                      <filter id="soft"><feGaussianBlur stdDeviation="0.5"/></filter>
+                    </defs>
+                    <rect width="320" height="220" fill="url(#vd)"/>
+                    <!-- horizontal reflector bands (RWB diverging, white near zero) -->
+                    <g opacity="0.92">
+                      <rect y="22"  width="320" height="11" fill="#3f7fc0"/>
+                      <rect y="33"  width="320" height="7"  fill="#9cc2e6"/>
+                      <rect y="46"  width="320" height="9"  fill="#c8331f"/>
+                      <rect y="55"  width="320" height="6"  fill="#e8a193"/>
+                      <rect y="78"  width="320" height="10" fill="#2d6bb0"/>
+                      <rect y="88"  width="320" height="6"  fill="#b7d3ee"/>
+                      <rect y="108" width="320" height="9"  fill="#c8331f"/>
+                      <rect y="117" width="320" height="6"  fill="#edb4a8"/>
+                      <rect y="140" width="320" height="11" fill="#3873b6"/>
+                      <rect y="151" width="320" height="6"  fill="#aecbe9"/>
+                      <rect y="172" width="320" height="9"  fill="#bf3320"/>
+                      <rect y="190" width="320" height="8"  fill="#2f6db1"/>
+                    </g>
+                    <!-- subtle structural dip via skew overlay -->
+                    <g opacity="0.16" fill="#ffffff">
+                      <polygon points="0,40 320,28 320,34 0,46"/>
+                      <polygon points="0,120 320,104 320,110 0,126"/>
+                    </g>
+                    <!-- active trace cursor (teal) -->
+                    <rect x="158" y="6" width="2" height="208" fill="#1fc8c0" opacity="0.85"/>
+                    <rect x="153" y="6" width="12" height="208" fill="#1fc8c0" opacity="0.10"/>
+                  </svg>
+                  <div class="cbar"></div>
+                  <div class="cbar-tx"><span>+1.0</span><span>0</span><span>−1.0</span></div>
+                </div>
+                <div class="pv-foot">
+                  <span><b>polarity</b> SEG normal</span>
+                  <span><b>gain</b> 1.0×</span>
+                  <span><b>Δt</b> 0.5 ms</span>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <!-- batch / log card -->
+          <div class="card" style="flex:1;">
+            <div class="card-hd">
+              <span class="ttl">Batch queue</span>
+              <span class="pill">3 / 4 done</span>
+            </div>
+            <div class="card-bd">
+              <div class="log">
+                <div class="row">
+                  <span class="dot st-ok" style="background:var(--ok);box-shadow:0 0 6px var(--ok);"></span>
+                  <span class="nm">shot_0415.dat <small>→ .sgy</small></span>
+                  <span class="st st-ok">done</span>
+                </div>
+                <div class="row">
+                  <span class="dot st-ok" style="background:var(--ok);box-shadow:0 0 6px var(--ok);"></span>
+                  <span class="nm">shot_0416.dat <small>→ .sgy</small></span>
+                  <span class="st st-ok">done</span>
+                </div>
+                <div class="row">
+                  <span class="dot st-warn" style="background:var(--warn);box-shadow:0 0 6px var(--warn);"></span>
+                  <span class="nm">shot_0417.dat <small>→ .sgy</small></span>
+                  <span class="st st-warn">header fix</span>
+                </div>
+                <div class="row">
+                  <span class="dot st-run" style="background:var(--cyan);box-shadow:0 0 6px var(--cyan);"></span>
+                  <span class="nm" style="display:block;">shot_0418.dat <small>→ .sgy</small>
+                    <span class="bar"><i style="width:68%"></i></span>
+                  </span>
+                  <span class="st st-run">68%</span>
+                </div>
+              </div>
+            </div>
+          </div>
+
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ===================== STATUS STRIP ===================== -->
+  <div class="statusbar">
+    <div class="seg">
+      <svg viewBox="0 0 24 24"><path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z"/><path d="M14 3v5h5"/></svg>
+      <span class="v">shot_0418.dat</span>
+    </div>
+    <div class="seg"><span class="k">fmt</span><span class="v">SEG-2 / Geode</span></div>
+    <div class="seg"><span class="k">Δt</span><span class="v">0.500 ms</span></div>
+    <div class="seg"><span class="k">traces</span><span class="v">1 024</span></div>
+    <div class="seg"><span class="k">samples</span><span class="v">3 000</span></div>
+    <div class="seg"><span class="k">CRS</span><span class="v">EPSG:32636 · UTM 36N</span></div>
+    <div class="spacer"></div>
+    <div class="seg flag"><span class="dot"></span> 1 header flag</div>
+    <div class="seg conv">
+      <span>converting → SEG-Y Rev 1</span>
+      <span class="mini-bar"><i></i></span>
+      <span>68%</span>
+    </div>
+  </div>
+
+</div>
+</body>
+</html>

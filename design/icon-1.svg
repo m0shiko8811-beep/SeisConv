@@ -1,0 +1,57 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 512 512" role="img" aria-label="SeisConv app icon — stylized S seismic wave">
+  <defs>
+    <!-- Rounded-square app tile: deep-navy radial depth -->
+    <radialGradient id="i1-bg" cx="34%" cy="22%" r="92%">
+      <stop offset="0%" stop-color="#1a3a5c"/>
+      <stop offset="48%" stop-color="#10273f"/>
+      <stop offset="100%" stop-color="#0a1828"/>
+    </radialGradient>
+    <!-- Teal -> cyan stroke gradient for the waveform-S -->
+    <linearGradient id="i1-stroke" x1="18%" y1="8%" x2="84%" y2="96%">
+      <stop offset="0%" stop-color="#34dbd0"/>
+      <stop offset="55%" stop-color="#1fc8c0"/>
+      <stop offset="100%" stop-color="#0fa39d"/>
+    </linearGradient>
+    <!-- Soft inner sheen at the top -->
+    <linearGradient id="i1-sheen" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#ffffff" stop-opacity="0.16"/>
+      <stop offset="34%" stop-color="#ffffff" stop-opacity="0"/>
+    </linearGradient>
+    <filter id="i1-glow" x="-25%" y="-25%" width="150%" height="150%">
+      <feGaussianBlur stdDeviation="7" result="b"/>
+      <feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>
+  </defs>
+
+  <!-- App tile -->
+  <rect x="0" y="0" width="512" height="512" rx="114" fill="url(#i1-bg)"/>
+  <rect x="0" y="0" width="512" height="512" rx="114" fill="url(#i1-sheen)"/>
+
+  <!-- Baseline grid hint (very subtle) -->
+  <g stroke="#2a567f" stroke-opacity="0.35" stroke-width="3">
+    <line x1="96" y1="256" x2="416" y2="256"/>
+  </g>
+
+  <!-- The S, drawn as a single seismic trace.
+       Center dots mark the wiggle peaks like seismic picks. -->
+  <g fill="none" stroke="url(#i1-stroke)" stroke-width="34" stroke-linecap="round" stroke-linejoin="round">
+    <path filter="url(#i1-glow)"
+      d="M 356 150
+         C 326 110, 232 104, 198 140
+         C 158 182, 196 230, 256 256
+         C 318 282, 356 332, 314 374
+         C 280 410, 188 404, 156 364" />
+  </g>
+
+  <!-- Seismic 'pick' nodes along the S -->
+  <g fill="#eafffd">
+    <circle cx="356" cy="150" r="15"/>
+    <circle cx="256" cy="256" r="13"/>
+    <circle cx="156" cy="364" r="15"/>
+  </g>
+  <g fill="#0a1828">
+    <circle cx="356" cy="150" r="6"/>
+    <circle cx="256" cy="256" r="5"/>
+    <circle cx="156" cy="364" r="6"/>
+  </g>
+</svg>
