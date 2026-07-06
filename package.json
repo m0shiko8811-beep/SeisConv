@@ -1,0 +1,71 @@
+{
+  "name": "seisconv",
+  "version": "0.6.0",
+  "description": "SeisConv - desktop seismic data converter & toolkit",
+  "author": "Moshe Fridin",
+  "license": "UNLICENSED",
+  "private": true,
+  "main": "dist/main.js",
+  "scripts": {
+    "build:main": "esbuild electron/main.ts --bundle --platform=node --target=node20 --external:electron --outfile=dist/main.js --format=cjs",
+    "build:preload": "esbuild electron/preload.ts --bundle --platform=node --target=node20 --external:electron --outfile=dist/preload.js --format=cjs",
+    "build:worker": "esbuild workers/parse.worker.ts --bundle --platform=node --target=node20 --outfile=dist/parse.worker.js --format=cjs",
+    "build:renderer": "esbuild renderer/src/app.ts --bundle --platform=browser --outfile=renderer/dist/app.js --format=iife --loader:.png=dataurl --loader:.svg=dataurl",
+    "build": "npm run build:main && npm run build:preload && npm run build:worker && npm run build:renderer",
+    "start": "npm run build && electron .",
+    "test:core": "tsx core/__tests__/run.ts",
+    "qc:realdata": "tsx scripts/realdata-qc.ts",
+    "qc:positioning": "tsx scripts/positioning-qc.ts",
+    "qa": "node qa/drive.mjs",
+    "verify": "node qa/verify.mjs",
+    "typecheck": "tsc --noEmit",
+    "dist": "npm run build && electron-builder"
+  },
+  "dependencies": {
+    "@types/leaflet": "^1.9.21",
+    "jszip": "^3.10.1",
+    "leaflet": "^1.9.4",
+    "leaflet-rotate": "^0.2.8"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.0",
+    "electron": "^33.0.0",
+    "electron-builder": "^25.0.0",
+    "esbuild": "^0.24.0",
+    "playwright": "^1.61.0",
+    "png-to-ico": "^3.0.1",
+    "tsx": "^4.19.2",
+    "typescript": "^5.6.0"
+  },
+  "build": {
+    "appId": "com.smartseismic.seisconv",
+    "productName": "SeisConv",
+    "icon": "build/icon.ico",
+    "files": [
+      "dist/**",
+      "!dist/win-unpacked/**",
+      "!dist/*.exe",
+      "!dist/*.blockmap",
+      "!dist/__uninstaller-nsis-*.exe",
+      "!dist/*.yml",
+      "renderer/**",
+      "build/**",
+      "package.json"
+    ],
+    "win": {
+      "target": "nsis",
+      "icon": "build/icon.ico"
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "allowElevation": true
+    },
+    "mac": {
+      "target": "dmg"
+    },
+    "linux": {
+      "target": "AppImage"
+    }
+  }
+}

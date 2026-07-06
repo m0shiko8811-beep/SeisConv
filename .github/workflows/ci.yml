@@ -1,0 +1,67 @@
+name: CI
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  gates:
+    name: typecheck / build / core tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Build
+        run: npm run build
+
+      - name: Core unit tests
+        # File-backed tests skip automatically when local fixtures are absent,
+        # so this is green in CI without any real data.
+        run: npm run test:core
+
+  # The Playwright `_electron` end-to-end suite (`npm run qa`) needs a real
+  # Electron process and a display server. It cannot run on a headless runner
+  # without a virtual framebuffer, and depends on local sample files that are
+  # intentionally NOT in the repo. It is therefore informational-only here:
+  # failures do not block the build. Run the full QA locally before a release.
+  qa-electron:
+    name: qa (electron, informational)
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build
+        run: npm run build
+
+      - name: Run Electron QA under xvfb
+        # xvfb provides a virtual display; the QA harness skips file-backed
+        # flows when sample data is unavailable.
+        run: xvfb-run --auto-servernum npm run qa
