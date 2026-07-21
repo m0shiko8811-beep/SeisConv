@@ -29,9 +29,9 @@
   },
   "devDependencies": {
     "@types/node": "^22.10.0",
-    "electron": "^33.0.0",
-    "electron-builder": "^25.0.0",
-    "esbuild": "^0.24.0",
+    "electron": "^39.8.5",
+    "electron-builder": "^26.15.3",
+    "esbuild": "^0.28.1",
     "playwright": "^1.61.0",
     "png-to-ico": "^3.0.1",
     "tsx": "^4.19.2",
