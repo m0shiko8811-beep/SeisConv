@@ -1,0 +1,71 @@
+name: CI
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  gates:
+    name: typecheck / build / core tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: "20"
+          cache: "npm"
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Build
+        run: npm run build
+
+      - name: Core unit tests
+        # File-backed tests skip automatically when local fixtures are absent,
+        # so this is green in CI without any real data.
+        run: npm run test:core
+
+  # The Playwright `_electron` end-to-end suite (`npm run qa`) needs a real
+  # Electron process and a display server, so it runs under xvfb here. Seven of
+  # its twelve steps drive real SEG-Y / SEG-D / SPS sample files that are
+  # deliberately NOT in this repository (they are field survey data), so on a
+  # clean runner it reports 5/12 and exits non-zero. What this job is actually
+  # proving is that the app builds, launches under Electron, and reaches every
+  # tab with zero page errors and zero console errors. It is therefore
+  # informational-only and does not block the build. The full 12/12 run is done
+  # locally against real data before a release.
+  qa-electron:
+    name: qa (electron, informational)
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: "20"
+          cache: "npm"
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build
+        run: npm run build
+
+      - name: Run Electron QA under xvfb
+        # xvfb provides a virtual display; the QA harness skips file-backed
+        # flows when sample data is unavailable.
+        run: xvfb-run --auto-servernum npm run qa

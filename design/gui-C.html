@@ -1,0 +1,638 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>SeisConv - Direction C · Clean Modern + Light</title>
+<style>
+/* ============================================================================
+   SeisConv - GUI Mockup · DIRECTION C  "Clean Modern + Light"
+   Static, self-contained. Airy light canvas; navy + teal/cyan as ACCENTS only.
+   Brand trio kept as identity, never as background fill.
+   Real app structure mirrored: 5 tabs + Converter with 9 format chips.
+   ============================================================================ */
+
+:root{
+  /* ---- Light canvas elevations (cool paper, never pure white-on-white) ---- */
+  --canvas:#eef2f7;       /* app background */
+  --surface:#f7f9fc;      /* recessed bands */
+  --card:#ffffff;         /* card / panel face */
+  --raised:#ffffff;       /* raised controls */
+  --hair:#dde4ee;         /* hairline border */
+  --hair-soft:#e7edf4;
+
+  /* ---- Brand identity (accents only) ---- */
+  --navy:#0d1f33;         /* deepest brand navy - text-strong + logo */
+  --navy-2:#173251;       /* secondary navy */
+  --teal:#0fb3ab;         /* primary accent: focus, active, primary action */
+  --teal-deep:#0a8f88;    /* teal pressed / on-light text */
+  --cyan:#22c9bf;         /* secondary accent: hover, live-data partner */
+  --teal-tint:#e2f7f5;    /* teal wash for selected chips / fills */
+  --teal-tint-2:#d2f1ef;
+
+  /* ---- Neutral text ladder on light ---- */
+  --ink:#15212f;          /* high  */
+  --ink-2:#4a5a6e;        /* medium */
+  --ink-3:#8395a8;        /* dim   */
+  --ink-4:#aab8c6;        /* faint */
+
+  /* ---- Semantic (distinct from brand) ---- */
+  --green:#1f9d57; --green-tint:#e4f6ec;
+  --amber:#c9870a; --amber-tint:#fbf0d9;
+  --red:#d8453e;   --red-tint:#fbe6e5;
+  --blue:#2f7fd6;
+
+  --radius:16px; --radius-sm:10px; --radius-xs:7px;
+  --shadow-card:0 1px 2px rgba(13,31,51,.05), 0 6px 22px rgba(13,31,51,.06);
+  --shadow-pop:0 10px 34px rgba(13,31,51,.14);
+  --mono:'JetBrains Mono','IBM Plex Mono','Cascadia Code',Consolas,monospace;
+  --sans:'Inter','Segoe UI Variable','Segoe UI',system-ui,-apple-system,sans-serif;
+}
+
+*{box-sizing:border-box;margin:0;padding:0;}
+html,body{height:100%;}
+body{
+  font-family:var(--sans);
+  background:
+    radial-gradient(900px 460px at 86% -12%, rgba(34,201,191,.10), transparent 60%),
+    radial-gradient(760px 420px at -8% 6%, rgba(13,31,51,.05), transparent 58%),
+    var(--canvas);
+  color:var(--ink);
+  font-size:13px;
+  line-height:1.45;
+  -webkit-font-smoothing:antialiased;
+  font-variant-numeric:tabular-nums lining-nums;
+  display:flex; flex-direction:column;
+  min-height:100vh;
+  letter-spacing:.1px;
+}
+.num{font-variant-numeric:tabular-nums lining-nums;}
+.mono{font-family:var(--mono);font-variant-numeric:tabular-nums;}
+
+/* ===========================================================================
+   APP SHELL - single inverted-L: slim top header + left icon rail
+   =========================================================================== */
+.app{
+  width:1240px; height:860px; margin:14px auto;
+  background:var(--canvas);
+  border:1px solid var(--hair);
+  border-radius:20px;
+  box-shadow:0 24px 70px rgba(13,31,51,.18), 0 2px 8px rgba(13,31,51,.08);
+  overflow:hidden;
+  display:grid;
+  grid-template-rows:54px 1fr;
+  grid-template-columns:68px 1fr;
+  grid-template-areas:"head head" "rail main";
+}
+
+/* -------- Top header -------- */
+.header{
+  grid-area:head;
+  display:flex; align-items:center; gap:14px;
+  padding:0 18px;
+  background:rgba(255,255,255,.72);
+  backdrop-filter:blur(12px); -webkit-backdrop-filter:blur(12px);
+  border-bottom:1px solid var(--hair);
+  z-index:5;
+}
+.logo{display:flex;align-items:center;gap:10px;}
+.logo .mark{
+  width:30px;height:30px;border-radius:9px;flex:none;
+  background:linear-gradient(125deg,#0d1f33 0%, #173251 100%);
+  display:grid;place-items:center;
+  box-shadow:0 2px 6px rgba(13,31,51,.28), inset 0 1px 0 rgba(255,255,255,.12);
+}
+.logo .mark svg{display:block;}
+.logo .wm{font-weight:800;font-size:16px;letter-spacing:.4px;color:var(--navy);}
+.logo .wm span{color:var(--teal-deep);}
+.logo .tag{font-size:10px;color:var(--ink-3);letter-spacing:1.4px;text-transform:uppercase;margin-top:1px;}
+
+.header .crumbs{display:flex;align-items:center;gap:8px;margin-left:8px;color:var(--ink-3);font-size:12px;}
+.header .crumbs .sep{color:var(--ink-4);}
+.header .crumbs b{color:var(--ink-2);font-weight:600;}
+
+.header .right{margin-left:auto;display:flex;align-items:center;gap:10px;}
+
+/* theme toggle motif (light active) */
+.toggle{
+  display:flex;align-items:center;gap:0;
+  background:var(--surface);border:1px solid var(--hair);
+  border-radius:999px;padding:3px;
+}
+.toggle button{
+  width:30px;height:24px;border:none;border-radius:999px;background:transparent;
+  cursor:pointer;display:grid;place-items:center;color:var(--ink-3);
+}
+.toggle button.on{background:#fff;color:var(--teal-deep);box-shadow:0 1px 3px rgba(13,31,51,.14);}
+
+.iconbtn{
+  width:34px;height:34px;border-radius:10px;border:1px solid var(--hair);
+  background:#fff;display:grid;place-items:center;cursor:pointer;color:var(--ink-2);
+}
+.iconbtn:hover{border-color:var(--teal);color:var(--teal-deep);}
+
+.btn{
+  border:none;cursor:pointer;font-family:inherit;font-weight:600;letter-spacing:.2px;
+  border-radius:10px;font-size:13px;padding:9px 15px;display:inline-flex;align-items:center;gap:8px;
+  transition:transform .04s ease;
+}
+.btn:active{transform:translateY(1px);}
+.btn-primary{
+  background:linear-gradient(120deg,var(--teal) 0%, var(--cyan) 100%);
+  color:#fff;box-shadow:0 4px 14px rgba(15,179,171,.32);
+}
+.btn-primary:hover{filter:brightness(1.04);}
+.btn-ghost{background:#fff;color:var(--ink-2);border:1px solid var(--hair);}
+.btn-ghost:hover{border-color:var(--teal);color:var(--teal-deep);}
+.btn.sm{padding:7px 12px;font-size:12px;border-radius:9px;}
+.btn.lg{padding:11px 20px;font-size:14px;}
+.btn:disabled{opacity:.5;cursor:not-allowed;box-shadow:none;}
+
+/* -------- Left icon rail -------- */
+.rail{
+  grid-area:rail;
+  background:linear-gradient(180deg, rgba(255,255,255,.86), rgba(247,249,252,.86));
+  border-right:1px solid var(--hair);
+  display:flex;flex-direction:column;align-items:center;
+  padding:12px 0;gap:6px;
+}
+.rail .nav-item{
+  position:relative;width:46px;height:46px;border-radius:13px;
+  display:grid;place-items:center;cursor:pointer;color:var(--ink-3);
+  border:1px solid transparent;
+}
+.rail .nav-item:hover{color:var(--teal-deep);background:#fff;border-color:var(--hair-soft);}
+.rail .nav-item .lbl{
+  position:absolute;left:54px;white-space:nowrap;font-size:11px;font-weight:600;
+  color:#fff;background:var(--navy);padding:4px 9px;border-radius:7px;opacity:0;pointer-events:none;
+  box-shadow:var(--shadow-pop);
+}
+.rail .nav-item.on{
+  color:var(--teal-deep);
+  background:var(--teal-tint);
+  border-color:var(--teal-tint-2);
+}
+.rail .nav-item.on::before{
+  content:"";position:absolute;left:-12px;top:9px;bottom:9px;width:3px;border-radius:3px;
+  background:linear-gradient(180deg,var(--teal),var(--cyan));
+}
+.rail .spacer{flex:1;}
+
+/* ===========================================================================
+   MAIN
+   =========================================================================== */
+.main{grid-area:main;overflow:hidden;display:flex;flex-direction:column;}
+
+/* tab title header strip */
+.tabhead{
+  display:flex;align-items:center;gap:14px;
+  padding:16px 22px 14px;
+}
+.tabhead .ttl h1{font-size:19px;font-weight:800;letter-spacing:-.2px;color:var(--ink);}
+.tabhead .ttl p{font-size:12px;color:var(--ink-3);margin-top:2px;}
+.tabhead .acts{margin-left:auto;display:flex;align-items:center;gap:9px;}
+
+.scroll{flex:1;overflow:auto;padding:0 22px 18px;}
+.scroll::-webkit-scrollbar{width:10px;height:10px;}
+.scroll::-webkit-scrollbar-thumb{background:#cdd8e4;border-radius:9px;border:2px solid var(--canvas);}
+
+/* ---- Cards ---- */
+.card{
+  background:var(--card);border:1px solid var(--hair);border-radius:var(--radius);
+  box-shadow:var(--shadow-card);
+}
+.card .ch{
+  display:flex;align-items:center;gap:10px;padding:14px 18px;border-bottom:1px solid var(--hair-soft);
+}
+.card .ch h2{font-size:13px;font-weight:700;letter-spacing:.2px;color:var(--ink);}
+.card .ch .hint{font-size:11px;color:var(--ink-3);}
+.card .ch .right{margin-left:auto;display:flex;gap:8px;align-items:center;}
+.card .cb{padding:18px;}
+
+.eyebrow{font-size:11px;font-weight:700;letter-spacing:1.4px;text-transform:uppercase;color:var(--ink-3);}
+.pill{
+  font-size:10.5px;font-weight:700;letter-spacing:.5px;border-radius:999px;padding:3px 9px;
+  display:inline-flex;align-items:center;gap:5px;
+}
+.pill.teal{background:var(--teal-tint);color:var(--teal-deep);}
+.pill.green{background:var(--green-tint);color:var(--green);}
+.pill.amber{background:var(--amber-tint);color:var(--amber);}
+.pill.red{background:var(--red-tint);color:var(--red);}
+.pill.neutral{background:var(--surface);color:var(--ink-2);border:1px solid var(--hair);}
+.dot{width:7px;height:7px;border-radius:50%;display:inline-block;}
+
+/* ====== CONVERTER ====== */
+.conv-grid{display:grid;grid-template-columns:1.55fr 1fr;gap:16px;align-items:start;}
+
+.drop{
+  border:1.5px dashed #c3d2e2;border-radius:var(--radius);
+  background:linear-gradient(180deg,#fbfdff,#f4f8fc);
+  padding:26px;display:flex;align-items:center;gap:20px;
+}
+.drop .ic{
+  width:64px;height:64px;border-radius:18px;flex:none;display:grid;place-items:center;
+  background:var(--teal-tint);color:var(--teal-deep);
+}
+.drop h3{font-size:16px;font-weight:800;color:var(--ink);}
+.drop p{font-size:12px;color:var(--ink-3);margin-top:3px;max-width:46ch;}
+.drop .fmts{margin-top:10px;display:flex;gap:6px;flex-wrap:wrap;}
+.drop .acts{margin-left:auto;display:flex;flex-direction:column;gap:8px;}
+
+.chips{display:flex;gap:9px;flex-wrap:wrap;}
+.chip{
+  border:1px solid var(--hair);background:#fff;border-radius:11px;
+  padding:10px 13px;cursor:pointer;display:flex;flex-direction:column;gap:1px;min-width:96px;
+}
+.chip:hover{border-color:var(--cyan);}
+.chip .nm{font-size:12.5px;font-weight:700;color:var(--ink);}
+.chip .ex{font-size:10.5px;color:var(--ink-3);font-family:var(--mono);}
+.chip.sel{
+  border-color:var(--teal);background:var(--teal-tint);
+  box-shadow:0 0 0 3px rgba(15,179,171,.14);
+}
+.chip.sel .nm{color:var(--teal-deep);}
+.chip .check{display:none;}
+.chip.sel .check{display:inline;}
+
+.kv{display:flex;justify-content:space-between;align-items:baseline;padding:7px 0;border-bottom:1px solid var(--hair-soft);font-size:12.5px;}
+.kv:last-child{border-bottom:none;}
+.kv .k{color:var(--ink-3);}
+.kv .v{color:var(--ink);font-weight:600;}
+.kv .v.mono{font-weight:500;}
+
+.progress{height:8px;border-radius:99px;background:#e9eef4;overflow:hidden;}
+.progress > span{display:block;height:100%;border-radius:99px;background:linear-gradient(90deg,var(--teal),var(--cyan));}
+
+.batch-row{
+  display:grid;grid-template-columns:18px 1fr 86px 70px;gap:10px;align-items:center;
+  padding:9px 0;border-bottom:1px solid var(--hair-soft);font-size:12px;
+}
+.batch-row:last-child{border-bottom:none;}
+.batch-row .fn{color:var(--ink);font-weight:600;}
+.batch-row .meta{color:var(--ink-3);font-family:var(--mono);font-size:11px;}
+
+/* ====== generic seismic plot surface (light) ====== */
+.plot{
+  position:relative;border-radius:12px;overflow:hidden;border:1px solid var(--hair);
+  background:#fff;
+}
+.plot .axis-y,.plot .axis-x{position:absolute;color:var(--ink-3);font-family:var(--mono);font-size:10px;}
+.plot .gridlines{position:absolute;inset:0;}
+
+/* colorbar */
+.cbar{display:flex;align-items:center;gap:8px;font-family:var(--mono);font-size:10.5px;color:var(--ink-2);}
+.cbar .bar{width:120px;height:11px;border-radius:3px;border:1px solid var(--hair);}
+.cbar.rwb .bar{background:linear-gradient(90deg,#2f6fd6,#ffffff 50%,#d8453e);}
+.cbar.gray .bar{background:linear-gradient(90deg,#1a1a1a,#fff);}
+
+/* segmented control */
+.seg{display:inline-flex;background:var(--surface);border:1px solid var(--hair);border-radius:10px;padding:2px;}
+.seg button{
+  border:none;background:transparent;font-family:inherit;font-size:12px;font-weight:600;color:var(--ink-3);
+  padding:5px 12px;border-radius:8px;cursor:pointer;
+}
+.seg button.on{background:#fff;color:var(--teal-deep);box-shadow:0 1px 3px rgba(13,31,51,.12);}
+
+/* small form controls */
+.field{display:flex;flex-direction:column;gap:4px;}
+.field label{font-size:10.5px;font-weight:700;letter-spacing:.6px;text-transform:uppercase;color:var(--ink-3);}
+.input,.select{
+  height:30px;border:1px solid var(--hair);border-radius:9px;background:#fff;color:var(--ink);
+  font-family:var(--mono);font-size:12px;padding:0 9px;min-width:74px;
+}
+.input:focus,.select:focus{outline:none;border-color:var(--teal);box-shadow:0 0 0 3px rgba(15,179,171,.16);}
+.select{font-family:var(--sans);font-weight:600;}
+.toolbar{display:flex;align-items:flex-end;gap:12px;flex-wrap:wrap;}
+
+/* data table */
+.tbl{width:100%;border-collapse:collapse;font-size:12px;}
+.tbl thead th{
+  text-align:left;font-size:10.5px;font-weight:700;letter-spacing:.6px;text-transform:uppercase;
+  color:var(--ink-3);padding:8px 10px;border-bottom:1px solid var(--hair);position:sticky;top:0;background:#fff;
+}
+.tbl tbody td{padding:8px 10px;border-bottom:1px solid var(--hair-soft);color:var(--ink-2);}
+.tbl tbody tr:hover{background:var(--surface);}
+.tbl td.n,.tbl th.n{text-align:right;font-family:var(--mono);color:var(--ink);font-variant-numeric:tabular-nums;}
+.tbl tr.live td{background:var(--teal-tint);}
+.tbl tr.live td:first-child{box-shadow:inset 3px 0 0 var(--teal);}
+
+/* split layout for QC tabs */
+.split{display:grid;gap:16px;align-items:start;}
+
+/* status strip */
+.statusbar{
+  display:flex;align-items:center;gap:0;height:34px;border-top:1px solid var(--hair);
+  background:rgba(255,255,255,.82);backdrop-filter:blur(8px);-webkit-backdrop-filter:blur(8px);
+  padding:0 16px;font-size:11.5px;color:var(--ink-2);font-family:var(--mono);
+}
+.statusbar .s{display:flex;align-items:center;gap:7px;padding:0 14px;border-right:1px solid var(--hair-soft);height:18px;}
+.statusbar .s:first-child{padding-left:0;}
+.statusbar .s .lk{color:var(--ink-3);}
+.statusbar .s b{color:var(--ink);font-weight:600;}
+.statusbar .grow{flex:1;border:none;}
+
+/* SPS map */
+.mapwrap{position:relative;height:420px;border-radius:12px;overflow:hidden;border:1px solid var(--hair);
+  background:
+    linear-gradient(0deg, rgba(13,31,51,.025), rgba(13,31,51,.025)),
+    repeating-linear-gradient(0deg,transparent 0 39px,rgba(13,31,51,.05) 39px 40px),
+    repeating-linear-gradient(90deg,transparent 0 39px,rgba(13,31,51,.05) 39px 40px),
+    #f3f7fb;}
+.mapwrap .crs{position:absolute;left:12px;bottom:12px;background:rgba(255,255,255,.92);border:1px solid var(--hair);
+  border-radius:8px;padding:6px 10px;font-family:var(--mono);font-size:10.5px;color:var(--ink-2);box-shadow:var(--shadow-card);}
+.mapwrap .legend{position:absolute;right:12px;top:12px;background:rgba(255,255,255,.92);border:1px solid var(--hair);
+  border-radius:10px;padding:10px 12px;font-size:11px;box-shadow:var(--shadow-card);}
+.mapwrap .legend .lr{display:flex;align-items:center;gap:8px;padding:2px 0;color:var(--ink-2);}
+.src{fill:var(--red);} .rcv{fill:var(--teal);}
+
+/* misc */
+.flag-list .fl{display:grid;grid-template-columns:64px 1fr auto;gap:10px;align-items:center;padding:9px 0;border-bottom:1px solid var(--hair-soft);font-size:12px;}
+.flag-list .fl:last-child{border-bottom:none;}
+.flag-list .fl .cat{color:var(--ink-3);font-family:var(--mono);font-size:11px;}
+.flag-list .fl .msg{color:var(--ink-2);}
+
+.note{font-size:11px;color:var(--ink-4);}
+.kbd{font-family:var(--mono);font-size:10px;background:var(--surface);border:1px solid var(--hair);border-radius:5px;padding:1px 5px;color:var(--ink-2);}
+</style>
+</head>
+<body>
+<div class="app">
+
+  <!-- ============================ HEADER ============================ -->
+  <div class="header">
+    <div class="logo">
+      <div class="mark">
+        <!-- waveform brand mark, teal->cyan -->
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none">
+          <defs><linearGradient id="wg" x1="0" y1="0" x2="1" y2="1">
+            <stop offset="0" stop-color="#22c9bf"/><stop offset="1" stop-color="#0fb3ab"/></linearGradient></defs>
+          <path d="M2 12 H5 L7 5 L10 19 L13 9 L15 15 L17 12 H22"
+                stroke="url(#wg)" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round"/>
+        </svg>
+      </div>
+      <div>
+        <div class="wm">Seis<span>Conv</span></div>
+        <div class="tag">Converter · QC</div>
+      </div>
+    </div>
+
+    <div class="crumbs">
+      <span class="sep">/</span><b>Converter</b>
+    </div>
+
+    <div class="right">
+      <div class="toggle" title="Theme">
+        <button title="Dark">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8Z"/></svg>
+        </button>
+        <button class="on" title="Light">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="4.2"/><path d="M12 2v2.4M12 19.6V22M4.2 4.2l1.7 1.7M18.1 18.1l1.7 1.7M2 12h2.4M19.6 12H22M4.2 19.8l1.7-1.7M18.1 5.9l1.7-1.7"/></svg>
+        </button>
+      </div>
+      <button class="iconbtn" title="Settings">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="12" r="3"/><path d="M19 12a7 7 0 0 0-.1-1.2l2-1.5-2-3.4-2.3 1a7 7 0 0 0-2-1.2L16 3H8l-.6 2.5a7 7 0 0 0-2 1.2l-2.3-1-2 3.4 2 1.5A7 7 0 0 0 3 12c0 .4 0 .8.1 1.2l-2 1.5 2 3.4 2.3-1c.6.5 1.3.9 2 1.2L8 21h8l.6-2.5c.7-.3 1.4-.7 2-1.2l2.3 1 2-3.4-2-1.5c.1-.4.1-.8.1-1.2Z"/></svg>
+      </button>
+      <button class="btn btn-primary sm">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M12 5v14M5 12h14"/></svg>
+        Open file…
+      </button>
+    </div>
+  </div>
+
+  <!-- ============================ LEFT RAIL ============================ -->
+  <div class="rail">
+    <!-- Converter -->
+    <div class="nav-item on" title="Converter">
+      <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z"/><path d="M14 3v5h5"/>
+        <path d="M9 14h6m0 0-2-2m2 2-2 2"/></svg>
+      <span class="lbl">Converter</span>
+    </div>
+    <!-- Trace Inspector -->
+    <div class="nav-item" title="Trace Inspector">
+      <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M2 12h3l2-6 3 12 3-9 2 4h2"/><circle cx="18.5" cy="16.5" r="3"/><path d="m21 19 1.5 1.5"/></svg>
+      <span class="lbl">Trace Inspector</span>
+    </div>
+    <!-- File Viewer -->
+    <div class="nav-item" title="File Viewer">
+      <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">
+        <rect x="3" y="4" width="18" height="16" rx="2"/><path d="M7 8v8M11 8v8M15 8v8M19 8v8" opacity=".55"/></svg>
+      <span class="lbl">File Viewer</span>
+    </div>
+    <!-- SPS 2.1 -->
+    <div class="nav-item" title="SPS 2.1 map">
+      <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M12 21s7-6.3 7-11a7 7 0 1 0-14 0c0 4.7 7 11 7 11Z"/><circle cx="12" cy="10" r="2.4"/></svg>
+      <span class="lbl">SPS 2.1</span>
+    </div>
+    <!-- Velocity -->
+    <div class="nav-item" title="Velocity">
+      <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M4 4l8 16 8-16"/><path d="M7 4l5 10 5-10" opacity=".5"/></svg>
+      <span class="lbl">Velocity</span>
+    </div>
+
+    <div class="spacer"></div>
+    <div class="nav-item" title="Help">
+      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><circle cx="12" cy="12" r="9"/><path d="M9.5 9a2.5 2.5 0 0 1 4.4 1.6c0 1.6-2.4 2-2.4 3.4" stroke-linecap="round"/><circle cx="12" cy="17" r=".6" fill="currentColor"/></svg>
+    </div>
+  </div>
+
+  <!-- ============================ MAIN / CONVERTER ============================ -->
+  <div class="main">
+
+    <div class="tabhead">
+      <div class="ttl">
+        <h1>Converter</h1>
+        <p>Read SEG-Y · SEG-D · SEG-2/.dat · SU off the UI thread, then export to any supported format.</p>
+      </div>
+      <div class="acts">
+        <span class="pill green"><span class="dot" style="background:var(--green)"></span>Headers OK</span>
+        <button class="btn btn-ghost sm">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M7 10l5 5 5-5M12 15V3"/></svg>
+          Batch → ZIP
+        </button>
+      </div>
+    </div>
+
+    <div class="scroll">
+
+      <!-- file dropzone / current file -->
+      <div class="drop" style="margin-bottom:16px;">
+        <div class="ic">
+          <svg width="30" height="30" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z"/><path d="M14 3v5h5"/><path d="M12 18v-6m0 0-2.5 2.5M12 12l2.5 2.5"/></svg>
+        </div>
+        <div>
+          <h3>line_042_raw.sgy</h3>
+          <p>Loaded and parsed. Drag another file here, or open one to replace it. Large files are streamed on a worker so the UI stays responsive.</p>
+          <div class="fmts">
+            <span class="pill teal">SEG-Y Rev 1</span>
+            <span class="pill neutral">IBM float · 4 byte</span>
+            <span class="pill neutral">big-endian</span>
+            <span class="pill green"><span class="dot" style="background:var(--green)"></span>polarity SEG normal</span>
+          </div>
+        </div>
+        <div class="acts">
+          <button class="btn btn-ghost sm">Open file…</button>
+          <button class="btn btn-ghost sm">Replace</button>
+        </div>
+      </div>
+
+      <div class="conv-grid">
+
+        <!-- LEFT: format chips + convert -->
+        <div style="display:flex;flex-direction:column;gap:16px;">
+
+          <div class="card">
+            <div class="ch">
+              <h2>Convert to</h2>
+              <span class="hint">Pick one output format</span>
+              <div class="right"><span class="pill teal">9 formats</span></div>
+            </div>
+            <div class="cb">
+              <div class="chips">
+                <!-- 9 real format chips -->
+                <div class="chip sel">
+                  <span class="nm">SEG-Y Rev 1 <span class="check" style="color:var(--teal-deep)">✓</span></span>
+                  <span class="ex">.sgy</span>
+                </div>
+                <div class="chip"><span class="nm">SEG-Y Rev 0</span><span class="ex">.sgy</span></div>
+                <div class="chip"><span class="nm">SEG-Y Rev 2</span><span class="ex">.sgy</span></div>
+                <div class="chip"><span class="nm">Seismic Unix</span><span class="ex">.su</span></div>
+                <div class="chip"><span class="nm">SEG-2 / .dat</span><span class="ex">.dat</span></div>
+                <div class="chip"><span class="nm">SEG-D Rev 1</span><span class="ex">.segd</span></div>
+                <div class="chip"><span class="nm">SEG-D Rev 3</span><span class="ex">.segd</span></div>
+                <div class="chip"><span class="nm">Tape Image</span><span class="ex">.tim</span></div>
+                <div class="chip"><span class="nm">CSV / ASCII</span><span class="ex">.csv</span></div>
+              </div>
+
+              <div style="display:flex;align-items:center;gap:12px;margin-top:18px;">
+                <button class="btn btn-primary lg">
+                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14m0 0-5-5m5 5-5 5"/></svg>
+                  Convert &amp; Save…
+                </button>
+                <div style="flex:1;">
+                  <div style="display:flex;justify-content:space-between;font-size:11px;color:var(--ink-3);margin-bottom:5px;">
+                    <span>Converting <b class="mono" style="color:var(--ink)">line_042_raw.sgy</b></span>
+                    <span class="mono" style="color:var(--teal-deep)">68%</span>
+                  </div>
+                  <div class="progress"><span style="width:68%"></span></div>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <!-- batch -->
+          <div class="card">
+            <div class="ch">
+              <h2>Batch queue</h2>
+              <span class="hint">Convert multiple files → ZIP</span>
+              <div class="right"><span class="pill neutral">4 files · 1.7 GB</span></div>
+            </div>
+            <div class="cb" style="padding-top:8px;padding-bottom:10px;">
+              <div class="batch-row">
+                <span class="dot" style="background:var(--green)"></span>
+                <span><span class="fn">line_041_raw.sgy</span> <span class="meta">· 412 traces</span></span>
+                <span class="meta" style="text-align:right">→ SU</span>
+                <span class="pill green" style="justify-self:end">done</span>
+              </div>
+              <div class="batch-row">
+                <span class="dot" style="background:var(--teal)"></span>
+                <span><span class="fn">line_042_raw.sgy</span> <span class="meta">· 512 traces</span></span>
+                <span class="meta" style="text-align:right">→ SU</span>
+                <span class="pill teal" style="justify-self:end">68%</span>
+              </div>
+              <div class="batch-row">
+                <span class="dot" style="background:var(--ink-4)"></span>
+                <span><span class="fn">shot_gather_88.dat</span> <span class="meta">· 96 traces</span></span>
+                <span class="meta" style="text-align:right">→ SU</span>
+                <span class="pill neutral" style="justify-self:end">queued</span>
+              </div>
+              <div class="batch-row">
+                <span class="dot" style="background:var(--amber)"></span>
+                <span><span class="fn">archive_old.segd</span> <span class="meta">· header mismatch</span></span>
+                <span class="meta" style="text-align:right">→ SU</span>
+                <span class="pill amber" style="justify-self:end">warn</span>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- RIGHT: file summary + QC -->
+        <div style="display:flex;flex-direction:column;gap:16px;">
+
+          <div class="card">
+            <div class="ch">
+              <h2>File summary</h2>
+              <div class="right"><span class="pill neutral mono">SEG-Y</span></div>
+            </div>
+            <div class="cb" style="padding-top:6px;padding-bottom:8px;">
+              <div class="kv"><span class="k">Traces</span><span class="v num">512</span></div>
+              <div class="kv"><span class="k">Samples / trace</span><span class="v num">3 000</span></div>
+              <div class="kv"><span class="k">Sample interval</span><span class="v mono">2.000 ms</span></div>
+              <div class="kv"><span class="k">Record length</span><span class="v mono">6.000 s</span></div>
+              <div class="kv"><span class="k">Data format</span><span class="v">IBM float (1)</span></div>
+              <div class="kv"><span class="k">Byte order</span><span class="v">big-endian</span></div>
+              <div class="kv"><span class="k">Polarity</span><span class="v">SEG normal</span></div>
+              <div class="kv"><span class="k">File size</span><span class="v mono">6.14 MB</span></div>
+            </div>
+          </div>
+
+          <div class="card">
+            <div class="ch">
+              <h2>Header QC</h2>
+              <div class="right"><span class="pill amber">1 warning</span></div>
+            </div>
+            <div class="cb" style="padding-top:6px;padding-bottom:8px;">
+              <div class="flag-list">
+                <div class="fl">
+                  <span class="pill green" style="justify-self:start">OK</span>
+                  <span class="msg">Trace count matches binary header</span>
+                  <span class="cat">3221</span>
+                </div>
+                <div class="fl">
+                  <span class="pill green" style="justify-self:start">OK</span>
+                  <span class="msg">Sample interval consistent across traces</span>
+                  <span class="cat">3217</span>
+                </div>
+                <div class="fl">
+                  <span class="pill amber" style="justify-self:start">WARN</span>
+                  <span class="msg">Coordinate scalar = 0; assuming ×1</span>
+                  <span class="cat">71</span>
+                </div>
+                <div class="fl">
+                  <span class="pill green" style="justify-self:start">OK</span>
+                  <span class="msg">CDP X/Y populated for all traces</span>
+                  <span class="cat">181·185</span>
+                </div>
+              </div>
+            </div>
+          </div>
+
+        </div>
+      </div>
+
+      <p class="note" style="margin-top:14px;">
+        Tip - drag panel borders to resize · <span class="kbd">⌘O</span> open · <span class="kbd">⌘B</span> batch · <span class="kbd">1-5</span> switch tabs.
+        Other tabs (Trace Inspector / File Viewer / SPS 2.1 / Velocity) share this same grid, type scale and accent semantics.
+      </p>
+
+    </div>
+
+    <!-- ============================ STATUS STRIP ============================ -->
+    <div class="statusbar">
+      <div class="s"><span class="lk">file</span><b>line_042_raw.sgy</b></div>
+      <div class="s"><span class="lk">dt</span><b>2.000 ms</b></div>
+      <div class="s"><span class="lk">traces</span><b>512</b></div>
+      <div class="s"><span class="lk">fmt</span><b>SEG-Y Rev 1 · IBM</b></div>
+      <div class="s"><span class="lk">CRS</span><b>EPSG:32636 · UTM 36N (m)</b></div>
+      <div class="s grow"></div>
+      <div class="s"><span class="dot" style="background:var(--teal)"></span><b style="color:var(--teal-deep)">Converting… 68%</b></div>
+    </div>
+
+  </div>
+</div>
+</body>
+</html>
