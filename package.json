@@ -1,0 +1,92 @@
+{
+  "name": "seisconv",
+  "version": "0.7.11",
+  "description": "SeisConv - desktop seismic data converter & toolkit for SEG-Y, SEG-D, SEG-2, SU and SPS survey geometry",
+  "author": {
+    "name": "Moshe Fridin",
+    "email": "moshef@gii.co.il"
+  },
+  "license": "AGPL-3.0-or-later",
+  "private": true,
+  "engines": {
+    "node": ">=20"
+  },
+  "homepage": "https://github.com/m0shiko8811-beep/SeisConv#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/m0shiko8811-beep/SeisConv.git"
+  },
+  "bugs": {
+    "url": "https://github.com/m0shiko8811-beep/SeisConv/issues",
+    "email": "moshef@gii.co.il"
+  },
+  "main": "dist/main.js",
+  "scripts": {
+    "build:main": "esbuild electron/main.ts --bundle --platform=node --target=node20 --external:electron --outfile=dist/main.js --format=cjs",
+    "build:preload": "esbuild electron/preload.ts --bundle --platform=node --target=node20 --external:electron --outfile=dist/preload.js --format=cjs",
+    "build:worker": "esbuild workers/parse.worker.ts --bundle --platform=node --target=node20 --outfile=dist/parse.worker.js --format=cjs",
+    "build:renderer": "node scripts/build-renderer.mjs",
+    "build": "npm run build:main && npm run build:preload && npm run build:worker && npm run build:renderer",
+    "start": "npm run build && electron .",
+    "test:core": "tsx core/__tests__/run.ts",
+    "qc:realdata": "tsx scripts/realdata-qc.ts",
+    "qc:positioning": "tsx scripts/positioning-qc.ts",
+    "qa": "node qa/drive.mjs",
+    "verify": "node qa/verify.mjs",
+    "typecheck": "tsc --noEmit",
+    "dist": "npm run build && electron-builder",
+    "gen:epsg": "tsx scripts/gen-epsg.ts",
+    "gen:manual": "tsx scripts/gen-manual.ts",
+    "test:crossformat": "tsx scripts/test-crossformat.ts",
+    "test:fuzz": "tsx scripts/test-fuzz.ts",
+    "test:all": "npm run typecheck && npm run test:core && npm run test:fuzz && npm run test:crossformat && npm run qa"
+  },
+  "dependencies": {
+    "@types/leaflet": "^1.9.21",
+    "jszip": "^3.10.1",
+    "leaflet": "^1.9.4",
+    "leaflet-rotate": "^0.2.8"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.0",
+    "electron": "^39.8.10",
+    "electron-builder": "^26.15.3",
+    "epsg-index": "^2.0.0",
+    "esbuild": "^0.28.2",
+    "playwright": "^1.62.1",
+    "png-to-ico": "^3.0.1",
+    "tsx": "^4.19.2",
+    "typescript": "^5.6.0"
+  },
+  "build": {
+    "appId": "com.smartseismic.seisconv",
+    "productName": "SeisConv",
+    "icon": "build/icon.ico",
+    "files": [
+      "dist/**",
+      "!dist/win-unpacked/**",
+      "!dist/*.exe",
+      "!dist/*.blockmap",
+      "!dist/__uninstaller-nsis-*.exe",
+      "!dist/*.yml",
+      "renderer/**",
+      "build/**",
+      "package.json"
+    ],
+    "win": {
+      "target": "nsis",
+      "icon": "build/icon.ico"
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "allowElevation": true
+    },
+    "mac": {
+      "target": "dmg"
+    },
+    "linux": {
+      "target": "AppImage"
+    }
+  }
+}

@@ -1,0 +1,27 @@
+cff-version: 1.2.0
+message: "If you use SeisConv in your work, please cite it as below."
+type: software
+title: "SeisConv"
+abstract: >-
+  A cross-platform desktop toolkit for seismic exploration data:
+  convert, inspect, view, and QC SEG-Y, SEG-D, SEG-2, and Seismic Unix
+  files and survey geometry (SPS, IOGP P1/11, P6/11), with vibroseis
+  sweep design and peer-to-peer field file sync.
+authors:
+  - family-names: "Fridin"
+    given-names: "Moshe"
+version: "0.7.10"
+date-released: "2026-09-02"
+license: AGPL-3.0-or-later
+repository-code: "https://github.com/m0shiko8811-beep/SeisConv"
+keywords:
+  - seismic
+  - segy
+  - segd
+  - seismic-unix
+  - sps
+  - geophysics
+  - seismic-processing
+  - exploration-geophysics
+  - vibroseis
+  - electron

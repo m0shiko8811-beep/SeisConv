@@ -1,0 +1,48 @@
+SEISCONV - COPYRIGHT AND THIRD-PARTY NOTICES
+
+This file is informational. It is not part of the GNU Affero General Public
+License, it does not modify any term of that license, and it imposes no
+additional restriction on the rights that license grants you. The full
+license text is in the LICENSE file beside this one.
+
+Copyright (C) 2026 Moshe Fridin
+
+  This program is free software: you can redistribute it and/or modify it
+  under the terms of the GNU Affero General Public License as published by
+  the Free Software Foundation, either version 3 of the License, or (at your
+  option) any later version.
+
+  This program is distributed in the hope that it will be useful, but
+  WITHOUT ANY WARRANTY; without even the implied warranty of MERCHANTABILITY
+  or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU Affero General Public
+  License for more details.
+
+  You should have received a copy of the GNU Affero General Public License
+  along with this program.  If not, see <https://www.gnu.org/licenses/>.
+
+THIRD-PARTY COMPONENTS AND DATA
+
+The AGPL v3 above covers the original SeisConv source code authored by the
+copyright holder. SeisConv also incorporates, bundles, or accesses material
+owned by third parties. That material is governed by its own terms, which are
+unaffected by the relicensing of SeisConv and continue to apply to it:
+
+1. EPSG Geodetic Parameter Dataset (IOGP)
+   SeisConv bundles a distilled offline copy of the EPSG Geodetic Parameter
+   Dataset in core/sps/epsg-registry.json. The EPSG Dataset is (C) IOGP
+   (International Association of Oil & Gas Producers) and is used here under
+   its terms of use, which permit redistribution with attribution. IOGP is not
+   responsible for any modification made to the data, and this application's
+   use of it does not imply IOGP endorsement. The authoritative source is the
+   EPSG Registry at <https://epsg.org>.
+
+2. Basemap tile services
+   SeisConv can fetch map tiles from third-party online tile providers. Those
+   tiles are not part of SeisConv, are not distributed with it, and remain
+   subject to the terms of use, attribution requirements, and usage limits of
+   whichever provider is configured. You are responsible for complying with
+   those terms when you enable basemap tiles.
+
+3. Open-source dependencies
+   SeisConv depends on third-party open-source packages listed in package.json
+   and the dependency lockfile. Each remains governed by its own license.
