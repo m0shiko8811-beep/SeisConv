@@ -51,7 +51,7 @@
 
 </details>
 
-SeisConv is a free, **open source** (**AGPL v3**) desktop **SEG-Y, SEG-D, SEG-2 etc... viewer and converter** for Windows, which also reads Seismic Unix and does **SPS survey geometry QC** on the same data. It **runs offline** - no account, no cloud, no licence server - and nothing you open is uploaded anywhere. The only feature that touches the internet is the optional real-map basemap on the SPS tabs, which fetches map tiles; everything else, the ~7,000-CRS EPSG registry included, works with no connection at all.
+SeisConv is a free, **open source** (**AGPL v3**) desktop **SEG-Y viewer and converter** and **SEG-D converter** for Windows, which also reads and writes SEG-2 and Seismic Unix and does **SPS survey geometry QC** on the same data. It **runs offline** - no account, no cloud, no licence server - and nothing you open is uploaded anywhere. The only feature that touches the internet is the optional real-map basemap on the SPS tabs, which fetches map tiles; everything else, the ~7,000-CRS EPSG registry included, works with no connection at all.
 
 **Who it is for:** field crews, party chiefs and observers who need to check and convert a record on the spot, and processing geophysicists who need geometry and headers to be right before the data reaches a processing system.
 
@@ -68,6 +68,22 @@ by default, with an option to elevate and install for all users).
 
 > **The installer is not code-signed.** On first run Windows SmartScreen will
 > show *"Windows protected your PC"*. Click **More info**, then **Run anyway**.
+
+### The manual
+
+A **97 page user manual** is attached to every release, in
+[A4](https://github.com/m0shiko8811-beep/SeisConv/releases/latest/download/SeisConv-Manual-A4.pdf)
+and
+[US Letter](https://github.com/m0shiko8811-beep/SeisConv/releases/latest/download/SeisConv-Manual-Letter.pdf).
+
+It is written to be useful whether this is your first day on a crew or your
+twentieth year: Part I assumes no seismic background at all, Part II is ten
+worked jobs in the form "I need to ...", Part III is a control by control
+reference generated from the application itself so it cannot drift, and Part IV
+covers the byte layouts, the coordinate handling and what is lossy where.
+
+The same reference is inside the application under **Help**, and in
+[MANUAL.md](MANUAL.md).
 > This is expected for an unsigned installer and is not an indication that
 > anything is wrong with the download.
 
