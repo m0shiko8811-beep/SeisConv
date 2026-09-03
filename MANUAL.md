@@ -22,6 +22,7 @@ SeisConv is an offline desktop toolkit for seismic field data: convert between f
 - **Audit** (header) - the audit log & signature (provenance of every change).
 - **Feedback** (header) - send a message to the developer.
 - **Theme toggle** - switch between light and dark UI.
+- **UI size** (status bar, bottom) - make the whole interface bigger or smaller: drag the slider, or use **-** / **+**. The percentage next to it shows the current size and clicking it resets to 100%. The same thing as `Ctrl +` / `Ctrl -` / `Ctrl 0`, and it is remembered between sessions. The range is 50% to 250%: drop to 70-80% if the app feels too big on a small laptop screen, or push it up on a bright site where the text is hard to read.
 - **Icon rail** (left) - switch between the tabs; the active one is highlighted. The **?** at the bottom opens this manual.
 
 ### The tabs at a glance
@@ -31,11 +32,11 @@ SeisConv is an offline desktop toolkit for seismic field data: convert between f
 - **File Viewer** - the whole record as a section image; plus the Health scan and First breaks QC tools.
 - **SPS** - load, plot, QC and reproject survey geometry on a grid or real basemap.
 - **SPS Creation** - draw acquisition lines on a map and generate a fresh SPS survey.
+- **Geometry QC** - cross-check trace-header geometry against the SPS, diff as-laid vs pre-plot, and stamp SPS coordinates into a SEG-Y.
 - **Velocity** - an NMO semblance panel for picking a stacking-velocity function.
 - **Spectrum** - amplitude spectrum, spectrogram and F-K of the record.
 - **Trace Workbench** - collect traces from any file(s) and compare them.
 - **Observer Log** - a per-shot field log, wizard-built and exportable.
-- **Geometry QC** - cross-check trace-header geometry against the SPS, diff as-laid vs pre-plot, and stamp SPS coordinates into a SEG-Y.
 - **Sweeps** - design, inspect and export a vibroseis pilot sweep, and QC a recorded one against the design.
 - **WiFiSync** - keep a folder identical on two machines over WiFi, with no router, cloud or account.
 
@@ -43,7 +44,9 @@ SeisConv is an offline desktop toolkit for seismic field data: convert between f
 
 - `Ctrl+O` - open a single file
 - `Ctrl+B` - Converter, folder (batch) mode
-- `1-9` - switch tabs, no modifier (1 = Converter … 9 = Observer Log). Geometry QC, Sweeps and WiFiSync are click-only - there are no digits left.
+- `1-9` - switch tabs, no modifier. The digits follow the icon rail from the top: **1** Converter, **2** Trace Inspector, **3** File Viewer, **4** SPS, **5** SPS Creation, **6** Geometry QC, **7** Velocity, **8** Spectrum, **9** Trace Workbench.
+- `O` - Observer Log (mnemonic: **O**bserver). It sits tenth on the rail, past the last digit, but it is the one tab an observer works in all day, so it gets a letter of its own. **Sweeps** and **WiFiSync** are the only two tabs with no keyboard shortcut at all - click them on the rail. They are set-up and QC tools you visit occasionally rather than live in, so they do not spend a key.
+- Every one of these (the digits, **O**, `[` / `]` and `?`) is ignored while you are typing in a box, so a note that contains an “o” or a digit stays in the field.
 - `[` / `]` - step to the previous / next file in the open file’s folder
 - `Ctrl/Cmd + =` / `-` / `0` - UI zoom in / out / reset
 - `Wheel` over a canvas - zoom the data · drag to pan · double-click to fit
@@ -61,9 +64,10 @@ SeisConv is an offline desktop toolkit for seismic field data: convert between f
 
 ### Audit log & signature
 
-- **Signature** - type your name once; every change (load, convert, QC, edit, export) is stamped with it and a timestamp.
+- **Signature** - type your name once; every change (load, convert, QC, edit, export) is stamped with it and a timestamp. Until you do, entries are recorded as `(unsigned)` and the first audited action raises a one-off snackbar with a **Sign…** button. It is only an invitation - it never covers the screen and never blocks what you are doing; ignore it and carry on, or open **Audit** yourself at any time.
 - **Audit list** - the running log of those stamped actions, per tab.
 - **Export CSV / JSON** - save the audit trail for the record.
+- **Clear log** - **destructive.** Deletes every entry in the audit log on this machine, after a confirmation. There is no undo and no backup of the log: once cleared, the provenance trail of everything you did before that point is gone for good. Export CSV or JSON first if the record matters. Your signature, and the files you already produced, are not touched.
 - **Backups** - snapshots taken automatically before destructive changes; restore the most recent if needed.
 
 ### Send Feedback
@@ -78,7 +82,7 @@ SeisConv is an offline desktop toolkit for seismic field data: convert between f
 ### How to use it
 
 1. Open a seismic file from the header, or load files inside a tab (e.g. SPS files on the SPS tab).
-2. Use the icon rail, or number keys `1`-`9`, to move between tabs.
+2. Use the icon rail, or number keys `1`-`9` (plus `O` for the Observer Log), to move between tabs.
 3. Press `?` on any tab for help on that tab; `Esc` closes it.
 4. Set your name once in **Audit** so every change is signed.
 
@@ -260,14 +264,16 @@ Load, plot, QC and reproject survey geometry - sources, receivers and their rela
 - **Fold / coverage** + **Bin m** - a CMP fold/coverage heat-map; **Bin m** sets the bin size.
 - **Bin grid** - overlay the P6/11 acquisition bin grid if the survey has one.
 - **Survey grid** / **Real map** - an offline projected grid, or a Leaflet basemap with a scale bar. The grid has a **rotation** slider (reset to **N** = north-up).
-- **Headers…** - view the raw loaded file headers; edit station fields where supported.
+- **Basemap layers** - the layer control (top-right of the map) offers four keyless basemaps. **Satellite** (Esri World Imagery) is the default and is sharp all the way to survey scale (native zoom 21), which is where 2-30 m station spacing is actually worked at. **Streets** (OpenStreetMap) is detailed to about zoom 19. **Light (regional)** and **Dark (regional)** are Esri grey canvases for regional context - their detail stops at about zoom 16, so they go soft when you zoom into a line. All four keep zooming past their native levels (upscaled) rather than going blank.
+- **Headers…** - view and edit the survey’s H-record header block, in three tabs (**CRS / Datum**, **Admin**, **Raw records**), with a scope selector that applies your edits to all S / R / X files at once or to just one of them. **Apply** changes the in-memory survey; **Export corrected (ZIP)…** writes the edited files out - your original files on disk are never overwritten in place.
+- **Fix the label only** / **Reproject the coordinates too** (inside **Headers… › CRS / Datum**) - which of the two very different things you mean when you change the CRS. **Fix the label only** rewrites the header text and leaves every easting, northing and elevation *exactly* as it is; use it when the numbers were always right and only the stated CRS was wrong. **Reproject the coordinates too** means the numbers themselves must change: **Apply** does not transform anything itself - it closes the dialog and sends you to **Reproject to** + **Export reprojected (ZIP)…** on the SPS tab, which recomputes every source, receiver and X-ref coordinate into the target CRS and writes a new ZIP. Your original files on disk are never overwritten, but the reprojected output cannot be undone back to the originals: a round trip is not bit-exact, and if the survey was not really in the CRS you reprojected *from*, the whole survey moves and nothing warns you. When in doubt, keep the originals and re-load them.
 - **Re-create / Renumber…** - re-map the survey’s source & receiver line and point numbers, then save the rewritten S / R / X files. Every X-ref range is kept consistent with the new numbering, and vendor columns the data model does not carry are preserved from the original text.
 - **Station read-out** - hover any station (grid or map) for a small tooltip with its type (S/R), line and point; click it to open the full inspector.
 - **Station inspector** - click any point to see its line/point, coordinates, elevation and the lines through it.
 - **Run QC** - check Src int, Rcv int, Tol and Max off; findings list below, each clickable to ring the station on the map.
 - **Reproject to** - search the built-in EPSG registry (about 7,000 coordinate reference systems, fully offline) by code, by name, or loosely ("utm 36n"), then **Export reprojected (ZIP)…**. A CRS SeisConv cannot compute is still listed, but greyed out with the reason.
-- **Export** - KML, GeoJSON, CSV, IOGP P1/11, coordinate CSV, **SEG-P1** (the deprecated fixed-column post-plot file, kept because some legacy processing packages still demand it - grid easting/northing in decimetres) and the QC report.
-- **Export as** - any-to-any positioning export: whatever was loaded can be written back out as **SPS 2.1** (.s / .r / .x), **SEG-P1**, **IOGP P1/11** or **Coordinate CSV**. P6/11 is absent on purpose - it defines a bin grid, not a point survey, so it cannot be produced from source/receiver geometry.
+- **Export** - the map/report exports: KML, GeoJSON, CSV and the QC report. Positioning formats are not here; they all come out of **Export as**.
+- **Export as** - the single route for any-to-any positioning export: whatever was loaded can be written back out as **SPS 2.1** (.s / .r / .x), **SEG-P1** (the deprecated fixed-column post-plot file, kept because some legacy processing packages still demand it - grid easting/northing in decimetres), **IOGP P1/11** or **Coordinate CSV**. P6/11 is absent on purpose - it defines a bin grid, not a point survey, so it cannot be produced from source/receiver geometry.
 - **Shapefile** - export sources and receivers as ESRI Shapefile point layers (.shp/.shx/.dbf/.prj), zipped. Leave the CRS box empty to write the survey’s own coordinates untouched with a .prj describing them; pick a CRS to reproject instead.
 - **GeoTIFF…** - a three-step wizard: drag the area on the map (or take the whole survey plus a margin), set the ground resolution in units per pixel, then choose the layers - CMP fold, an elevation surface, and/or the survey layout as a picture. Every layer shares one grid, so they stack in GIS.
 
@@ -317,7 +323,7 @@ Build the survey plan - draw acquisition lines on a basemap or import an existin
 
 ### Controls
 
-- **2D** / **3D** - acquisition mode (3D is coming soon and disabled).
+- **2D** / **3D** - the acquisition mode, and it changes what your picked lines *mean*. In **2D** each picked line is walked once: sources and receivers are laid along that same line. In **3D** the picked lines are **receiver lines** and source lines are generated perpendicular to them, so the **Generate…** wizard gains three extra fields - **Source-line spacing (m)** (how far apart the generated source lines sit across the receiver lines), **Azimuth (° CW from N)** (the receiver-line bearing; leave it empty to take the bearing from the longest picked line) and, for the **Moving patch** relation, **Patch lines** (how many receiver lines each shot records into). The relation choices are relabelled with the mode: **Full line** / **Split-spread** in 2D become **Full template** / **Moving patch** in 3D.
 - **CRS** - the coordinate reference system, auto-suggested from your first pick (ITM inside Israel, otherwise the UTM zone); click to review or override it in the wizard.
 - **Import plan…** - load an existing survey plan from CSV / TSV / GeoJSON, mapping the file’s columns onto line, station, coordinates and elevation. An imported preplot is already positioned and numbered, so it can go straight out again without a layout wizard.
 - **SPS 2.1** / **CSV** / **GeoJSON** / **KML** (Export plan) - write the plan out as it stands. **SPS 2.1** produces the S / R / X files directly - no layout wizard - and is available only when every line is a preplot (a drawn line still needs a station interval, so use **Generate…** for those). **CSV** carries line, station, lat/long, elevation, E/N and per-segment metrics; **GeoJSON** writes a LineString per line plus a Point per station; **KML** writes a Folder per line.
@@ -331,6 +337,7 @@ Build the survey plan - draw acquisition lines on a basemap or import an existin
 - **View** / **Drag points** / **Add on click** - the three edit modes. **View** pans the map and a click opens a station’s details; **Drag points** moves a station by dragging it; **Add on click** appends a point to the line chosen in **Target line**.
 - **Target line** - which line a newly added point joins, so you can go back and extend an earlier line instead of always the last one.
 - **Layers** - **Basemap**, **Connection lines**, **Direction arrows**, **Distance labels** and **Stations & numbers**, each with its own on/off tick and an opacity slider - turn the map down to read the stations, or the stations down to read the map.
+- **Basemap layers** - the layer control (top-right of the map) offers four keyless basemaps. **Satellite** (Esri World Imagery) is the default and is sharp all the way to survey scale (native zoom 21), which is where 2-30 m station spacing is actually worked at. **Streets** (OpenStreetMap) is detailed to about zoom 19. **Light (regional)** and **Dark (regional)** are Esri grey canvases for regional context - their detail stops at about zoom 16, so they go soft when you zoom into a line. All four keep zooming past their native levels (upscaled) rather than going blank.
 - **Zoom speed** - how far one wheel notch zooms the map; slow it down for fine positioning work.
 
 ### The Points / Checks / Lines panes
@@ -361,7 +368,7 @@ Build the survey plan - draw acquisition lines on a basemap or import an existin
 
 ### Good to know
 
-- 3D acquisition design is not available yet - the 2D workflow is the supported one.
+- 3D design generates a regular orthogonal grid: your picked lines are taken as the receiver lines and the source lines are laid perpendicular to them at the spacing you give. It is not a template designer - the patch is either the full template or the **Patch lines** &times; **Channels** moving patch nearest each shot, and the generated point count is capped, so very large grids are refused with a message rather than half-written. Check the result on the **SPS** tab before you take it to the field.
 - The generated survey carries a matching ESRI **.prj** when its CRS can be described, so it opens georeferenced in a GIS.
 
 ---
@@ -610,6 +617,7 @@ Keep a folder identical on two machines over WiFi, with no router, cloud or acco
 - **Start / Stop WiFiSync** - bring the engine (file server + discovery) up or down.
 - **Peers** - machines discovered on the network; **Add peer** connects one by IP; **Sync now** runs a single pass immediately.
 - **WiFi hotspot** - **Name / Password** then **Start hotspot** to host a network from this PC (Windows Mobile Hotspot). **Status** reads the live state; **Host IP** shows the address to give the peer; **Open Windows Mobile Hotspot…** jumps to the Windows setting. **Reset WiFi** restarts the WiFi adapter and the hotspot service (UAC prompt) when the hotspot refuses to come up.
+- **Fix Hyper-V conflict** - **changes this machine’s network configuration.** It appears only when starting the hotspot failed because a Hyper-V *virtual switch* is bound to the WiFi adapter and holding it. Clicking it asks for administrator rights (UAC) and then **deletes that Hyper-V virtual switch**. SeisConv cannot put it back: any virtual machine, WSL or Docker network that was using that switch loses its connection until you recreate the switch yourself in Hyper-V Manager. If this PC runs VMs you care about, fix the conflict there instead and leave this button alone.
 - **Activity & transfers** - the live log plus the pulled/deleted history (newest first); **Clear history** empties the log.
 
 ### How to use it

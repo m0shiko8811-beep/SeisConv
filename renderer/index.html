@@ -9,7 +9,7 @@
      and no untrusted HTML is injected via innerHTML. img-src lists the basemap tile
      CDNs used by Leaflet (wildcard subdomains are how those CDNs shard tiles). -->
 <meta http-equiv="Content-Security-Policy"
-      content="default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: https://*.basemaps.cartocdn.com https://server.arcgisonline.com https://*.tile.openstreetmap.org; base-uri 'none'; form-action 'none';">
+      content="default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: https://server.arcgisonline.com https://*.tile.openstreetmap.org; base-uri 'none'; form-action 'none';">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>SeisConv</title>
 <style>
@@ -130,7 +130,10 @@ body{
 .app{
   height:100vh;
   display:grid;
-  grid-template-rows:54px 1fr;
+  /* minmax(0,1fr), not 1fr: a bare 1fr row floors at its content's min-content
+     height, which let the main column outgrow the window and pushed the status
+     strip (and the UI-size zoom control on it) off the bottom at high UI zoom. */
+  grid-template-rows:54px minmax(0,1fr);
   grid-template-columns:68px 1fr;
   grid-template-areas:"head head" "rail main";
   overflow:hidden;
@@ -292,7 +295,11 @@ html[data-theme="dark"] .rail .nav-item .lbl{color:#0c1726;background:var(--teal
 /* ===========================================================================
    MAIN
    =========================================================================== */
-main.main{grid-area:main;overflow:hidden;display:flex;flex-direction:column;min-width:0;}
+/* min-height:0 matters: a grid row sized `1fr` still floors at its content's
+   min-content height, so without it the scroll area pushes main taller than the
+   viewport and the status strip (with the UI-size zoom control) is clipped off
+   the bottom - visible at high UI zoom or in a short window. */
+main.main{grid-area:main;overflow:hidden;display:flex;flex-direction:column;min-width:0;min-height:0;}
 
 /* tab title header strip */
 .tabhead{
@@ -507,6 +514,11 @@ table.olog-grid tr.olog-rowsel td{background:var(--teal-tint-2);}
   width:24px;height:24px;display:grid;place-items:center;font-size:12px;line-height:1;
 }
 .olog-actions button:hover{border-color:var(--teal);color:var(--teal-deep);}
+.olog-savewarn{
+  margin:0 0 10px;padding:10px 14px;border:1px solid #e0a23c;border-radius:10px;
+  background:#fdf3e2;color:#8a4b0b;font-size:12.5px;line-height:1.45;
+}
+.olog-savewarn b{color:#8a4b0b;}
 .olog-empty{padding:26px 14px;text-align:center;color:var(--ink-3);font-size:12.5px;}
 
 /* ---- Observer Log v2: in-cell input + inline button (Now / Today / SPS) ---- */
@@ -1218,6 +1230,20 @@ table.olog-grid tr.olog-row-pending:hover td:not(.olog-rowhdr){background:rgba(2
   background:none;border:none;font-family:inherit;font-size:11.5px;padding:0;
 }
 .statusbar .zoom .zpct:hover{color:var(--teal-deep);}
+/* the slider is the discoverable "bar" form of the same control - same state, same applyZoom */
+.statusbar .zoom .zrange{
+  -webkit-appearance:none;appearance:none;width:82px;height:4px;padding:0;margin:0;
+  background:var(--hair);border-radius:3px;cursor:pointer;flex:none;
+}
+.statusbar .zoom .zrange::-webkit-slider-thumb{
+  -webkit-appearance:none;appearance:none;width:12px;height:12px;border-radius:50%;
+  background:var(--teal);border:1px solid var(--card);cursor:pointer;
+}
+.statusbar .zoom .zrange:hover::-webkit-slider-thumb{background:var(--teal-deep);}
+.statusbar .zoom .zrange:focus-visible{outline:2px solid var(--teal);outline-offset:3px;}
+/* a light tint so the group reads as one control rather than another status field */
+.statusbar .zoom{background:var(--card);border-radius:8px;padding:0 10px;}
+.statusbar .zoom .lk{font-weight:600;}
 
 .note{font-size:11px;color:var(--ink-4);margin-top:14px;}
 .kbd{font-family:var(--mono);font-size:10px;background:var(--surface);border:1px solid var(--hair);border-radius:5px;padding:1px 5px;color:var(--ink-2);}
@@ -1438,7 +1464,8 @@ table.olog-grid tr.olog-row-pending:hover td:not(.olog-rowhdr){background:rgba(2
             <div class="name-parts" id="outNameParts">
               <label class="ctl-lbl"><input type="checkbox" id="npName" checked> Original name</label>
               <label class="ctl-lbl"><input type="checkbox" id="npCustom"> Custom text
-                <input type="text" id="outNameCustom" class="ctl" placeholder="e.g. line12" spellcheck="false" style="width:130px;height:28px;margin-left:4px;">
+                <input type="text" id="outNameCustom" class="ctl" placeholder="e.g. line12" spellcheck="false" style="width:130px;height:28px;margin-left:4px;"
+                       aria-label="Custom text" title="Custom text - the {custom} part of the file name">
               </label>
               <label class="ctl-lbl"><input type="checkbox" id="npFmt"> Format</label>
               <label class="ctl-lbl"><input type="checkbox" id="npDate" checked> Date YYYYMMDD</label>
@@ -1465,7 +1492,8 @@ table.olog-grid tr.olog-row-pending:hover td:not(.olog-rowhdr){background:rgba(2
             <details id="outNameAdvanced" style="margin-top:12px;">
               <summary class="np-adv-sum">Advanced - name template</summary>
               <div style="margin-top:8px;">
-                <input type="text" id="outNameTpl" class="ctl" style="width:100%;font-family:var(--mono);" value="{name}_{date}" spellcheck="false">
+                <input type="text" id="outNameTpl" class="ctl" style="width:100%;font-family:var(--mono);" value="{name}_{date}" spellcheck="false"
+                       aria-label="Name template" title="Name template - the raw {token} text the file name is built from; the checklist above stays in sync">
                 <div class="muted" style="margin-top:8px;">
                   Tokens -
                   <span class="kbd">{name}</span> input base ·
@@ -1970,9 +1998,9 @@ table.olog-grid tr.olog-row-pending:hover td:not(.olog-rowhdr){background:rgba(2
           <button class="btn sm" id="spsExpKmlBtn" disabled>KML</button>
           <button class="btn sm" id="spsExpGeojsonBtn" disabled>GeoJSON</button>
           <button class="btn sm" id="spsExpCsvBtn" disabled>CSV</button>
-          <button class="btn sm" id="spsExpP111Btn" disabled title="IOGP P1/11 positioning exchange (.p111)">P1/11</button>
-          <button class="btn sm" id="spsExpCoordCsvBtn" disabled title="Generic column-mapped coordinate CSV">Coords CSV</button>
-          <button class="btn sm" id="spsExpSegP1Btn" disabled title="SEG-P1 post-plot point file (deprecated by IOGP in favour of P1/11, but still required by some legacy processing packages). Grid easting/northing in decimetres.">SEG-P1</button>
+          <!-- SEG-P1 / P1/11 / coord-CSV are NOT here: they are positioning
+               formats, written by the "Export as" picker below (same exportSPS
+               call, so a second button would be a duplicate route). -->
           <button class="btn sm" id="spsExpQcBtn" disabled>QC report</button>
           <span class="trace-label" id="spsExpStatus"></span>
         </div>
@@ -1984,9 +2012,9 @@ table.olog-grid tr.olog-row-pending:hover td:not(.olog-rowhdr){background:rgba(2
           <span class="ctl-lbl">Export as</span>
           <select id="spsExpFormat" class="ctl" title="Write the loaded survey out in any supported positioning format">
             <option value="sps">SPS 2.1 (.s / .r / .x)</option>
-            <option value="segp1">SEG-P1 (.p1)</option>
-            <option value="p111">IOGP P1/11 (.p111)</option>
-            <option value="coordcsv">Coordinate CSV</option>
+            <option value="segp1" title="SEG-P1 post-plot point file (deprecated by IOGP in favour of P1/11, but still required by some legacy processing packages). Grid easting/northing in decimetres.">SEG-P1 (.p1)</option>
+            <option value="p111" title="IOGP P1/11 positioning exchange (.p111)">IOGP P1/11 (.p111)</option>
+            <option value="coordcsv" title="Generic column-mapped coordinate CSV">Coordinate CSV</option>
           </select>
           <button class="btn sm" id="spsExpFormatBtn" disabled title="Export the loaded survey in the chosen positioning format">Export…</button>
           <span class="trace-label" id="spsExpFmtStatus"></span>
@@ -2584,6 +2612,8 @@ table.olog-grid tr.olog-row-pending:hover td:not(.olog-rowhdr){background:rgba(2
             <span class="trace-label" id="ologGridLabel"></span>
           </div>
           <div class="olog-meta-strip" id="ologMetaStrip"></div>
+          <!-- persistent warning shown when the log can no longer be saved to browser storage -->
+          <div class="olog-savewarn" id="ologSaveWarn" style="display:none;" role="alert"></div>
           <div class="olog-grid-wrap">
             <table class="olog-grid" id="ologTable">
               <thead id="ologThead"></thead>
@@ -2797,6 +2827,9 @@ table.olog-grid tr.olog-row-pending:hover td:not(.olog-rowhdr){background:rgba(2
                 <label style="font-size:12.5px;display:inline-flex;align-items:center;gap:5px;"><input type="checkbox" id="fldThrottle"> throttle to</label>
                 <input type="number" id="fldKbps" min="1" value="500" style="width:90px;" disabled> KB/s
               </div>
+              <div class="fld-row"><label class="fld-lbl">Deletions</label>
+                <label style="font-size:12.5px;display:inline-flex;align-items:center;gap:5px;" title="Off by default: a peer deleting a file will NOT delete your copy. New and changed files still sync either way."><input type="checkbox" id="fldAllowDelete"> let approved peers delete my local files</label>
+              </div>
               <div class="fld-row">
                 <button class="btn sm" id="fldFirewall" type="button" title="Open UDP 47823 + TCP 47824 in Windows Firewall (private profile) - run on BOTH machines">Open firewall ports…</button>
               </div>
@@ -2813,8 +2846,9 @@ table.olog-grid tr.olog-row-pending:hover td:not(.olog-rowhdr){background:rgba(2
             <div class="ch"><h2>Peers</h2><span class="hint">Machines discovered on the same network</span>
               <div class="right"><button class="btn sm" id="fldSyncNow" type="button" disabled title="Run one sync pass now">Sync now</button></div></div>
             <div class="cb">
-              <table class="fld-tbl"><thead><tr><th>Peer IP</th><th>Port</th><th>Role</th></tr></thead><tbody id="fldPeerBody"></tbody></table>
+              <table class="fld-tbl"><thead><tr><th>Peer IP</th><th>Port</th><th>Role</th><th>Trust</th></tr></thead><tbody id="fldPeerBody"></tbody></table>
               <div class="fld-empty" id="fldPeerEmpty">No peers yet. Start WiFiSync, then discovery finds a peer automatically - or add one below.</div>
+              <div class="sub" style="margin-top:6px;">Any machine on the network can announce itself, so nothing is shared or synced until you approve it here. Approvals are remembered.</div>
               <div class="fld-row" style="margin-top:10px;">
                 <input type="text" id="fldConnIp" placeholder="192.168.137.x" style="width:150px;" spellcheck="false">
                 <button class="btn sm" id="fldConnectBtn" type="button" disabled>Add peer</button>
@@ -2835,7 +2869,7 @@ table.olog-grid tr.olog-row-pending:hover td:not(.olog-rowhdr){background:rgba(2
               <div class="fld-row"><label class="fld-lbl">Name</label>
                 <input type="text" id="fldHsSsid" value="WifiSync_Host" style="flex:1;min-width:140px;" spellcheck="false"></div>
               <div class="fld-row"><label class="fld-lbl">Password</label>
-                <input type="password" id="fldHsPass" value="wifisync1" style="flex:1;min-width:140px;" spellcheck="false" title="At least 8 characters">
+                <input type="password" id="fldHsPass" value="" placeholder="Choose a password (8+ characters)" style="flex:1;min-width:140px;" spellcheck="false" title="At least 8 characters - there is no default, pick your own">
                 <button class="btn sm" id="fldHsReveal" type="button" title="Show / hide">👁</button></div>
               <div class="fld-row">
                 <button class="btn btn-primary sm" id="fldHsStart" type="button">Start hotspot</button>
@@ -2875,11 +2909,13 @@ table.olog-grid tr.olog-row-pending:hover td:not(.olog-rowhdr){background:rgba(2
       <div class="s"><span class="lk">traces</span><b id="sbTraces">-</b></div>
       <div class="s"><span class="lk">fmt</span><b id="sbFmt">-</b></div>
       <div class="s"><span class="lk">CRS</span><b id="sbCrs">-</b></div>
-      <div class="s zoom" title="Zoom the whole interface - Ctrl +/- , Ctrl 0 resets">
-        <span class="lk">zoom</span>
+      <div class="s zoom" title="Zoom the whole interface - drag the bar, or Ctrl +/- , Ctrl 0 resets">
+        <span class="lk">UI size</span>
         <button class="zbtn" id="zoomOut" title="Zoom out (Ctrl -)" aria-label="Zoom out">-</button>
-        <button class="zpct" id="zoomPct" title="Reset zoom to 100% (Ctrl 0)" aria-label="Reset zoom">100%</button>
+        <input type="range" class="zrange" id="zoomRange" min="50" max="250" step="10" value="100"
+               title="Drag to resize the whole interface" aria-label="Interface zoom">
         <button class="zbtn" id="zoomIn" title="Zoom in (Ctrl +)" aria-label="Zoom in">+</button>
+        <button class="zpct" id="zoomPct" title="Reset zoom to 100% (Ctrl 0)" aria-label="Reset zoom">100%</button>
       </div>
       <div class="s grow"></div>
       <div class="s" id="sbState"><span class="dot" style="background:var(--ink-4)"></span><b>Idle</b></div>
@@ -3309,8 +3345,8 @@ table.olog-grid tr.olog-row-pending:hover td:not(.olog-rowhdr){background:rgba(2
                 <option value="">None</option>
                 <option value="satellite">Satellite (Esri World Imagery)</option>
                 <option value="streets">Streets (OpenStreetMap)</option>
-                <option value="light">Light (CARTO)</option>
-                <option value="dark">Dark (CARTO)</option>
+                <option value="light">Light (Esri Gray Canvas - regional)</option>
+                <option value="dark">Dark (Esri Gray Canvas - regional)</option>
               </select>
             </label>
           </div>
@@ -3660,7 +3696,7 @@ table.olog-grid tr.olog-row-pending:hover td:not(.olog-rowhdr){background:rgba(2
             <label class="ctl-lbl" style="flex-direction:row;align-items:center;gap:6px;"><input type="checkbox" id="piHasHeader"> First row is a header</label>
           </div>
           <div style="padding:0 12px 10px;">
-            <textarea id="piPaste" class="ctl wide" rows="3" style="width:100%;height:auto;resize:vertical;" placeholder="…or paste rows here: 1,101,31.198180,34.279676,215"></textarea>
+            <textarea id="piPaste" class="ctl wide" rows="3" style="width:100%;height:auto;resize:vertical;" placeholder="…or paste rows here: 1,101,10.000000,20.000000,100"></textarea>
             <button class="btn sm" id="piUsePaste" type="button" style="margin-top:6px;">Use pasted text</button>
           </div>
         </div>

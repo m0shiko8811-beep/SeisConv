@@ -4,7 +4,7 @@
 
 import { normFactorPercentile } from '../../core/render/model';
 import { getColor, colorViridis } from '../../core/render/colormaps';
-import { EPSG_DB, searchEPSG, extraProjFields, type CRS } from '../../core/sps/reproject';
+import { searchEPSG, extraProjFields, type CRS } from '../../core/sps/reproject';
 import { resolveCrsTagCRS } from '../../core/sps/formats/coordcsv';
 import { projToLatLon, latLonToUTM, latLonToITM, geodeticToTM, type Projection } from '../../core/coords';
 import { checkPlan, type PlanCheckResult } from '../../core/sps/plancheck';
@@ -453,6 +453,8 @@ declare global {
       fieldStop(): Promise<{ ok: boolean }>;
       fieldSetRole(role: FieldRole): Promise<{ ok: boolean; role: FieldRole }>;
       fieldSyncNow(): Promise<{ ok: boolean; detail: string }>;
+      fieldTrustPeer(ip: string, trusted: boolean): Promise<{ ok: boolean; error?: string }>;
+      fieldSetAllowRemoteDelete(on: boolean): Promise<{ ok: boolean }>;
       fieldConnectPeer(ip: string, port?: number): Promise<{ ok: boolean; error?: string }>;
       fieldHostIp(): Promise<string>;
       fieldHotspotStatus(): Promise<FieldHotspotStatus>;
@@ -477,15 +479,17 @@ interface FieldSettings {
   hs_ssid: string; hs_pass: string; role: FieldRole;
   sync_mode: 'on_change' | 'interval'; sync_interval: string;
   throttle_enabled: boolean; throttle_kbps: string;
+  trusted_peers?: string[]; allow_remote_delete?: boolean;
 }
 interface FieldStartCfg {
   folder: string; role: FieldRole; watchMode: 'on_change' | 'interval';
   syncInterval: number; maxKbps: number; bindIp: string; broadcastAddr: string; manualIp: string;
 }
-interface FieldPeerInfo { ip: string; port: number; role: FieldRole }
+interface FieldPeerInfo { ip: string; port: number; role: FieldRole; trusted?: boolean }
 interface FieldStatus {
   running: boolean; mode: FieldRole; serverOn: boolean; discoveryOn: boolean;
   manual: boolean; folder: string; peers: FieldPeerInfo[];
+  pending?: FieldPeerInfo[]; allowRemoteDelete?: boolean;
 }
 interface FieldNetAdapter { label: string; ip: string; broadcast: string }
 interface FieldHistoryEntry { timestamp: number; filename: string; action: 'pulled' | 'deleted'; peer_ip: string; size_bytes: number }
@@ -493,10 +497,10 @@ interface FieldHotspotStatus { running: boolean; ssid: string; clients: number }
 interface FieldWifiAdapter { label: string; name: string; status: string }
 type FieldEventMsg =
   | { type: 'log'; msg: string; ts: string }
-  | { type: 'peer'; action: 'found' | 'lost'; ip: string; port?: number; role?: FieldRole }
+  | { type: 'peer'; action: 'found' | 'lost' | 'pending'; ip: string; port?: number; role?: FieldRole; trusted?: boolean }
   | { type: 'sync'; ok: boolean; detail: string }
   | { type: 'file'; kind: 'pulled' | 'deleted'; relPath: string; peerIp: string; size: number }
-  | { type: 'status'; running: boolean; mode: FieldRole; serverOn: boolean; discoveryOn: boolean; manual: boolean; folder: string; peers: FieldPeerInfo[] }
+  | { type: 'status'; running: boolean; mode: FieldRole; serverOn: boolean; discoveryOn: boolean; manual: boolean; folder: string; peers: FieldPeerInfo[]; pending?: FieldPeerInfo[]; allowRemoteDelete?: boolean }
   | { type: 'negotiated'; role: FieldRole; peerRole: FieldRole }
   | { type: 'renegotiable' };
 const api = window.seisconvAPI;
@@ -527,7 +531,8 @@ function initTheme() {
 // -- App-wide UI zoom (whole interface, like a browser's Ctrl +/- / Ctrl 0) --
 // Backed by Electron's webFrame (exposed through the preload bridge). The factor
 // is clamped to 0.5-2.5 in ~0.1 steps, persisted in localStorage, applied on
-// init, and mirrored into the status-bar [-] 100% [+] control.
+// init, and mirrored into the status-bar "UI size" group ([-] slider [+] 100%).
+// The slider and the buttons are ONE mechanism: both route through applyZoom.
 const ZOOM_MIN = 0.5;
 const ZOOM_MAX = 2.5;
 const ZOOM_STEP = 0.1;
@@ -548,6 +553,10 @@ function applyZoom(f: number) {
   try { localStorage.setItem(ZOOM_KEY, String(zoomFactor)); } catch { /* ignore */ }
   const pct = $opt('zoomPct');
   if (pct) pct.textContent = `${Math.round(zoomFactor * 100)}%`;
+  // The status-bar slider is the same control in bar form - keep it in step whether
+  // the change came from the slider, the +/- buttons, or a Ctrl shortcut.
+  const range = $opt('zoomRange') as HTMLInputElement | null;
+  if (range) range.value = String(Math.round(zoomFactor * 100));
 }
 /** Nudge the zoom by N steps (sign = direction). */
 function zoomBy(steps: number) { applyZoom(zoomFactor + steps * ZOOM_STEP); }
@@ -560,6 +569,11 @@ function initZoom() {
   $opt('zoomIn')?.addEventListener('click', () => zoomBy(1));
   $opt('zoomOut')?.addEventListener('click', () => zoomBy(-1));
   $opt('zoomPct')?.addEventListener('click', () => zoomReset());
+  $opt('zoomRange')?.addEventListener('input', (e) => {
+    const v = Number((e.target as HTMLInputElement).value);
+    if (!Number.isFinite(v)) return;
+    applyZoom(v / 100);
+  });
 }
 
 // -- Help / Manual modal (context-sensitive) --
@@ -694,17 +708,19 @@ function applyKeyHints() {
     tip.innerHTML =
       `Tip - <span class="kbd">${KEY_OPEN}</span> open · ` +
       `<span class="kbd">${KEY_BATCH}</span> batch · ` +
-      `<span class="kbd">1-8</span> switch tabs · ` +
+      `<span class="kbd">${TAB_KEY_RANGE}</span> switch tabs · ` +
+      `<span class="kbd">${KEY_OBSLOG}</span> observer log · ` +
       `<span class="kbd">?</span> help.`;
   }
   // rail + header tooltips
-  $opt('railHelp')?.setAttribute('title', `Help / Manual - keys: ${KEY_OPEN} open · ${KEY_BATCH} batch · 1-8 tabs · ? help`);
+  $opt('railHelp')?.setAttribute('title', `Help / Manual - keys: ${KEY_OPEN} open · ${KEY_BATCH} batch · ${TAB_KEY_RANGE} tabs · ${KEY_OBSLOG} observer log · ? help`);
   // in-manual key chips that carry a data-key marker
   document.querySelectorAll<HTMLElement>('.kbd[data-key]').forEach((el) => {
     const k = el.getAttribute('data-key');
     if (k === 'open') el.textContent = KEY_OPEN;
     else if (k === 'batch') el.textContent = KEY_BATCH;
-    else if (k === 'tabs') el.textContent = '1-8';
+    else if (k === 'tabs') el.textContent = TAB_KEY_RANGE;
+    else if (k === 'obslog') el.textContent = KEY_OBSLOG;
     else if (k === 'help') el.textContent = '?';
   });
 }
@@ -745,10 +761,6 @@ let traceAmpRange: { min: number; max: number } | null = null;
 let traceManualX = false;
 // Manual X (time) / Y (amplitude) range control group for the Trace Inspector.
 let traceAxisRange: AxisRangeHandle | null = null;
-// Tracks whether the LAST applied X (time) pair was a manual override, so editing
-// only the Amp (Y) boxes never silently discards a live wheel/button time zoom: we
-// refit the time axis only on the manual→auto transition, not on every Amp edit.
-let tracePrevManualX = false;
 let outFormat = 'segy1';
 let lastSection: SectionData | null = null;
 // Section data-zoom view-state: the visible window in FULL-data indices
@@ -757,9 +769,6 @@ let lastSection: SectionData | null = null;
 // caches the record extent for clamping; init=false ⇒ "fit whole record".
 const secView = { t0: 0, t1: 0, s0: 0, s1: 0, fullT: 0, fullS: 0, init: false };
 let secFetchPending = false; // coalesce rapid wheel/drag re-fetches
-// First trace of the block currently shown by the trace-paging control (huge /
-// streamed files). Kept in sync with secView.t0 each time a block is requested.
-let secPageStart = 0;
 const SEC_PAGE_DEFAULT = 2000; // traces per block when the size box is blank/invalid
 
 /** Current block size (traces/page) from the toolbar box, clamped to a sane range
@@ -983,14 +992,31 @@ const MOD = IS_MAC ? 'Cmd' : 'Ctrl';      // primary modifier label
 const KEY_OPEN = `${MOD}+O`;
 const KEY_BATCH = `${MOD}+B`;
 
-// NOTE: 'geomqc' sits elsewhere in the left RAIL (see index.html), but is appended
-// LAST here on purpose. onKeyDown maps the bare digit keys 1..9 (no modifier) to
-// TABS[idx]; with more than
-// nine tabs only nine digits exist, so keeping the original nine first preserves
-// every existing digit shortcut (Observer Log stays Ctrl+9). The trailing tab is a
-// click-only target - switchTab iterates by name, so order is otherwise free.
-const TABS = ['conv', 'trace', 'section', 'sps', 'spscreate', 'vel', 'spectrum', 'workbench', 'obslog', 'geomqc', 'sweeps', 'field'] as const;
+// TABS is the single source of truth for BOTH the digit shortcuts and the Help
+// nav order, so it MUST match the visual order of the left icon rail in
+// index.html. It used to append 'geomqc' last, which made the bare digit keys
+// disagree with the rail the user is looking at ('6' opened Velocity while the
+// sixth icon was Geometry QC). onKeyDown maps the bare digit keys 1..N (no
+// modifier) to TABS[idx]; only nine digits exist, so the tabs past the ninth
+// (Observer Log, Sweeps, WiFiSync) get no digit. switchTab iterates by name, so
+// nothing else depends on this order.
+const TABS = ['conv', 'trace', 'section', 'sps', 'spscreate', 'geomqc', 'vel', 'spectrum', 'workbench', 'obslog', 'sweeps', 'field'] as const;
 type Tab = (typeof TABS)[number];
+/** How many tabs a bare digit key can reach (only 1..9 exist as digits). */
+const TAB_DIGITS = Math.min(9, TABS.length);
+/** The key range shown in every hint/tooltip/Help chip - derived, never hand-typed. */
+const TAB_KEY_RANGE = `1-${TAB_DIGITS}`;
+// Aligning the digits with the rail pushed Observer Log past the ninth position,
+// and an observer sits in that tab for a whole production day - losing its
+// one-keystroke path was not acceptable. It gets a bare letter of its own instead.
+// Bare 'o' was free: the only other bare keys are Esc, '?', '[', ']' and 1-9, and
+// Ctrl+O (KEY_OPEN) is a DIFFERENT chord, so the two never collide. Like the digits
+// this is ignored while the user is typing in a field - see the guard in onKeyDown.
+// Sweeps and WiFiSync deliberately stay click-only (see the Help): they are
+// set-up / QC tools visited occasionally, not a tab anyone lives in.
+const KEY_OBSLOG_TAB: Tab = 'obslog';
+/** The bare letter that jumps to the Observer Log, in the case the hints show. */
+const KEY_OBSLOG = 'O';
 
 // Which tab is showing - drives the universal header "Clear" button (see
 // clearActiveTab / updateHeaderClear). Kept in sync by switchTab.
@@ -1447,7 +1473,6 @@ async function secPageStep(delta: number) {
   const fitted = (secView.t1 - secView.t0) >= fullT - 1; // viewing (nearly) the whole record
   let start = fitted ? (delta > 0 ? 0 : lastStart) : secView.t0 + delta * page;
   start = Math.max(0, Math.min(lastStart, start));
-  secPageStart = start;
   secView.t0 = start;
   secView.t1 = Math.min(fullT, start + page);
   await fetchSectionWindow(); // echoes the real window back into secView + repaints
@@ -1460,7 +1485,6 @@ async function secPageApplySize() {
   const fullT = secView.fullT || summary.traceCount;
   const page = secPageSize();
   const start = Math.max(0, Math.min(Math.max(0, fullT - page), secView.t0));
-  secPageStart = start;
   secView.t0 = start;
   secView.t1 = Math.min(fullT, start + page);
   await fetchSectionWindow();
@@ -1518,9 +1542,22 @@ function fmtExt(f: string): string { return FMT_EXT[f] || 'bin'; }
 /** Strip the final extension from a file name → its base. */
 function fileBase(name: string): string { return name.replace(/\.[^.]+$/, ''); }
 
-/** Strip characters illegal in file names so a templated base is always safe. */
+/** Strip characters illegal in file names so a templated base is always safe.
+ *  Also drops C0/C1 control characters and bidi overrides and caps the length:
+ *  on Windows a control character in a base name makes the write fail outright
+ *  (ERR_INVALID_ARG_VALUE / ENOENT) and a long base blows past MAX_PATH, while a
+ *  bidi override display-spoofs the extension. MUST stay identical to the main
+ *  process's sanitizeBaseName (electron/main.ts). */
 function sanitizeName(s: string): string {
-  return s.replace(/[\\/:*?"<>|]/g, '_').replace(/\s+/g, ' ').trim() || 'output';
+  return s
+    .replace(/[\u0000-\u001f\u007f-\u009f]/g, '')
+    .replace(/[\u202a-\u202e\u2066-\u2069\u200e\u200f]/g, '')
+    .replace(/[\\/:*?"<>|]/g, '_')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .slice(0, 120)
+    .replace(/[. ]+$/, '')
+    .trim() || 'output';
 }
 
 /** Read the date input as a YYYYMMDD stamp; falls back to today if empty/invalid. */
@@ -2482,6 +2519,19 @@ function drawTrace(cv: HTMLCanvasElement, t: TraceData) {
   drawTraceCore(cv, t, traceView.s0, traceView.s1, traceAmpRange);
 }
 
+/** The shared 6-line time grid for the single-trace canvases (ms down the left
+ *  edge). Identical in the Inspector, the box-zoom viewer, the workbench and the
+ *  comparison plot; extracted verbatim so the four stay in step. */
+function drawMsTimeGrid(ctx: CanvasRenderingContext2D, ML: number, MT: number, pw: number, ph: number, s0: number, denom: number, msPerSample: number) {
+  for (let k = 0; k <= 5; k++) {
+    const y = MT + (ph * k) / 5;
+    const sampleAt = s0 + (denom * k) / 5;
+    ctx.fillText((sampleAt * msPerSample).toFixed(0) + ' ms', 6, y + 3);
+    ctx.strokeStyle = '#173049';
+    ctx.beginPath(); ctx.moveTo(ML, y); ctx.lineTo(ML + pw, y); ctx.stroke();
+  }
+}
+
 /** Paint one trace into `cv` over the sample window [s0,s1) with an optional raw
  *  amplitude window (null ⇒ auto-normalize per the visible window). Every input
  *  is re-guarded here (finite, clamped, min<max) so no NaN reaches the canvas -
@@ -2557,16 +2607,7 @@ function drawTraceCore(
   ctx.fillStyle = '#7e93ac';
   ctx.font = '10px Consolas, monospace';
   const msPerSample = t.sampleInt / 1000;
-  for (let k = 0; k <= 5; k++) {
-    const y = MT + (ph * k) / 5;
-    const sampleAt = s0 + (denom * k) / 5;
-    ctx.fillText((sampleAt * msPerSample).toFixed(0) + ' ms', 6, y + 3);
-    ctx.strokeStyle = '#173049';
-    ctx.beginPath();
-    ctx.moveTo(ML, y);
-    ctx.lineTo(ML + pw, y);
-    ctx.stroke();
-  }
+  drawMsTimeGrid(ctx, ML, MT, pw, ph, s0, denom, msPerSample);
 
   // amplitude (X) axis ticks - make the horizontal swing readable. Three ticks:
   // left edge / centre / right edge, showing the ACTUAL sample amplitude at that
@@ -2956,7 +2997,6 @@ function secFit() {
   secView.s1 = secView.fullS;
   if (summary.streamed) {
     const page = secPageSize();
-    secPageStart = 0;
     secView.t0 = 0;
     secView.t1 = Math.min(secView.fullT, page);
   } else {
@@ -5252,13 +5292,7 @@ function drawPreviewTrace(cv: HTMLCanvasElement, t: TraceData, color: string) {
   // time axis (ms down)
   ctx.fillStyle = '#7e93ac'; ctx.font = '10px Consolas, monospace';
   const msPerSample = (Number.isFinite(t.sampleInt) ? t.sampleInt : 0) / 1000;
-  for (let k = 0; k <= 5; k++) {
-    const y = MT + (ph * k) / 5;
-    const sampleAt = (denom * k) / 5;
-    ctx.fillText((sampleAt * msPerSample).toFixed(0) + ' ms', 6, y + 3);
-    ctx.strokeStyle = '#173049';
-    ctx.beginPath(); ctx.moveTo(ML, y); ctx.lineTo(ML + pw, y); ctx.stroke();
-  }
+  drawMsTimeGrid(ctx, ML, MT, pw, ph, 0, denom, msPerSample);
   // amplitude caption (dimensionless sample value)
   ctx.fillStyle = '#5f7793'; ctx.textAlign = 'center';
   ctx.fillText('Amplitude (sample value)', ML + pw / 2, MT + ph - 4);
@@ -5450,16 +5484,7 @@ function drawWorkbench() {
   ctx.fillStyle = '#7e93ac';
   ctx.font = '10px Consolas, monospace';
   const msPerSample = si / 1000;
-  for (let k = 0; k <= 5; k++) {
-    const y = MT + (ph * k) / 5;
-    const sampleAt = s0 + (denom * k) / 5;
-    ctx.fillText((sampleAt * msPerSample).toFixed(0) + ' ms', 6, y + 3);
-    ctx.strokeStyle = '#173049';
-    ctx.beginPath();
-    ctx.moveTo(ML, y);
-    ctx.lineTo(ML + pw, y);
-    ctx.stroke();
-  }
+  drawMsTimeGrid(ctx, ML, MT, pw, ph, s0, denom, msPerSample);
 
   if (wbMode === 'side') {
     // Split the plot width into N equal columns; each trace's wiggle is centred
@@ -5720,13 +5745,7 @@ function wbDrawDiff(diff: Float32Array, sampleInt: number) {
   ctx.fillStyle = '#7e93ac';
   ctx.font = '10px Consolas, monospace';
   const msPerSample = (sampleInt || 0) / 1000;
-  for (let k = 0; k <= 5; k++) {
-    const y = MT + (ph * k) / 5;
-    const sampleAt = s0 + (denom * k) / 5;
-    ctx.fillText((sampleAt * msPerSample).toFixed(0) + ' ms', 6, y + 3);
-    ctx.strokeStyle = '#173049';
-    ctx.beginPath(); ctx.moveTo(ML, y); ctx.lineTo(ML + pw, y); ctx.stroke();
-  }
+  drawMsTimeGrid(ctx, ML, MT, pw, ph, s0, denom, msPerSample);
 
   const cx = ML + pw / 2;
   ctx.strokeStyle = '#264a68';
@@ -5912,6 +5931,27 @@ function workbenchInteractions() {
 }
 
 // -- SPS 2.1 (survey geometry) --
+/** Adopt a survey the worker has just generated (the SPS Creation wizard and the
+ *  survey-plan SPS export share this verbatim): take the new summary, re-enable
+ *  the SPS actions, drop every renderer-side cache and repaint the SPS panels. */
+function adoptCreatedSurvey(summary: SpsSummary) {
+  spsSummary = summary;
+  const pts = (summary.sources ?? 0) + (summary.receivers ?? 0);
+  setSpsExportEnabled(pts > 0);
+  setSpsRenumberEnabled(pts > 0);
+  setRotateCtlEnabled(true);
+  spsGeom = null; spsSpider = null; spsFold = null; spsFoldBin = 0;
+  spsBinGrid = null; spsBinGridFetched = false;
+  highlightedShot = null; gridView.init = false; gridHighlight = null;
+  if (leafletMap && binGridLayer) { leafletMap.removeLayer(binGridLayer); binGridLayer = null; }
+  invalidateSpsSourceCache();
+  clearInspector();
+  $('spsLabel').textContent = spsLabel(spsSummary);
+  updateSpsStats();
+  renderSummaryPanel();
+  updateStatusStrip();
+}
+
 function spsLabel(s: SpsSummary): string {
   const proj = s.projection?.desc || s.projection?.type || s.projection?.subtype || 'unknown CRS';
   return `${s.sources} sources · ${s.receivers} receivers · ${s.xrefs} X-refs · ${s.layout || '?'} · ${proj}` + (s.errors.length ? ` · ⚠ ${s.errors.length}` : '');
@@ -6915,16 +6955,21 @@ function ensureMap() {
   if (leafletMap) return;
   // maxZoom 24 with per-source maxNativeZoom lets the basemap keep zooming PAST the
   // tile providers' native levels (upscaled) for sub-meter survey detail.
-  const dark = L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}.png', { maxZoom: 24, maxNativeZoom: 20, attribution: '© OpenStreetMap, © CARTO' });
-  // Light counterpart of the CARTO dark basemap (Positron 'light_all'); same URL
-  // pattern + zoom caps so it upscales past native levels identically.
-  const light = L.tileLayer('https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}.png', { maxZoom: 24, maxNativeZoom: 20, attribution: '© OpenStreetMap, © CARTO' });
+  const dark = L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/Canvas/World_Dark_Gray_Base/MapServer/tile/{z}/{y}/{x}', { maxZoom: 24, maxNativeZoom: 16, attribution: 'Esri Dark Gray Canvas — Esri, HERE, Garmin, © OpenStreetMap contributors' });
+  // Light counterpart of the Esri dark canvas; same URL pattern + zoom caps so it
+  // upscales past native levels identically. Esri's canvas tiles are keyless (the
+  // CARTO ones now demand an API key and serve a watermark), and they stop at
+  // native z16 - past that Leaflet upscales rather than request a 'no data' tile.
+  const light = L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/Canvas/World_Light_Gray_Base/MapServer/tile/{z}/{y}/{x}', { maxZoom: 24, maxNativeZoom: 16, attribution: 'Esri Light Gray Canvas — Esri, HERE, Garmin, © OpenStreetMap contributors' });
   const sat = L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}', { maxZoom: 24, maxNativeZoom: 21, attribution: 'Esri World Imagery' });
   const streets = L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom: 24, maxNativeZoom: 19, attribution: '© OpenStreetMap' });
   // rotate:true enables the leaflet-rotate panes/bearing API; we drive bearing
   // from our own toolbar slider, so suppress the plugin's built-in control.
-  leafletMap = L.map('spsMap', { layers: [dark], preferCanvas: true, maxZoom: 24, zoomSnap: 0.5, rotate: true, rotateControl: false });
-  L.control.layers({ Dark: dark, Light: light, Satellite: sat, Streets: streets }).addTo(leafletMap);
+  // Satellite is the DEFAULT: survey work happens around z18-20 (2-30 m station
+  // spacing), and it is the only layer with native tiles that deep (21). The grey
+  // canvases stop at 16 and would open upscaled and soft at working zoom.
+  leafletMap = L.map('spsMap', { layers: [sat], preferCanvas: true, maxZoom: 24, zoomSnap: 0.5, rotate: true, rotateControl: false });
+  L.control.layers({ Satellite: sat, Streets: streets, 'Light (regional)': light, 'Dark (regional)': dark }).addTo(leafletMap);
   // Metric distance scale (bottom-left, clear of the layers control + attribution).
   // Added once at creation (ensureMap is guarded), so it never stacks on re-entry.
   L.control.scale({ metric: true, imperial: false, maxWidth: 140, position: 'bottomleft' }).addTo(leafletMap);
@@ -7821,8 +7866,6 @@ async function exportShapefile() {
 let gtBounds: { south: number; west: number; north: number; east: number } | null = null;
 /** The rectangle drawn on the map for the current selection. */
 let gtRect: L.Rectangle | null = null;
-/** True while the map is armed for a drag (normal panning is suspended). */
-let gtArmed = false;
 /** True when the export should cover the whole survey rather than a dragged box. */
 let gtWhole = false;
 
@@ -7852,7 +7895,6 @@ function gtArmDrag() {
     setText('gtStatus', 'Switch the SPS view to Map first, then try again.');
     return;
   }
-  gtArmed = true;
   const el = $opt('spsMap');
   el?.classList.add('gt-armed');
   leafletMap.dragging.disable();
@@ -7879,7 +7921,6 @@ function gtArmDrag() {
     leafletMap.off('mouseup', finish);
     leafletMap.dragging.enable();
     el?.classList.remove('gt-armed');
-    gtArmed = false;
     start = null;
     setText('spsExpStatus', '');
     openGeotiffWizard();
@@ -8093,6 +8134,17 @@ function gtUpdateBasemapNote() {
     'Needs internet at export time. Map tiles are licensed for display, and writing them into a file you pass on is redistribution - ' +
     'check that your tile source permits it. The provider attribution is embedded in the GeoTIFF and in an ATTRIBUTION.txt inside the ZIP.';
   el.appendChild(d);
+  // The grey canvases have native tiles only to zoom 16 (~2 m/pixel at mid
+  // latitudes). Past that the export would bake permanently-soft imagery into a
+  // deliverable, so say it BEFORE the export rather than after.
+  if (key === 'light' || key === 'dark') {
+    const g = document.createElement('div');
+    g.className = 'warn';
+    g.textContent =
+      'The grey canvas basemaps carry detail only to about zoom 16 (roughly 2 m per pixel). A finer resolution than that ' +
+      'produces an upscaled, soft image baked into the file - choose Satellite for sub-2 m pixel sizes.';
+    el.appendChild(g);
+  }
 }
 
 function gtSelectedLayers(): ('fold' | 'elevation' | 'layout')[] {
@@ -8195,7 +8247,7 @@ function initGeotiffWizard() {
 
 // Enable/disable the SPS export buttons (disabled until a survey is loaded).
 function setSpsExportEnabled(on: boolean) {
-  for (const id of ['spsExpKmlBtn', 'spsExpGeojsonBtn', 'spsExpCsvBtn', 'spsExpP111Btn', 'spsExpCoordCsvBtn', 'spsExpQcBtn', 'spsExpShpBtn', 'spsExpGeotiffBtn', 'spsExpSegP1Btn', 'spsExpFormatBtn']) {
+  for (const id of ['spsExpKmlBtn', 'spsExpGeojsonBtn', 'spsExpCsvBtn', 'spsExpQcBtn', 'spsExpShpBtn', 'spsExpGeotiffBtn', 'spsExpFormatBtn']) {
     const btn = $opt(id) as HTMLButtonElement | null;
     if (btn) btn.disabled = !on;
   }
@@ -9116,13 +9168,15 @@ function planInvalidate() { planDerive = null; planChecks = null; }
  *  a mousemove drives the coord read-out and a click drops a line vertex. */
 function ensureCreateMap() {
   if (createMap) return;
-  const dark = L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}.png', { maxZoom: 24, maxNativeZoom: 20, attribution: '© OpenStreetMap, © CARTO' });
-  const light = L.tileLayer('https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}.png', { maxZoom: 24, maxNativeZoom: 20, attribution: '© OpenStreetMap, © CARTO' });
+  const dark = L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/Canvas/World_Dark_Gray_Base/MapServer/tile/{z}/{y}/{x}', { maxZoom: 24, maxNativeZoom: 16, attribution: 'Esri Dark Gray Canvas — Esri, HERE, Garmin, © OpenStreetMap contributors' });
+  const light = L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/Canvas/World_Light_Gray_Base/MapServer/tile/{z}/{y}/{x}', { maxZoom: 24, maxNativeZoom: 16, attribution: 'Esri Light Gray Canvas — Esri, HERE, Garmin, © OpenStreetMap contributors' });
   const sat = L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}', { maxZoom: 24, maxNativeZoom: 21, attribution: 'Esri World Imagery' });
   const streets = L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom: 24, maxNativeZoom: 19, attribution: '© OpenStreetMap' });
   // No rotation on this tab; suppress the leaflet-rotate plugin's default control.
-  createMap = L.map('spsCreateMap', { layers: [dark], preferCanvas: true, maxZoom: 24, zoomSnap: 0.5, rotateControl: false });
-  L.control.layers({ Dark: dark, Light: light, Satellite: sat, Streets: streets }).addTo(createMap);
+  // Satellite by default - same reasoning as ensureMap(): it is the only layer
+  // sharp at the z18-20 a survey is actually drawn at.
+  createMap = L.map('spsCreateMap', { layers: [sat], preferCanvas: true, maxZoom: 24, zoomSnap: 0.5, rotateControl: false });
+  L.control.layers({ Satellite: sat, Streets: streets, 'Light (regional)': light, 'Dark (regional)': dark }).addTo(createMap);
   // Metric distance scale (bottom-left). ensureCreateMap is guarded, so added once.
   L.control.scale({ metric: true, imperial: false, maxWidth: 140, position: 'bottomleft' }).addTo(createMap);
   createMap.setView([32, 35], 6);
@@ -9148,12 +9202,6 @@ function ensureCreateMap() {
 function clearCreateRubberband() {
   if (createRubberband && createMap) createMap.removeLayer(createRubberband);
   createRubberband = null;
-}
-
-/** The current line if it has ≥1 point (non-mutating - never opens a new line). */
-function createActiveLine(): PlanLine | null {
-  const l = createLines[createLines.length - 1];
-  return l && l.points.length > 0 ? l : null;
 }
 
 /** Every point across every line, flattened. */
@@ -11008,23 +11056,7 @@ async function planExportSps() {
     if (!r.ok) { setText('spsCreateLabel', 'SPS export failed: ' + (r.error || 'unknown')); return; }
     // The worker now holds the generated survey; adopt it exactly as the wizard does
     // so the SPS tab shows what was just written.
-    if (r.summary) {
-      spsSummary = r.summary;
-      const pts = (r.summary.sources ?? 0) + (r.summary.receivers ?? 0);
-      setSpsExportEnabled(pts > 0);
-      setSpsRenumberEnabled(pts > 0);
-      setRotateCtlEnabled(true);
-      spsGeom = null; spsSpider = null; spsFold = null; spsFoldBin = 0;
-      spsBinGrid = null; spsBinGridFetched = false;
-      highlightedShot = null; gridView.init = false; gridHighlight = null;
-      if (leafletMap && binGridLayer) { leafletMap.removeLayer(binGridLayer); binGridLayer = null; }
-      invalidateSpsSourceCache();
-      clearInspector();
-      $('spsLabel').textContent = spsLabel(spsSummary);
-      updateSpsStats();
-      renderSummaryPanel();
-      updateStatusStrip();
-    }
+    if (r.summary) adoptCreatedSurvey(r.summary);
     switchTab('sps');
     if (spsSummary) await refreshSps();
     if (r.savedPath) { infoToast('Saved ' + r.savedPath); audit('export', `SPS 2.1 from the survey plan → ${r.savedPath}`, 'spscreate'); }
@@ -11345,23 +11377,7 @@ async function confirmCreateWizard() {
     const r = await api.spsCreate(req);
     if (!r.ok) { setText('spsWizardStatus', 'Failed: ' + (r.error || 'unknown')); return; }
     // The worker now holds the generated survey - adopt it like loadSPS / renumber.
-    if (r.summary) {
-      spsSummary = r.summary;
-      const pts = (r.summary.sources ?? 0) + (r.summary.receivers ?? 0);
-      setSpsExportEnabled(pts > 0);
-      setSpsRenumberEnabled(pts > 0);
-      setRotateCtlEnabled(true);
-      spsGeom = null; spsSpider = null; spsFold = null; spsFoldBin = 0;
-      spsBinGrid = null; spsBinGridFetched = false;
-      highlightedShot = null; gridView.init = false; gridHighlight = null;
-      if (leafletMap && binGridLayer) { leafletMap.removeLayer(binGridLayer); binGridLayer = null; }
-      invalidateSpsSourceCache();
-      clearInspector();
-      $('spsLabel').textContent = spsLabel(spsSummary);
-      updateSpsStats();
-      renderSummaryPanel();
-      updateStatusStrip();
-    }
+    if (r.summary) adoptCreatedSurvey(r.summary);
     closeCreateWizard();
     switchTab('sps');
     if (spsSummary) await refreshSps();
@@ -12193,11 +12209,6 @@ function drawSpecEmpty() {
   ctx.textAlign = 'left';
 }
 
-/** Axis labels for a heatmap whose X runs 0→xMax and Y runs 0→yMax (y down). */
-function drawHeatAxes(ctx: CanvasRenderingContext2D, plot: { x: number; y: number; w: number; h: number }, a: { xLabel: string; xMax: number; yLabel: string; yMax: number }) {
-  drawHeatAxesXY(ctx, plot, { xLabel: a.xLabel, xMin: 0, xMax: a.xMax, yLabel: a.yLabel, yMin: 0, yMax: a.yMax, yUp: false });
-}
-
 /** General heatmap axis labels: X from xMin→xMax, Y from yMin→yMax. `yUp` puts
  *  yMin at the bottom (frequency-up convention); otherwise yMin is at the top. */
 function drawHeatAxesXY(
@@ -12688,7 +12699,31 @@ function num(v: number | string | undefined): number | null {
 }
 
 // -- Persistence --------------------------------------------------------------
+// The log is serialised to localStorage. Two things matter here:
+//  1) A day's log is 2000-4000 rows, so the write is DEBOUNCED - typing a cell no
+//     longer stringifies the whole log on every keystroke commit. saveLogFlush()
+//     writes immediately (called on window unload/hide so nothing is left pending).
+//  2) A failed write (quota exceeded) used to be swallowed, so the observer kept
+//     logging into a store that no longer persisted and lost the day on restart.
+//     A failure now raises a PERSISTENT banner above the grid (plus one toast).
+let logSaveTimer = 0;
+let logSaveDirty = false;
+let logSaveFailed = false;
+let logSaveWarned = false;
+const LOG_SAVE_DEBOUNCE_MS = 400;
+
+/** Queue a persist of the observer log (debounced). */
 function saveLog() {
+  logSaveDirty = true;
+  if (logSaveTimer) return;
+  logSaveTimer = window.setTimeout(() => { logSaveTimer = 0; saveLogFlush(); }, LOG_SAVE_DEBOUNCE_MS);
+}
+
+/** Persist the observer log NOW, reporting a failed write instead of hiding it. */
+function saveLogFlush(): void {
+  if (logSaveTimer) { window.clearTimeout(logSaveTimer); logSaveTimer = 0; }
+  if (!logSaveDirty) return;
+  logSaveDirty = false;
   try {
     localStorage.setItem(LOG_KEY, JSON.stringify({
       meta: logMeta, columns: logColumns, rows: logRows,
@@ -12697,8 +12732,34 @@ function saveLog() {
       // v2: persist the time-source choice + server (offset is session-only).
       timeSource: logTimeSource, ntpServer: logNtpServer,
     }));
-  } catch { /* ignore quota / serialization errors */ }
+    if (logSaveFailed) { logSaveFailed = false; logSaveWarned = false; renderLogSaveWarning(); }
+  } catch {
+    logSaveFailed = true;
+    renderLogSaveWarning();
+    if (!logSaveWarned) {
+      logSaveWarned = true;
+      infoToast('The observer log could NOT be saved - export it now.');
+    }
+  }
 }
+
+/** Show/hide the persistent "log is not being saved" banner above the grid. */
+function renderLogSaveWarning(): void {
+  const el = $opt('ologSaveWarn');
+  if (!el) return;
+  if (!logSaveFailed) { el.style.display = 'none'; el.textContent = ''; return; }
+  el.textContent = '';
+  const b = document.createElement('b');
+  b.textContent = 'This log is NOT being saved. ';
+  el.append(b, 'Browser storage is full, so nothing you type from here on will survive a restart. '
+    + 'Export the log now (Excel / CSV / JSON) and keep the exported file.');
+  el.style.display = '';
+}
+
+// Never leave a debounced write pending when the window goes away.
+window.addEventListener('beforeunload', () => saveLogFlush());
+window.addEventListener('pagehide', () => saveLogFlush());
+document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'hidden') saveLogFlush(); });
 // -- Defensive validation for persisted Observer-Log state --
 // A malformed or partially-written localStorage value (e.g. after an abnormal
 // crash mid-write) must never stall the grid render on next launch. These guards
@@ -13248,12 +13309,22 @@ function renderLogMetaStrip() {
   }
 }
 
+/** Signature of the current header/cell-affordance state; a change forces a full
+ *  header + body rebuild (see renderLogGrid). */
+let logGridSig = '';
+
 /** Build the editable table: sticky header (with units) + a row per record. */
 function renderLogGrid() {
   const thead = $opt('ologThead'); const tbody = $opt('ologTbody'); const empty = $opt('ologGridEmpty');
   if (!thead || !tbody) return;
 
-  // Header
+  // Header - rebuilt only when the columns (or what the cells key off) changed;
+  // a header rebuild invalidates every cached row element.
+  const sig = JSON.stringify(logColumns) + '|' + logTimeSource
+    + '|' + (spsLookupHook ? '1' : '0') + '|' + (spsLinkAvailable() ? '1' : '0');
+  const headerChanged = sig !== logGridSig;
+  logGridSig = sig;
+  if (headerChanged) {
   thead.innerHTML = '';
   const htr = document.createElement('tr');
   const rh = document.createElement('th'); rh.className = 'olog-rowhdr'; rh.textContent = '#';
@@ -13267,15 +13338,60 @@ function renderLogGrid() {
   }
   const ah = document.createElement('th'); ah.textContent = ''; htr.appendChild(ah);
   thead.appendChild(htr);
+  logRowEls = new WeakMap();
+  }
 
-  // Body
-  tbody.innerHTML = '';
+  // Body - reconciled, NOT rebuilt. A production day is thousands of rows x tens
+  // of columns; wiping the tbody and rebuilding every input froze the UI for
+  // seconds on every trigger-created row. Each <tr> carries a value signature, so
+  // an unchanged row keeps its existing DOM (and its listeners) and only rows that
+  // actually changed - plus genuinely new ones - are built.
+  if (headerChanged) tbody.innerHTML = '';
   if (logRows.length === 0) {
     if (empty) empty.style.display = '';
-  } else {
-    if (empty) empty.style.display = 'none';
-    for (let i = 0; i < logRows.length; i++) tbody.appendChild(buildLogRowEl(i));
+    if (tbody.firstChild) tbody.innerHTML = '';
+    logRowEls = new WeakMap();
+    return;
   }
+  if (empty) empty.style.display = 'none';
+  reconcileLogGridBody(tbody);
+}
+
+/** Per-<tr> cache: the row object it renders, and the value signature it shows. */
+let logRowEls = new WeakMap<LogRow, HTMLTableRowElement>();
+const LOG_SIG_SEP = '';
+
+/** Signature of everything a rendered row displays (cell values + pending highlight). */
+function logRowSig(row: LogRow): string {
+  let out = trigPendingRows.has(row) ? '1' : '0';
+  for (const c of logColumns) {
+    const v = row[c.key];
+    out += LOG_SIG_SEP + (v == null ? '' : String(v));
+  }
+  return out;
+}
+
+/** Bring the tbody in line with logRows, reusing every unchanged row element. */
+function reconcileLogGridBody(tbody: HTMLElement): void {
+  let node = tbody.firstElementChild as HTMLTableRowElement | null;
+  for (let i = 0; i < logRows.length; i++) {
+    const row = logRows[i];
+    let tr = logRowEls.get(row) ?? null;
+    if (tr && tr.parentNode !== tbody) tr = null;          // stale (header rebuild)
+    if (tr && tr.dataset.sig !== logRowSig(row)) {          // content changed - rebuild it
+      const fresh = buildLogRowEl(row);
+      tr.replaceWith(fresh);
+      tr = fresh;
+    }
+    if (!tr) tr = buildLogRowEl(row);
+    if (tr !== node) tbody.insertBefore(tr, node);          // new row, or reordered
+    else node = node.nextElementSibling as HTMLTableRowElement | null;
+    const rh = tr.firstElementChild;
+    const label = String(i + 1);
+    if (rh && rh.textContent !== label) rh.textContent = label;   // renumber in place
+  }
+  // Drop whatever is left over (deleted rows).
+  while (node) { const next = node.nextElementSibling as HTMLTableRowElement | null; node.remove(); node = next; }
 }
 
 // -- Observer Log v2: time-stamp helpers (PC clock + optional NTP offset) --
@@ -13893,9 +14009,11 @@ async function importTemplateJson(): Promise<void> {
 /** Build one <tr> for record index `i`, with editable cells + per-row actions.
  *  Each cell's editor is chosen by the column's ROLE (counter/time/date/pick/
  *  sps/plain); see buildLogCell. */
-function buildLogRowEl(i: number): HTMLTableRowElement {
-  const row = logRows[i];
+function buildLogRowEl(row: LogRow): HTMLTableRowElement {
+  const i = logRows.indexOf(row);
   const tr = document.createElement('tr');
+  tr.dataset.sig = logRowSig(row);
+  logRowEls.set(row, tr);
   // Trigger Watch: a trigger-created row stays highlighted until the observer
   // edits it (the pending set is keyed by row-object identity, so it survives
   // re-renders and row reordering).
@@ -13906,16 +14024,19 @@ function buildLogRowEl(i: number): HTMLTableRowElement {
   rh.textContent = String(i + 1);
   tr.appendChild(rh);
 
-  for (const c of logColumns) tr.appendChild(buildLogCell(i, c));
+  for (const c of logColumns) tr.appendChild(buildLogCell(row, c));
 
   // Per-row action buttons: insert-above, delete, move up, move down.
   const act = document.createElement('td');
   const wrap = document.createElement('div');
   wrap.className = 'olog-actions';
-  wrap.appendChild(rowBtn('+', 'Insert row above', () => { logRows.splice(i, 0, blankLogRow()); saveLog(); renderLog(); }));
-  wrap.appendChild(rowBtn('↑', 'Move up', () => moveLogRow(i, -1)));
-  wrap.appendChild(rowBtn('↓', 'Move down', () => moveLogRow(i, 1)));
-  wrap.appendChild(rowBtn('✕', 'Delete row', () => { void logDeleteRow(i); }));
+  // Indices shift as rows are inserted/deleted, so every action resolves the row's
+  // CURRENT index by identity at click time.
+  const at = () => logRows.indexOf(row);
+  wrap.appendChild(rowBtn('+', 'Insert row above', () => { const k = at(); if (k < 0) return; logRows.splice(k, 0, blankLogRow()); saveLog(); renderLog(); }));
+  wrap.appendChild(rowBtn('↑', 'Move up', () => moveLogRow(at(), -1)));
+  wrap.appendChild(rowBtn('↓', 'Move down', () => moveLogRow(at(), 1)));
+  wrap.appendChild(rowBtn('✕', 'Delete row', () => { void logDeleteRow(at()); }));
   act.appendChild(wrap);
   tr.appendChild(act);
   return tr;
@@ -13950,31 +14071,37 @@ async function logDeleteRow(i: number) {
 
 /** Build a single editable <td> for row `i`, column `c`, dispatching on the
  *  column ROLE. Falls back to the plain editor for unknown roles. */
-function buildLogCell(i: number, c: LogColumn): HTMLTableCellElement {
+function buildLogCell(row: LogRow, c: LogColumn): HTMLTableCellElement {
   const role: LogColRole = c.role ?? defaultColRole(c);
   switch (role) {
-    case 'pick': return logPickCell(i, c);
-    case 'time': return logTimeCell(i, c);
-    case 'date': return logDateCell(i, c);
-    case 'counter': return logCounterCell(i, c);
-    case 'sps': return logSpsCell(i, c);
-    default: return logPlainCell(i, c);
+    case 'pick': return logPickCell(row, c);
+    case 'time': return logTimeCell(row, c);
+    case 'date': return logDateCell(row, c);
+    case 'counter': return logCounterCell(row, c);
+    case 'sps': return logSpsCell(row, c);
+    default: return logPlainCell(row, c);
   }
 }
 
 /** Read the current cell value as a display string. */
-function logCellStr(i: number, key: string): string {
-  const raw = logRows[i]?.[key];
+function logCellStr(row: LogRow, key: string): string {
+  const raw = row?.[key];
   return raw == null ? '' : String(raw);
 }
 
 /** Commit a string value into a cell, coercing to number when the column is numeric.
  *  When the edited cell is a Shot point / Source line DRIVER, kick off a live SPS
  *  lookup that auto-fills the row's other sps-role columns (no-op without SPS). */
-function commitLogCell(i: number, c: LogColumn, v: string): void {
+function commitLogCell(row: LogRow, c: LogColumn, v: string): void {
   const isNum = c.type === 'number' || c.role === 'counter';
-  logRows[i][c.key] = isNum && v.trim() !== '' && isFinite(Number(v)) ? Number(v) : v;
+  row[c.key] = isNum && v.trim() !== '' && isFinite(Number(v)) ? Number(v) : v;
   saveLog();
+  const i = logRows.indexOf(row);
+  if (i < 0) return;
+  // The row element now shows the committed value - keep its signature in step so
+  // the next reconcile does not rebuild it needlessly.
+  const tr = logRowEls.get(row);
+  if (tr) tr.dataset.sig = logRowSig(row);
   trigClearPending(i); // an observer edit verifies a trigger-created pending row
   if (isSpsDriverColumn(c)) void liveSpsLookup(i);
 }
@@ -14027,64 +14154,64 @@ function cellBtn(label: string, title: string, fn: () => void): HTMLButtonElemen
 }
 
 /** 'plain' role - text/number input (the original default behaviour). */
-function logPlainCell(i: number, c: LogColumn): HTMLTableCellElement {
+function logPlainCell(row: LogRow, c: LogColumn): HTMLTableCellElement {
   const inp = document.createElement('input');
   inp.className = 'olog-cell' + (c.type === 'number' ? ' num' : '');
   inp.type = c.type === 'number' ? 'number' : 'text';
-  inp.value = logCellStr(i, c.key);
-  inp.addEventListener('change', () => commitLogCell(i, c, inp.value));
+  inp.value = logCellStr(row, c.key);
+  inp.addEventListener('change', () => commitLogCell(row, c, inp.value));
   wireCellCopy(inp);
   return cellWithButton(inp);
 }
 
 /** 'counter' role - number input. Auto-increment (prev+step) on add-row is an
  *  OPT-IN per-column flag honoured in addLogRow; the cell itself is a plain number. */
-function logCounterCell(i: number, c: LogColumn): HTMLTableCellElement {
+function logCounterCell(row: LogRow, c: LogColumn): HTMLTableCellElement {
   const inp = document.createElement('input');
   inp.className = 'olog-cell num';
   inp.type = 'number';
   if (c.step != null && isFinite(c.step)) inp.step = String(c.step);
-  inp.value = logCellStr(i, c.key);
+  inp.value = logCellStr(row, c.key);
   if (c.autoInc) inp.title = `Auto-increment (+${c.step ?? 1}) on new row`;
-  inp.addEventListener('change', () => commitLogCell(i, c, inp.value));
+  inp.addEventListener('change', () => commitLogCell(row, c, inp.value));
   wireCellCopy(inp);
   return cellWithButton(inp);
 }
 
 /** 'time' role - time input + a 'Now' button stamping HH:MM:SS from the (NTP-
  *  corrected) computer clock. */
-function logTimeCell(i: number, c: LogColumn): HTMLTableCellElement {
+function logTimeCell(row: LogRow, c: LogColumn): HTMLTableCellElement {
   const inp = document.createElement('input');
   inp.className = 'olog-cell';
   inp.type = 'time'; inp.step = '1';     // seconds resolution
-  inp.value = logCellStr(i, c.key);
-  inp.addEventListener('change', () => commitLogCell(i, c, inp.value));
+  inp.value = logCellStr(row, c.key);
+  inp.addEventListener('change', () => commitLogCell(row, c, inp.value));
   const btn = cellBtn('Now', `Stamp the current time (${logTimeSource === 'ntp' ? 'NTP-corrected' : 'PC clock'})`, () => {
     inp.value = nowTimeStr();
-    commitLogCell(i, c, inp.value);
+    commitLogCell(row, c, inp.value);
   });
   return cellWithButton(inp, btn);
 }
 
 /** 'date' role - date input + a 'Today' button. */
-function logDateCell(i: number, c: LogColumn): HTMLTableCellElement {
+function logDateCell(row: LogRow, c: LogColumn): HTMLTableCellElement {
   const inp = document.createElement('input');
   inp.className = 'olog-cell';
   inp.type = 'date';
-  inp.value = logCellStr(i, c.key);
-  inp.addEventListener('change', () => commitLogCell(i, c, inp.value));
+  inp.value = logCellStr(row, c.key);
+  inp.addEventListener('change', () => commitLogCell(row, c, inp.value));
   const btn = cellBtn('Today', 'Set to today', () => {
     inp.value = todayDateStr();
-    commitLogCell(i, c, inp.value);
+    commitLogCell(row, c, inp.value);
   });
   return cellWithButton(inp, btn);
 }
 
 /** 'pick' role - <select> of the column's options (Status keeps its vocabulary
  *  + colour coding). */
-function logPickCell(i: number, c: LogColumn): HTMLTableCellElement {
+function logPickCell(row: LogRow, c: LogColumn): HTMLTableCellElement {
   const td = document.createElement('td');
-  const val = logCellStr(i, c.key);
+  const val = logCellStr(row, c.key);
   const sel = document.createElement('select');
   const isStatus = c.key === 'status';
   sel.className = 'olog-cell' + (isStatus ? ' olog-status-cell' : '');
@@ -14096,8 +14223,10 @@ function logPickCell(i: number, c: LogColumn): HTMLTableCellElement {
   }
   if (isStatus) applyStatusClass(sel, val || (opts[0] ?? ''));
   sel.addEventListener('change', () => {
-    logRows[i][c.key] = sel.value;
+    row[c.key] = sel.value;
+    const tr0 = logRowEls.get(row);
     if (isStatus) applyStatusClass(sel, sel.value);
+    if (tr0) tr0.dataset.sig = logRowSig(row);
     saveLog();
   });
   td.appendChild(sel);
@@ -14107,19 +14236,21 @@ function logPickCell(i: number, c: LogColumn): HTMLTableCellElement {
 /** 'sps' role - editable input plus an 'SPS' lookup affordance. The live lookup
  *  is wired by the backend agent via setSpsLookupHook; until then the button is
  *  disabled and the cell behaves as a plain editable input. */
-function logSpsCell(i: number, c: LogColumn): HTMLTableCellElement {
+function logSpsCell(row: LogRow, c: LogColumn): HTMLTableCellElement {
   const inp = document.createElement('input');
   inp.className = 'olog-cell' + (c.type === 'number' ? ' num' : '');
   inp.type = c.type === 'number' ? 'number' : 'text';
-  inp.value = logCellStr(i, c.key);
-  inp.addEventListener('change', () => commitLogCell(i, c, inp.value));
+  inp.value = logCellStr(row, c.key);
+  inp.addEventListener('change', () => commitLogCell(row, c, inp.value));
   wireCellCopy(inp);
   const btn = cellBtn('SPS', `Look up ${c.srcField ?? 'value'} from the loaded SPS survey`, () => {
     if (!spsLookupHook) return;
-    void spsLookupHook(logRows[i], c).then((v) => {
+    void spsLookupHook(row, c).then((v) => {
       if (v == null) return;
       inp.value = String(v);
-      logRows[i][c.key] = v;
+      row[c.key] = v;
+      const tr1 = logRowEls.get(row);
+      if (tr1) tr1.dataset.sig = logRowSig(row);
       saveLog();
     }).catch(() => { /* ignore lookup failure */ });
   });
@@ -14523,6 +14654,8 @@ function trigBeep(): void {
 function trigClearPending(i: number): void {
   const row = logRows[i];
   if (!row || !trigPendingRows.delete(row)) return;
+  const tr = logRowEls.get(row);
+  if (tr) { tr.classList.remove('olog-row-pending'); tr.dataset.sig = logRowSig(row); return; }
   const tbody = $opt('ologTbody');
   tbody?.children[i]?.classList.remove('olog-row-pending');
 }
@@ -15306,7 +15439,7 @@ function setSignature(name: string) {
 }
 /** Pending callback to run once the user signs via the modal (used by ensureSignature). */
 let sigResolve: (() => void) | null = null;
-/** One-shot guard so the deferred first-action sign prompt is scheduled only once. */
+/** One-shot guard so the non-blocking sign invitation is offered once per session. */
 let sigPromptScheduled = false;
 /** Open the Audit/Identity modal focused on the signature field; resolves when a
  *  non-empty name is saved (or the modal is closed). Never uses window.prompt. */
@@ -15340,31 +15473,34 @@ function loadAuditLog() {
 function persistAuditLog() {
   try { localStorage.setItem(AUDIT_KEY, JSON.stringify(auditEntries)); } catch { /* ignore quota */ }
 }
-function getAuditLog(): AuditEntry[] { return auditEntries.slice(); }
-/** Append an audit entry. Signs the user first if they have not yet (fire-and-forget
- *  ensureSignature so the modal prompts; the entry records '(unsigned)' if still unset). */
+/** Append an audit entry. If the user has not signed yet, invite them with a
+ *  non-blocking snackbar (never an auto-opened modal); the entry records
+ *  '(unsigned)' until a name is saved. */
 function audit(action: string, detail: string, tab?: string) {
-  // Defer the first-action sign prompt: open the modal AFTER the triggering action's
-  // result has had a frame to paint, so it no longer intercepts/overlays the result
-  // the user just produced. The entry below still records '(unsigned)' until signed.
   if (!getSignature() && !sigPromptScheduled) {
     sigPromptScheduled = true;
-    // Never raise the signature prompt while the user is inside ANOTHER dialog.
-    // The audit modal it opens covers the whole viewport, so popping it over an
-    // open wizard swallowed every later click - the GeoTIFF wizard's Export
-    // button stopped responding entirely and nothing was written. Wait until the
-    // user has closed what they were doing, then ask.
-    const tryPrompt = () => {
-      sigPromptScheduled = false;
+    // NEVER auto-open the audit modal. It covers the whole viewport, so raising it
+    // unasked stole the user's next click: over another dialog it killed the
+    // GeoTIFF wizard's Export button (fixed in 4f310b7), and over a plain TAB it
+    // swallowed the click on SPS Creation's "Generate…" - elementFromPoint over the
+    // button returned DIV#auditBack.modal-back.open. The invitation is now a
+    // non-blocking snackbar with a "Sign…" action: nothing is covered, no click is
+    // eaten, and the modal opens only when the user asks for it. Offered once per
+    // session; the entry below still records '(unsigned)' until signed.
+    const invite = () => {
       if (getSignature()) return;
-      if (document.querySelector('.modal-back.open')) {
-        sigPromptScheduled = true;
-        window.setTimeout(tryPrompt, 1500);
+      // Don't clobber a result snackbar the user is still reading, and stay quiet
+      // while a dialog is up so the invitation is not missed behind it.
+      if ($opt('undoToast')?.classList.contains('show') || document.querySelector('.modal-back.open')) {
+        window.setTimeout(invite, 1500);
         return;
       }
-      void ensureSignature();
+      // Kept short on purpose: the snackbar's message cell ellipsises, and a longer
+      // sentence was cut off mid-word at the default window width.
+      undoToast('Changes are logged as “(unsigned)” - set your name in Audit.',
+        () => { void ensureSignature(); }, 'Sign…');
     };
-    requestAnimationFrame(() => window.setTimeout(tryPrompt, 500));
+    requestAnimationFrame(() => window.setTimeout(invite, 500));
   }
   const entry: AuditEntry = {
     ts: effectiveNow().toISOString(),
@@ -17004,6 +17140,9 @@ let fieldRoleLocked = false;
 let fieldSettingsLoaded = false;
 let fieldAdapters: FieldNetAdapter[] = [];
 const fieldPeers = new Map<string, FieldPeerInfo>();
+/** Hosts that announced themselves but have NOT been approved yet - listed with
+ *  an Approve button; nothing syncs with them until the user clicks it. */
+const fieldPending = new Map<string, FieldPeerInfo>();
 const fieldLogLines: string[] = [];
 
 const fInput = (id: string) => $opt(id) as HTMLInputElement | null;
@@ -17043,18 +17182,55 @@ function fldSetRunning(on: boolean): void {
   (fInput('fldConnectBtn') as HTMLButtonElement | null)?.toggleAttribute('disabled', !on);
 }
 
+/** Append a <td> whose text is set via textContent - peer-supplied strings (IP,
+ *  role, file names) are never interpolated into HTML. */
+function fldCell(tr: HTMLTableRowElement, text: string, title?: string): HTMLTableCellElement {
+  const td = document.createElement('td');
+  td.textContent = text;
+  if (title !== undefined) td.setAttribute('title', title);
+  tr.appendChild(td);
+  return td;
+}
+
 function fldRenderPeers(): void {
   const body = $opt('fldPeerBody');
   const empty = $opt('fldPeerEmpty');
   if (!body) return;
   body.innerHTML = '';
   const roleName: Record<FieldRole, string> = { both: 'Two-way', master: 'Master', slave: 'Slave' };
-  for (const p of fieldPeers.values()) {
+  const addRow = (p: FieldPeerInfo, trusted: boolean): void => {
     const tr = document.createElement('tr');
-    tr.innerHTML = `<td>${p.ip}</td><td>${p.port}</td><td>${roleName[p.role] ?? p.role}</td>`;
+    fldCell(tr, p.ip);
+    fldCell(tr, String(p.port));
+    fldCell(tr, roleName[p.role] ?? String(p.role));
+    const td = document.createElement('td');
+    const label = document.createElement('span');
+    label.textContent = trusted ? 'Approved ✓ ' : 'Not approved ';
+    td.appendChild(label);
+    const btn = document.createElement('button');
+    btn.className = 'btn sm';
+    btn.type = 'button';
+    btn.textContent = trusted ? 'Revoke' : 'Approve';
+    btn.title = trusted
+      ? 'Stop syncing with this machine and stop serving it files'
+      : 'Trust this machine: sync with it and let it read the shared folder';
+    btn.addEventListener('click', () => void fldTrustPeer(p.ip, !trusted));
+    td.appendChild(btn);
+    tr.appendChild(td);
     body.appendChild(tr);
-  }
-  if (empty) empty.style.display = fieldPeers.size === 0 ? '' : 'none';
+  };
+  for (const p of fieldPeers.values()) addRow(p, true);
+  for (const p of fieldPending.values()) addRow(p, false);
+  if (empty) empty.style.display = fieldPeers.size === 0 && fieldPending.size === 0 ? '' : 'none';
+}
+
+async function fldTrustPeer(ip: string, trusted: boolean): Promise<void> {
+  const r = await api.fieldTrustPeer(ip, trusted);
+  if (!r.ok) { setStatus('fldSyncStatus', r.error || 'Could not change the peer approval.', 'err'); return; }
+  if (trusted) { fieldPending.delete(ip); fieldPeers.set(ip, fieldPeers.get(ip) ?? { ip, port: 47824, role: 'both' }); }
+  else { fieldPeers.delete(ip); }
+  fldRenderPeers();
+  setStatus('fldSyncStatus', trusted ? `Approved ${ip}.` : `Revoked ${ip}.`, 'ok');
 }
 
 function fldFmtSize(n: number): string {
@@ -17075,8 +17251,14 @@ async function fldLoadHistory(): Promise<void> {
     const time = new Date((e.timestamp || 0) * 1000).toLocaleTimeString();
     const icon = e.action === 'deleted' ? '🗑' : '⬇';
     const file = (e.filename || '').split('/').pop() || e.filename;
+    // Every value below came from a peer over the network - build the cells with
+    // textContent/setAttribute so nothing is ever parsed as markup.
     const tr = document.createElement('tr');
-    tr.innerHTML = `<td>${time}</td><td>${icon} ${e.action}</td><td title="${e.filename}">${file}</td><td>${e.peer_ip || '-'}</td><td>${fldFmtSize(e.size_bytes)}</td>`;
+    fldCell(tr, time);
+    fldCell(tr, `${icon} ${e.action}`);
+    fldCell(tr, String(file ?? ''), String(e.filename ?? ''));
+    fldCell(tr, e.peer_ip || '-');
+    fldCell(tr, fldFmtSize(e.size_bytes));
     body.appendChild(tr);
   }
   if (empty) empty.style.display = entries.length === 0 ? '' : 'none';
@@ -17156,9 +17338,12 @@ async function fldApplySettings(): Promise<void> {
   fldSetWatchSeg(s.sync_mode || 'on_change');
   const mip = fInput('fldManualIp'); if (mip) mip.value = s.manual_ip || '';
   const ssid = fInput('fldHsSsid'); if (ssid) ssid.value = s.hs_ssid || 'WifiSync_Host';
-  const pass = fInput('fldHsPass'); if (pass) pass.value = s.hs_pass || 'wifisync1';
+  const pass = fInput('fldHsPass'); if (pass) pass.value = s.hs_pass || '';
   const iv = fInput('fldInterval'); if (iv) iv.value = String(s.sync_interval || '5');
   const thr = fInput('fldThrottle'); if (thr) thr.checked = !!s.throttle_enabled;
+  const ard = fInput('fldAllowDelete'); if (ard) ard.checked = !!s.allow_remote_delete;
+  fieldPending.clear();
+  fldRenderPeers();
   const kbps = fInput('fldKbps'); if (kbps) { kbps.value = String(s.throttle_kbps || '500'); kbps.disabled = !s.throttle_enabled; }
   await fldPopulateAdapters(s.adapter);
   await fldPopulateHsAdapters();
@@ -17171,12 +17356,15 @@ function fldGatherSettings(): FieldSettings {
     adapter: sel?.value || '',
     manual_ip: (fInput('fldManualIp')?.value || '').trim(),
     hs_ssid: fInput('fldHsSsid')?.value || 'WifiSync_Host',
-    hs_pass: fInput('fldHsPass')?.value || 'wifisync1',
+    hs_pass: fInput('fldHsPass')?.value || '',
     role: fieldRole,
     sync_mode: fieldWatch,
     sync_interval: String(fInput('fldInterval')?.value || '5'),
     throttle_enabled: !!fInput('fldThrottle')?.checked,
     throttle_kbps: String(fInput('fldKbps')?.value || '500'),
+    // trusted_peers is deliberately NOT echoed back: main owns that list and a
+    // blind round-trip from here could clear it.
+    allow_remote_delete: !!fInput('fldAllowDelete')?.checked,
   };
 }
 
@@ -17210,6 +17398,7 @@ async function fldStop(): Promise<void> {
   await api.fieldStop();
   fldSetRunning(false);
   fieldPeers.clear();
+  fieldPending.clear();
   fldRenderPeers();
   setStatus('fldEngineStatus', 'Stopped.');
 }
@@ -17218,14 +17407,18 @@ function fldHandleEvent(ev: FieldEventMsg): void {
   switch (ev.type) {
     case 'log': fldLog(ev.msg); break;
     case 'peer':
-      if (ev.action === 'found') fieldPeers.set(ev.ip, { ip: ev.ip, port: ev.port ?? 47824, role: ev.role ?? 'both' });
-      else fieldPeers.delete(ev.ip);
+      if (ev.action === 'found') { fieldPending.delete(ev.ip); fieldPeers.set(ev.ip, { ip: ev.ip, port: ev.port ?? 47824, role: ev.role ?? 'both' }); }
+      else if (ev.action === 'pending') fieldPending.set(ev.ip, { ip: ev.ip, port: ev.port ?? 47824, role: ev.role ?? 'both' });
+      else { fieldPeers.delete(ev.ip); fieldPending.delete(ev.ip); }
       fldRenderPeers();
       break;
     case 'status':
       fieldPeers.clear();
+      fieldPending.clear();
       for (const p of ev.peers) fieldPeers.set(p.ip, p);
+      for (const p of ev.pending ?? []) fieldPending.set(p.ip, p);
       fldRenderPeers();
+      if (ev.allowRemoteDelete !== undefined) { const ard = fInput('fldAllowDelete'); if (ard) ard.checked = ev.allowRemoteDelete; }
       fldSetRunning(ev.running);
       break;
     case 'sync':
@@ -17275,6 +17468,13 @@ function initField(): void {
   fInput('fldThrottle')?.addEventListener('change', () => {
     const k = fInput('fldKbps'); if (k) k.disabled = !fInput('fldThrottle')?.checked;
   });
+  fInput('fldAllowDelete')?.addEventListener('change', () => {
+    const on = !!fInput('fldAllowDelete')?.checked;
+    void api.fieldSetAllowRemoteDelete(on);
+    fldLog(on
+      ? 'Peer-driven deletions ENABLED - a file deleted on an approved peer will now be deleted here too.'
+      : 'Peer-driven deletions disabled - peers can add and update files here, but never delete them.');
+  });
 
   $opt('fldStartBtn')?.addEventListener('click', () => void fldStart());
   $opt('fldStopBtn')?.addEventListener('click', () => void fldStop());
@@ -17299,7 +17499,19 @@ function initField(): void {
   $opt('fldHsStart')?.addEventListener('click', async () => {
     const ssid = fInput('fldHsSsid')?.value || '';
     const pass = fInput('fldHsPass')?.value || '';
-    if (pass.length < 8) { fldLog('Hotspot password must be at least 8 characters.'); return; }
+    if (!ssid.trim()) { fldLog('Give the hotspot a name before starting it.'); return; }
+    // No password ships by default (it would be identical on every install), so the
+    // operator must type one here. Say exactly what is wrong and what to do.
+    if (!pass) {
+      fldLog('No hotspot password set. Type one in the Password box above (at least 8 characters), then press Start hotspot. There is no default password.');
+      fInput('fldHsPass')?.focus();
+      return;
+    }
+    if (pass.length < 8) {
+      fldLog(`Hotspot password is too short (${pass.length} of 8 characters). Add ${8 - pass.length} more, then press Start hotspot.`);
+      fInput('fldHsPass')?.focus();
+      return;
+    }
     try { await api.fieldSettingsSet(fldGatherSettings()); } catch { /* ignore */ }
     const adapter = fldSelectedHsAdapter();
     fldLog(`Starting hotspot "${ssid}"${adapter ? ` on ${adapter}` : ''}…`);
@@ -17524,8 +17736,21 @@ function init() {
   for (const id of ['sensDead', 'sensNoisy', 'sensAmp', 'sensClipped', 'sensReversed']) {
     $opt(id)?.addEventListener('change', () => { if (secHealth) secReclassifyHealth(); });
   }
+  // The Advanced threshold sliders fire on every pixel of the drag, and each
+  // re-classification walks EVERY scanned trace (up to half a million) on the UI
+  // thread. Coalesce to one re-classification per animation frame - same guard the
+  // section-gain slider above already uses; the result is identical, just throttled.
+  let secHealthRaf = false;
+  const secHealthReclassifyThrottled = () => {
+    if (secHealthRaf) return;
+    secHealthRaf = true;
+    requestAnimationFrame(() => { secHealthRaf = false; if (secHealth) secReclassifyHealth(); });
+  };
   for (const id of ['advFlatEps', 'advDeadFrac', 'advHotZ', 'advWeakZ', 'advNoiseZ', 'advSpecK', 'advZcrAbs', 'advClipRun', 'advSpikeK', 'advReverseCorr', 'advReverseConf']) {
-    $opt(id)?.addEventListener('input', () => { if (secHealth) secReclassifyHealth(); });
+    $opt(id)?.addEventListener('input', secHealthReclassifyThrottled);
+    // A committed value (release / typed entry) always lands, even if the last
+    // frame was coalesced away.
+    $opt(id)?.addEventListener('change', () => { if (secHealth) secReclassifyHealth(); });
   }
   initZoomViewer();      // box-zoom region viewer (close / backdrop / header-drag wiring)
   // File Viewer: step to the previous/next seismic file in the open file's folder.
@@ -17590,9 +17815,8 @@ function init() {
   $('spsExpKmlBtn').addEventListener('click', () => void exportSPS('kml'));
   $('spsExpGeojsonBtn').addEventListener('click', () => void exportSPS('geojson'));
   $('spsExpCsvBtn').addEventListener('click', () => void exportSPS('csv'));
-  $opt('spsExpP111Btn')?.addEventListener('click', () => void exportSPS('p111'));
-  $opt('spsExpCoordCsvBtn')?.addEventListener('click', () => void exportSPS('coordcsv'));
-  $opt('spsExpSegP1Btn')?.addEventListener('click', () => void exportSPS('segp1'));
+  // P1/11, coord-CSV and SEG-P1 have no button of their own - they are written
+  // by the "Export as" picker below, which reaches the same exportSPS(kind).
   $opt('spsExpFormatBtn')?.addEventListener('click', () => {
     const f = (($opt('spsExpFormat') as HTMLSelectElement | null)?.value || 'sps') as 'sps' | 'segp1' | 'p111' | 'coordcsv';
     void exportSPS(f, 'spsExpFmtStatus');
@@ -17641,6 +17865,8 @@ function onKeyDown(e: KeyboardEvent) {
   // Esc closes whichever overlay is open (confirm dialog is the most modal, then
   // the audit modal / SPS header editor / manual; finally it dismisses the undo toast).
   if (e.key === 'Escape' && confirmOpen()) { closeConfirm(false); return; }
+  // The value prompt is as modal as the confirm dialog - Esc cancels it.
+  if (e.key === 'Escape' && $opt('promptBack')?.classList.contains('open')) { closePrompt(null); return; }
   // The box-zoom viewer + the magnifier select modes are dismissed by Esc too.
   if (e.key === 'Escape' && zoomViewerOpen()) { closeZoom(); return; }
   if (e.key === 'Escape' && (secBoxMode || traceBoxMode)) { exitBoxModes(); return; }
@@ -17652,6 +17878,14 @@ function onKeyDown(e: KeyboardEvent) {
   if (e.key === 'Escape' && spsHeadersOpen()) { closeSpsHeaders(); return; }
   if (e.key === 'Escape' && spsRenumberOpen()) { closeSpsRenumber(); return; }
   if (e.key === 'Escape' && spsWizardOpen()) { closeCreateWizard(); return; }
+  // The GeoTIFF wizard covers the icon rail, so without an Esc branch the user was
+  // trapped in it (only its own ✕ / Cancel got out). Same for the three Observer Log
+  // dialogs - the Help promises "Esc closes any dialog", so every modal honours it.
+  if (e.key === 'Escape' && $opt('geotiffBack')?.classList.contains('open')) { closeGeotiffWizard(); return; }
+  if (e.key === 'Escape' && $opt('ologColMgrBack')?.classList.contains('open')) { closeColumnsManager(); return; }
+  if (e.key === 'Escape' && $opt('ologRenumBack')?.classList.contains('open')) { closeRenumberModal(); return; }
+  if (e.key === 'Escape' && $opt('otwCfgBack')?.classList.contains('open')) { closeTrigCfgModal(); return; }
+  if (e.key === 'Escape' && $opt('otwCatchBack')?.classList.contains('open')) { closeTrigCatchup(); return; }
   if (e.key === 'Escape' && manualOpen()) { closeManual(); return; }
   if (e.key === 'Escape' && feedbackOpen()) { closeFeedback(); return; }
   if (e.key === 'Escape' && $opt('undoToast')?.classList.contains('show')) { hideUndoToast(); return; }
@@ -17678,8 +17912,13 @@ function onKeyDown(e: KeyboardEvent) {
   if (!mod && e.key === ']') { e.preventDefault(); void navFile(1); return; }
   if (!mod && e.key >= '1' && e.key <= '9') {
     const idx = parseInt(e.key, 10) - 1;
-    if (idx >= 0 && idx < TABS.length) { e.preventDefault(); switchTab(TABS[idx]); }
+    if (idx >= 0 && idx < TAB_DIGITS) { e.preventDefault(); switchTab(TABS[idx]); }
+    return;
   }
+  // Bare 'O' - the Observer Log, which has no digit since the digits follow the
+  // rail. Reached only past the typing guard above, so an observer typing a note
+  // with an 'o' in it stays in the field instead of teleporting between tabs.
+  if (!mod && e.key.toUpperCase() === KEY_OBSLOG) { e.preventDefault(); switchTab(KEY_OBSLOG_TAB); return; }
 }
 
 if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', init);

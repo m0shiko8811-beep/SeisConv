@@ -5,6 +5,84 @@ All notable changes to SeisConv are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.7.12] - 2026-09-03
+
+### Fixed, and these produced wrong coordinates
+
+Six defects in the coordinate engine, every one of them silent. Each was verified
+against PROJ driven with SeisConv's own registry parameters, so a disagreement could
+only be our arithmetic.
+
+- **Inverse UTM ignored the southern hemisphere.** A station at 24 degrees south came
+  back at 66 degrees north, about ten thousand kilometres away. The forward direction was
+  correct, so a round trip inside SeisConv never revealed it, and every test in the suite
+  hardcoded the northern hemisphere. It reached the reprojection, the KML and shapefile
+  exports, the GeoTIFF raster and the P1/11 export.
+- **The linear unit was ignored**, so grids in feet returned metres. A false easting of
+  700,000 feet came back as 213,360. This affected 499 supported grids.
+- **UTM assumed the WGS 84 ellipsoid** whatever the datum said, worth 53 metres across
+  1,227 grids.
+- **The inverse applied no datum tie while the forward did**, a 408 metre round-trip
+  error on every UTM grid not on WGS 84.
+- **Rotation-only datum transforms were discarded** by a screening test that only looked
+  at translation, worth about 190 metres on the Saudi Arabian grids.
+- **The prime meridian offset was ignored**, worth about 615 kilometres on grids
+  referenced to Oslo.
+
+The cause in every case was the same: two implementations of one idea that disagreed,
+and a dispatch that shortcut to helpers which only ever understood WGS 84. Both
+directions now resolve the ellipsoid, the datum tie, the linear unit and the prime
+meridian through one path, so they cannot drift apart again. A golden fixture built from
+PROJ pins eighteen cases; that dispatch previously had no external reference at all.
+
+- A coordinate scalar that cannot represent the survey no longer clamps every coordinate
+  to the 32-bit maximum in silence. It steps back to the largest scalar that fits and
+  says so.
+- The SEG-Y writer declares the padded sample count, so a file with unequal trace lengths
+  no longer desynchronises readers, including our own.
+- The SEG-Y writer emits receiver elevation, surface elevation and source depth, which it
+  had been dropping while still writing the elevation scalar beside them.
+
+### Fixed, field and interface
+
+- **The observer log froze for about half a second on every shot.** At a production day's
+  scale it rebuilt roughly ninety thousand elements each time a row arrived. It now
+  reconciles the table instead: measured 450 to 533 ms before, 3 to 7 ms after.
+- **A failed save is no longer hidden.** The log is saved on a debounce rather than on
+  every keystroke, and if saving fails you get a persistent banner telling you to export
+  now, instead of the failure being swallowed and the log quietly ceasing to persist.
+- **WiFiSync no longer trusts any machine on the network.** A peer must be approved once,
+  and the shared folder must be one you actually chose. A remote peer cannot delete your
+  local files at all unless you explicitly allow it.
+- Peer-supplied text is no longer interpolated into the interface as markup, and reads
+  from a peer are bounded.
+- Filenames are sanitised against control characters, bidi overrides and over-long names,
+  which previously made an entire batch fail and allowed a file to display with a
+  different extension than it has.
+- Trace-health threshold sliders are throttled like the gain slider beside them, and
+  survey QC no longer rescans a whole receiver line for every cross-reference record.
+
+### Fixed, found after the release was cut
+
+- **The hotspot shipped with a hardcoded default password.** The repository is public and
+  the string was compiled into the installer, so every SeisConv hotspot left on defaults
+  had a password anyone could look up. There is now no default: the field is empty, and
+  starting without a usable password fails with a message that says what to do. A settings
+  file still carrying the old value is migrated to empty rather than quietly kept.
+- **The interface size control was undiscoverable.** The zoom already existed, persisted,
+  with buttons and keyboard shortcuts in the status bar, but nobody found it. It now has a
+  slider, reads as "UI size", is styled as a control rather than as another read-only
+  status field, and is documented in the Help for the first time. It is the same
+  mechanism, not a second one.
+- **Above roughly 200 percent zoom the status bar was clipped off the bottom of the
+  window**, so the only mouse route back out of zoom disappeared. Someone who zoomed in
+  too far to read the interface had no way back without knowing the keyboard shortcut.
+
+### Changed
+
+- Electron moves from 39 to 44.1.1, clearing the last published advisory. `npm audit`
+  reports zero.
+
 ## [0.7.11] - 2026-09-02
 
 ### Security
@@ -204,4 +282,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Feature tabs - Converter, Trace Inspector, File Viewer, SPS, SPS Creation, Geometry QC, Velocity, Spectrum Analysis, and Trace Workbench.
 - Streaming trace index for multi-gigabyte files; worker-thread parsing.
 
+[0.7.12]: https://github.com/m0shiko8811-beep/SeisConv/releases/tag/v0.7.12
+[0.7.11]: https://github.com/m0shiko8811-beep/SeisConv/releases/tag/v0.7.11
 [0.7.10]: https://github.com/m0shiko8811-beep/SeisConv/releases/tag/v0.7.10

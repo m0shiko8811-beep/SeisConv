@@ -1,0 +1,54 @@
+{
+  "image": "img/14-sps-generate-2d.png",
+  "name": "14-sps-generate-2d",
+  "caption": "SPS generate wizard, 2D: sources and receivers laid along each picked line",
+  "callouts": [
+    {
+      "n": 1,
+      "label": "2D acquisition was chosen before opening the wizard",
+      "selector": "#spsCreate2d",
+      "rect": {
+        "x": 93,
+        "y": 184,
+        "w": 39,
+        "h": 26
+      }
+    },
+    {
+      "n": 2,
+      "label": "Receiver interval and numbering",
+      "selector": "#cRcvInt",
+      "rect": {
+        "x": 426,
+        "y": 788,
+        "w": 358,
+        "h": 26
+      }
+    },
+    {
+      "n": 3,
+      "label": "Source interval and numbering",
+      "selector": "#cSrcInt",
+      "rect": {
+        "x": 802,
+        "y": 788,
+        "w": 358,
+        "h": 26
+      }
+    },
+    {
+      "n": 4,
+      "label": "Line and point numbering of the generated stations",
+      "selector": "#cRcvLineStart",
+      "rect": {
+        "x": 426,
+        "y": 846,
+        "w": 358,
+        "h": 26
+      }
+    }
+  ],
+  "missingCallouts": [],
+  "frameLeaks": [],
+  "bytes": 376114
+}

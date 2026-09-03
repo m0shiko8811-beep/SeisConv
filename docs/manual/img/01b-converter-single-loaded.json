@@ -1,0 +1,43 @@
+{
+  "image": "img/01b-converter-single-loaded.png",
+  "name": "01b-converter-single-loaded",
+  "caption": "Converter with a SEG-Y open: what was read, and the output format",
+  "callouts": [
+    {
+      "n": 1,
+      "label": "Open a seismic file",
+      "selector": "#openBtn2",
+      "rect": {
+        "x": 1417,
+        "y": 425,
+        "w": 132,
+        "h": 30
+      }
+    },
+    {
+      "n": 2,
+      "label": "What SeisConv read: format, revision, trace count, sample count, interval",
+      "selector": "#singleFoundName",
+      "rect": {
+        "x": 199,
+        "y": 368,
+        "w": 133,
+        "h": 16
+      }
+    },
+    {
+      "n": 3,
+      "label": "Output format - one chip per single-file writer",
+      "selector": "#fmtChips",
+      "rect": {
+        "x": 148,
+        "y": 537,
+        "w": 1401,
+        "h": 49
+      }
+    }
+  ],
+  "missingCallouts": [],
+  "frameLeaks": [],
+  "bytes": 155078
+}

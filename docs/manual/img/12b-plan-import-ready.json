@@ -1,0 +1,54 @@
+{
+  "image": "img/12b-plan-import-ready.png",
+  "name": "12b-plan-import-ready",
+  "caption": "The same wizard scrolled to the role and mode, with Import now enabled",
+  "callouts": [
+    {
+      "n": 1,
+      "label": "Role chosen: receivers - Import was disabled until this was set",
+      "selector": "#piRole",
+      "rect": {
+        "x": 720,
+        "y": 554,
+        "w": 128,
+        "h": 32
+      }
+    },
+    {
+      "n": 2,
+      "label": "Replace the current plan, or append to it",
+      "selector": "#piModeReplace",
+      "rect": {
+        "x": 429,
+        "y": 557,
+        "w": 114,
+        "h": 26
+      }
+    },
+    {
+      "n": 3,
+      "label": "Keep the stations exactly as given, rather than re-laying them",
+      "selector": "#piAsPreplot",
+      "rect": {
+        "x": 426,
+        "y": 597,
+        "w": 13,
+        "h": 13
+      }
+    },
+    {
+      "n": 4,
+      "label": "Import is now enabled and names the point count",
+      "selector": "#piImport",
+      "rect": {
+        "x": 1070,
+        "y": 905,
+        "w": 119,
+        "h": 30
+      }
+    }
+  ],
+  "missingCallouts": [],
+  "frameLeaks": [],
+  "bytes": 367609
+}

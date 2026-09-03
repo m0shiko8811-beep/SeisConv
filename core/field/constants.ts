@@ -32,3 +32,18 @@ export const WFSYNC_TOMBSTONE_FILE = '.wfsync_tombstones.json';
 export const ROLE_TO_BYTE: Record<Role, number> = { both: 0, master: 1, slave: 2 };
 /** Beacon byte → role (any other byte, or a legacy 25-byte packet, → "both"). */
 export const BYTE_TO_ROLE: Record<number, Role> = { 0: 'both', 1: 'master', 2: 'slave' };
+
+// -- Hostile-peer resource caps -------------------------------------------------
+// A peer is any host that answered on the LAN, so every length it declares on the
+// wire is attacker-controlled. These ceilings bound what a single connection can
+// make the main process allocate (RAM) or write (disk).
+
+/** Max bytes accepted for a peer's JSON manifest response (u32be length). */
+export const MAX_MANIFEST_BYTES = 4 * 1024 * 1024; // 4 MiB
+/** Max declared size of a single pulled file (u64be size field). */
+export const MAX_FILE_BYTES = 16 * 1024 * 1024 * 1024; // 16 GiB
+/** Socket reader: pause the socket above this many unread buffered bytes… */
+export const SOCKET_HIGH_WATER = 4 * 1024 * 1024;
+/** …resume below this, and hard-fail the connection above the absolute ceiling. */
+export const SOCKET_LOW_WATER = 1 * 1024 * 1024;
+export const SOCKET_MAX_BUFFER = 64 * 1024 * 1024;

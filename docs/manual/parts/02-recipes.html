@@ -1,0 +1,838 @@
+<!-- Part II - hand-written worked cases. NOT generated.
+     One page per real job, phrased "I need to ...". Each opens with who it is for and what it
+     assumes, so a reader can skip the ones below or above their level.
+     Figures are placed with FIG comments and cited with FIGREF comments; docs/manual/build.ts
+     expands both from the callout keys written beside each screenshot. -->
+<section class="chapter" id="ch-recipes">
+  <h2>How to use Part II</h2>
+  <p class="summary">Ten jobs, each written as the job rather than as a tab, each stating who it is for before it starts.</p>
+
+  <p>Every case below opens with two lines - <b>For</b> and <b>Assumes</b> - so you can tell in
+  five seconds whether it is yours. If a case assumes Part I, it assumes only Part I: that you
+  can open a file, read back what the app says about it, and convert it.</p>
+
+  <p>The pictures in these cases were taken by driving the built application over a synthetic
+  survey created for the purpose. No real survey, filename, site or coordinate appears in any
+  of them, so what you see on your own data will differ in the numbers and not in the layout.</p>
+
+</section>
+
+<section class="chapter" id="rec-1">
+  <h2>1. First morning on a crew: identify an unknown file and report it</h2>
+  <p><b>For:</b> a first-day observer, or anyone handed a file with no covering note.<br>
+  <b>Assumes:</b> nothing beyond Part I.</p>
+
+  <p><b>The job.</b> Somebody hands you a memory stick with a file on it and asks "what is
+  this?". You need an answer you can put in an email in ten minutes.</p>
+
+  <ol>
+    <li><b>Open it and let the app identify it.</b> Press <span class="kbd">1</span>, click
+    <b>Pick a seismic file…</b> and choose the file. You are not asked what format it is:
+    SeisConv reads the file and determines the format, the revision, the sample encoding and
+    the byte order for itself. The panel then states what it found - see
+    <!--FIGREF:01b-converter-single-loaded-->.</li>
+    <li><b>Write down the five facts it gives you.</b> Format, revision, trace count, samples
+    per trace, sample interval. From the last two you get the record length: samples ×
+    interval. 1000 samples at 2 ms is a 2-second record.</li>
+    <li><b>Look at one trace</b> (<span class="kbd">2</span>). Step a few traces with
+    <b>Next ›</b>. The header panel beside the plot shows that trace's own header fields - the
+    shot identifier, the channel, and the coordinates if the recorder wrote any. If the
+    coordinate fields are all zero, this file has <i>no geometry</i>, which is a fact worth
+    reporting on its own.</li>
+    <li><b>Look at the whole record</b> (<span class="kbd">3</span>), with <b>AGC</b> on. You
+    are answering one question: does this look like a shot record - a first-arrival pattern
+    fanning out from a near-trace - or does it look like noise, a monitor sweep, or a test?</li>
+    <li><b>Report it.</b> A defensible report is one paragraph: the format and revision, the
+    trace and sample counts, the sample interval and record length, whether trace headers carry
+    coordinates, and what the section looks like. Say nothing you did not read off the app.</li>
+  </ol>
+
+  <p class="note">If the file will not open at all, do not guess - go to
+  <a href="#rec-10">recipe 10</a>, which is written for exactly that.</p>
+
+</section>
+
+<section class="chapter" id="rec-2">
+  <h2>2. SEG-D in, SEG-Y Rev 1 out: one file, then a whole folder</h2>
+  <p><b>For:</b> an observer or processor turning a day's field records into what processing asked for.<br>
+  <b>Assumes:</b> Part I, and that you know which revision the receiving system wants. If nobody
+  said, ask; if nobody answers, Rev 1 is the safe assumption.</p>
+
+  <p><b>Do one file first.</b> Never batch a folder you have not proven with a single file -
+  a batch multiplies a mistake by the number of shots.</p>
+  <ol>
+    <li>Open one SEG-D record on the Converter and read back what SeisConv found.</li>
+    <li>Click the <b>SEG-Y Rev 1</b> output chip.</li>
+    <li>In the name builder, switch on <b>Original name</b> and <b>Format</b> so the output
+    stays traceable to its input, as in <!--FIGREF:01c-converter-output-name-->.</li>
+    <li><b>Convert &amp; Save…</b>, choose the destination, confirm.</li>
+    <li><b>Prove it.</b> Open the SEG-Y you just wrote. Trace count, sample count and sample
+    interval must equal the SEG-D's. Press <span class="kbd">3</span> and check the section is
+    the same record. If any of the three numbers changed, stop and find out why before you
+    convert 400 more.</li>
+  </ol>
+
+  <!--FIG:01c-converter-output-name-->
+
+  <p><b>Then the folder.</b></p>
+  <ol>
+    <li>Press <span class="kbd">Ctrl</span>+<span class="kbd">B</span>. The Converter switches
+    to <b>Convert a folder (batch)</b>.</li>
+    <li><b>Pick folder…</b> - the folder of SEG-D records. The panel lists what it found, and
+    the run button names the count ("Convert 3 files"), as in
+    <!--FIGREF:02-converter-batch-->.</li>
+    <li>Choose <b>SEG-Y Rev 1</b> again - the format is chosen per mode, so set it here too.</li>
+    <li><b>Pick destination…</b> - a <i>different</i> folder from the inputs. Writing outputs
+    beside inputs is how a folder becomes unsortable.</li>
+    <li>Click the run button. Progress is reported per file; <b>Cancel</b> stops a run in
+    progress, and <b>Open folder</b> appears at the end.</li>
+  </ol>
+
+  <!--FIG:02-converter-batch-->
+  <!--FIG:02b-converter-batch-run-->
+
+  <p><b>Check the batch, not just the last file.</b> Count the outputs against the inputs -
+  if the numbers differ, the run reported errors and you need to read them. Then open the
+  first, one middle, and the last output and compare their trace and sample counts with their
+  inputs. Three spot checks catch a systematic fault; zero checks catch nothing.</p>
+
+  <p class="note">Two batch behaviours worth knowing. <b>Sequence #</b> in the name builder
+  exists only in folder mode, and numbers the outputs in the order they are processed. And
+  <b>Tape Image</b> is offered in folder mode only, because it combines a whole folder into one
+  archive container rather than converting file-for-file.</p>
+</section>
+
+<section class="chapter" id="rec-3">
+  <h2>3. A shot looks wrong: geophone, ground or recorder?</h2>
+  <p><b>For:</b> an observer with a record that does not look like the others.<br>
+  <b>Assumes:</b> Part I, and that you can open the suspect record and a known-good one from the
+  same line.</p>
+
+  <p><b>The job.</b> One record looks bad. Before anyone re-shoots it, you want to say which of
+  three things it is: a channel fault (one geophone or its cable), a ground condition (wind,
+  traffic, a soft spot - real noise, arriving at real sensors), or an instrument fault
+  (something the recorder did to every channel at once). The three leave different fingerprints,
+  and the three tools below separate them.</p>
+
+  <h3>Step 1 - let the health scan sort the traces for you</h3>
+  <p>Open the record, press <span class="kbd">3</span> for the File Viewer, and click
+  <b>Health scan</b>. Every trace is judged against its <i>local neighbours</i> rather than
+  against a fixed threshold, which is what makes the result meaningful on a record whose
+  amplitude falls off with offset. The detectors flag traces that are dead, noisy, hot or weak
+  in amplitude, clipped or spiky, or reversed in polarity.</p>
+
+  <!--FIG:05-section-health-scan-->
+
+  <p>Read the pattern, not just the count:</p>
+  <ul>
+    <li><b>One or two isolated flagged traces</b>, their neighbours clean - a channel fault.
+    Geophone, take-out, or that pair of cable conductors. Check the plant.</li>
+    <li><b>A contiguous run of flagged traces</b> - something physical at that part of the
+    spread: a road, a stream, a stretch of bad plant, one bad cable section.</li>
+    <li><b>Every trace flagged, or nearly every one</b> - suspect the recorder or the source,
+    not the spread. One geophone cannot make the whole record bad.</li>
+    <li><b>Nothing flagged, but the record still looks wrong</b> - the fault is not amplitude,
+    so go to the spectrum below.</li>
+  </ul>
+  <p><b>Sensitivity…</b> tunes each detector between Low (stricter, fewer flags) and High, and
+  the flagged count updates live without re-scanning - useful when a scan flags half the record
+  and you want to see which traces are worst rather than which are merely unusual.
+  <b>Export report…</b> writes the flagged traces to CSV with the per-detector score,
+  confidence, reason and the local baseline it was judged against, which is what you attach to
+  a re-shoot request. <b>Clear flags</b> removes the overlay again.</p>
+
+  <h3>Step 2 - ask what frequencies are in it</h3>
+  <p>Press <span class="kbd">8</span> for the Spectrum tab and read the average amplitude
+  spectrum over a range of traces (<b>From</b> / <b>To</b>, then <b>Recompute</b>).</p>
+
+  <!--FIG:06a-spectrum-average-->
+
+  <ul>
+    <li>A sharp spike at the mains frequency, and its harmonics - electrical pick-up, from a
+    powerline or a generator. That is the environment, not the geophone.</li>
+    <li>Energy heaped at the very low end with nothing above it - wind or swell on the phones,
+    or ground roll dominating everything.</li>
+    <li>A spectrum that simply stops at some frequency - a filter is in circuit, in the
+    recorder. Check the instrument settings.</li>
+    <li>Flat, featureless, no roll-off at all - that is what a dead or disconnected channel
+    looks like in the frequency domain.</li>
+  </ul>
+
+  <p>The <b>F-K</b> display separates coherent noise from signal in a way the average spectrum
+  cannot: it plots energy against frequency and wavenumber, so slow, steeply-dipping ground
+  roll spreads out along the wavenumber axis while flat-lying reflections stay near the centre.
+  If your record is dominated by a strong low-velocity fan, it is ground roll, and no amount of
+  re-shooting the same spread will remove it.</p>
+
+  <!--FIG:06b-spectrum-fk-->
+
+  <h3>Step 3 - compare the suspect trace against a good one</h3>
+  <p>Two traces side by side settle most arguments. On the Trace Inspector, step to the suspect
+  trace and click <b>Add to Workbench</b>; step to a clean neighbour and add that too. Press
+  <span class="kbd">9</span> for the Trace Workbench, where the collected traces can be drawn
+  <b>Overlay</b> or <b>Side-by-side</b>.</p>
+
+  <!--FIG:08-workbench-overlay-->
+  <!--FIG:08b-workbench-collection-->
+
+  <p>With two traces collected, the Workbench also offers an <b>A</b> / <b>B</b> selection, a
+  difference trace and a cross-correlation. The correlation peak tells you whether the two
+  traces carry the same event at a shifted time (a timing problem) or nothing in common at all
+  (a channel problem). <b>Invert</b> flips a trace's polarity on screen - if inverting makes
+  the suspect trace match its neighbour, you have found a reversed geophone, and the invert is
+  display-only so nothing in the file changes.</p>
+
+  <h3>Step 4 - first breaks, when you need timing evidence</h3>
+  <p>Back on the File Viewer, <b>First breaks</b> opens the assisted onset picker. Drop at least
+  two seed picks on traces you trust, then <b>Assisted fill</b> picks the rest along the moveout
+  you implied, inside the <b>±ms</b> window. An auto-pick is a first guess to edit, not an
+  answer: <b>Reject flagged</b> drops the low-confidence and off-trend picks, <b>Accept all</b>
+  confirms what remains, <b>Clear picks</b> starts over, and <b>Export CSV…</b> writes them out.
+  A first-break curve that is smooth except for one trace sitting off the trend is timing
+  evidence for that channel; a whole record whose first breaks are shifted by a constant is
+  evidence about the source or the trigger, not the spread.</p>
+
+  <h3>Step 5 - is there any signal in it at all?</h3>
+  <p>If the argument is whether the record is usable rather than which channel is at fault,
+  press <span class="kbd">7</span> for the Velocity tab and <b>Compute semblance</b>. Semblance
+  measures how coherently events line up across the spread when moveout is removed at each
+  trial velocity, so a record with real reflections shows bright, isolated peaks; a record of
+  noise shows a smeared panel with nothing to pick.</p>
+
+  <!--FIG:07-velocity-semblance-->
+
+  <p><b>The verdict you can defend</b> names the evidence: which traces the health scan flagged
+  and against what local baseline, what the spectrum showed, and whether a comparison trace
+  from the same spread behaves differently. "Channel 47 is dead" is a claim; "channel 47 flagged
+  dead by the health scan, flat spectrum, no correlation with channel 46, neighbours clean" is
+  a finding.</p>
+</section>
+
+<section class="chapter" id="rec-4">
+  <h2>4. Build 2D line geometry from scratch and QC the SPS triplet</h2>
+  <p><b>For:</b> a surveyor or party chief laying out a new 2D line.<br>
+  <b>Assumes:</b> Part I, and that you know the receiver interval, the source interval and the
+  numbering the client expects. Internet is needed only for the map background; the coordinate
+  registry and every calculation are built in and work offline.</p>
+
+  <p><b>The job.</b> There is no pre-plot. You know roughly where the line runs and what the
+  station intervals are, and processing needs an SPS triplet - the S, R and X files.</p>
+
+  <h3>Step 1 - draw the line</h3>
+  <ol>
+    <li>Press <span class="kbd">5</span> for SPS Creation. Leave the mode on <b>2D</b>: in 2D
+    each line you draw is walked once, with sources and receivers laid along that same line.</li>
+    <li>Set <b>Add on click</b>, then click the map at the start and end of the line. You are
+    placing the line's <i>vertices</i>, not its stations - the stations are generated later at
+    the interval you give. A straight line needs two clicks; a dog-leg needs one click per
+    bend.</li>
+    <li>For a second line, click <b>+ Next line</b> first (a line needs at least two vertices
+    before it can be finished), then keep clicking.</li>
+    <li>Fix mistakes with <b>Undo</b> (<span class="kbd">Ctrl</span>+<span class="kbd">Z</span>
+    on this tab), by switching to <b>Drag points</b> and moving a vertex, or by editing the
+    <b>Points</b> table directly. <b>Clear</b> removes every line.</li>
+  </ol>
+
+  <!--FIG:13-sps-creation-->
+
+  <p>The layer ticks - <b>Basemap</b>, <b>Connection lines</b>, <b>Direction arrows</b>,
+  <b>Distance labels</b>, <b>Stations &amp; numbers</b> - each have their own opacity slider, so
+  you can turn the map down to read the stations or the stations down to read the map.
+  <b>Zoom speed</b> slows the wheel down for fine positioning.</p>
+
+  <h3>Step 2 - confirm the coordinate system</h3>
+  <p>The <b>CRS</b> button carries the system the app suggested from your first pick. Open it
+  and confirm it is the one the client works in. This is the single most expensive thing to get
+  wrong on this tab: every coordinate in the files you are about to generate is expressed in
+  it, and a survey delivered in the wrong CRS is a survey in the wrong place.</p>
+
+  <h3>Step 3 - clear the checks</h3>
+  <p>Open the <b>Checks</b> pane. Findings come in three severities and only <b>error</b> blocks
+  generation - warnings and information are shown for you to judge. The errors that block are:
+  a duplicate line name, a line with fewer than two points, a zero-length segment (two
+  consecutive stations in the same place), a duplicate station number on one line, and a preplot
+  line with missing station numbers. Click a finding to locate it on the map, fix it, and check
+  again.</p>
+
+  <h3>Step 4 - generate the survey</h3>
+  <p><b>Generate…</b> opens the wizard. It asks for what a drawn line cannot know:</p>
+  <ul>
+    <li><b>Receiver interval (m)</b> and <b>Source interval (m)</b> - the station spacings.</li>
+    <li><b>Receiver line start / inc</b> and <b>Receiver point start / inc</b>, and the same
+    pair for sources - the numbering. SPS numbers points per line, so these decide what the
+    processor will see when they open the files.</li>
+    <li><b>Receiver type</b> and <b>Source type</b> - the code written into the SPS records.</li>
+    <li><b>Relation</b> - <b>Full line</b> means every shot records into every receiver on the
+    line; <b>Split-spread</b> records into the <b>Channels (split)</b> nearest each shot. This
+    choice is what fills the X file, so it decides the fold of the survey.</li>
+    <li><b>Output base name</b> - the stem the S, R and X files share.</li>
+  </ul>
+
+  <!--FIG:14-sps-generate-2d-->
+  <!--FIG:14b-sps-generate-2d-output-->
+
+  <p><b>Create &amp; Save…</b> writes the triplet and opens the new survey on the SPS tab. A
+  matching ESRI <span class="mono">.prj</span> is written alongside when the CRS can be
+  described, so the result opens georeferenced in a GIS.</p>
+
+  <h3>Step 5 - QC what you generated, before it goes to the field</h3>
+  <p>On the SPS tab (<span class="kbd">4</span>), the survey is drawn with <b>Sources</b>,
+  <b>Receivers</b>, <b>X-ref spider</b>, <b>Fold/coverage</b> and <b>Bin grid</b> as separate
+  layer ticks.</p>
+
+  <!--FIG:09a-sps-map-->
+
+  <ol>
+    <li><b>Look at it.</b> Sources and receivers should sit on the line you drew, at the
+    spacing you asked for, with no strays. A single point in the wrong place is obvious on the
+    map and invisible in a text file.</li>
+    <li><b>Run QC.</b> Fill in <b>Src int</b>, <b>Rcv int</b>, <b>Max off</b> and <b>Tol</b>
+    with what you intended, then <b>Run QC</b>. The report tells you where the generated survey
+    departs from the intervals you specified. <b>QC report</b> exports it.</li>
+    <li><b>Turn on the X-ref spider.</b> Every source is drawn to the receivers that record it,
+    so the relation you chose becomes a picture. A full-line relation fans to the whole line; a
+    split-spread fans to a window that walks with the shot. If the spider does not look like
+    the relation you asked for, you picked the wrong one.</li>
+  </ol>
+
+  <!--FIG:09b-sps-xref-spider-->
+
+  <p>Once the crew has shot and you have the field records, the same geometry can be
+  cross-checked against what the recorder actually wrote into the trace headers. Open the
+  seismic file and the survey together on the <b>Geometry QC</b> tab
+  (<span class="kbd">6</span>), set the station-match <b>Tolerance</b> in metres, and click
+  <b>Run geometry check</b>. It reports how many trace headers match a station within
+  tolerance and lists the ones that do not; clicking a finding rings that station on the SPS
+  map. A file whose receiver coordinates match no station at all, as in the figure, is either
+  the wrong survey for that file or a file whose headers were never stamped.</p>
+
+  <!--FIG:16-geometry-qc-->
+
+  <h3>If the job is 3D</h3>
+  <p>Switch the mode to <b>3D</b> before generating and your picked lines change meaning: they
+  become the <b>receiver</b> lines, and source lines are generated perpendicular to them. The
+  wizard then gains <b>Source-line spacing (m)</b>, <b>Azimuth (° CW from N)</b> (leave it empty
+  to take the bearing from the longest picked line) and, for the <b>Moving patch</b> relation,
+  <b>Patch lines</b> - how many receiver lines each shot records into. The relation names change
+  with the mode: Full line and Split-spread become <b>Full template</b> and <b>Moving
+  patch</b>.</p>
+
+  <!--FIG:15-sps-generate-3d-->
+  <!--FIG:15b-sps-generate-3d-lines-->
+
+  <p class="note">3D generation lays a regular orthogonal grid. It is not a template designer,
+  and the generated point count is capped - a very large grid is refused with a message rather
+  than half-written. Always check the result on the SPS tab before it goes to the field.</p>
+</section>
+
+<section class="chapter" id="rec-5">
+  <h2>5. A pre-plot CSV in the wrong CRS: import it, fix the mapping, check, generate</h2>
+  <p><b>For:</b> anyone handed someone else's coordinates.<br>
+  <b>Assumes:</b> Part I, and that you can find out - from the sender, not by guessing - which
+  coordinate reference system the numbers are in.</p>
+
+  <p><b>The job.</b> A pre-plot arrives as a CSV. The columns are in an order nobody agreed, the
+  header row may or may not be there, and the covering email says "UTM" without saying which
+  zone. You need it in SeisConv, in the right place on the earth, and then out again as SPS.</p>
+
+  <p><b>Before anything else: establish the CRS.</b> A coordinate pair is meaningless without
+  the system it is expressed in. Easting 500000, northing 4000000 is a real place in every UTM
+  zone on the planet, and a different real place in each. If you cannot get a definite answer -
+  an EPSG code, or a zone and a hemisphere - stop and ask. Everything below is mechanical; this
+  is the part that carries the risk.</p>
+
+  <h3>Step 1 - read the file in</h3>
+  <ol>
+    <li>Press <span class="kbd">5</span> for SPS Creation, then <b>Import plan…</b>.</li>
+    <li><b>Choose file…</b> for the CSV, TSV or GeoJSON - or paste the rows straight in and
+    click <b>Use pasted text</b>, which is quicker when someone sent them in the body of an
+    email.</li>
+    <li>Set <b>Delimiter</b> (Auto-detect, Comma, Tab, Semicolon or Whitespace) and tick
+    <b>First row is a header</b> if it is. The preview redraws as you change them, so you can
+    see the columns split correctly before you map anything.</li>
+  </ol>
+
+  <!--FIG:12a-plan-import-mapping-->
+
+  <h3>Step 2 - map the columns and declare the coordinates</h3>
+  <ol>
+    <li>Map the file's columns onto <b>line</b>, <b>station</b>, the two coordinate columns and
+    <b>elevation</b>. Read the preview values as you go, not just the column names: a column
+    called "X" holding numbers around 31 is latitude, whatever it is called.</li>
+    <li>Say what the two coordinate columns <i>are</i>: <b>Lat / Long (WGS84)</b> if they are
+    degrees, or <b>Easting / Northing</b> if they are projected metres. Get this wrong and the
+    plan lands in the sea.</li>
+    <li>If they are eastings and northings, set the <b>CRS</b> below - the search box takes an
+    EPSG code or a name, and the whole registry is built in, so it works with no internet.</li>
+    <li><b>Swap the two coordinate columns</b> is there for the commonest single fault in
+    exchanged coordinate files: northing/easting written in the other order. If the preview or
+    the resulting map puts the line somewhere impossible, try this before doubting the CRS.</li>
+  </ol>
+
+  <h3>Step 3 - choose what the points are, and what happens to the existing plan</h3>
+  <ol>
+    <li><b>These points are</b> - Receivers, Sources, or Both, co-located. There is no default;
+    the import stays disabled until you choose.</li>
+    <li><b>Replace the plan</b> discards what is currently drawn; <b>Append</b> keeps it and
+    adds these lines to it.</li>
+    <li><b>Use the stations exactly as given (preplot)</b> is the important tick. With it on,
+    the points are treated as a pre-plot: they are used exactly where and as they are, with
+    their own station numbers, and no layout wizard re-lays them. That is what you want when
+    somebody else surveyed those positions. With it off, the imported points become line
+    vertices for you to generate stations along.</li>
+    <li><b>Import</b> stays disabled until it has everything it needs - a file or pasted text,
+    a column mapping, a CRS for projected input, and a point role. If it is greyed out, one of
+    those four is missing.</li>
+  </ol>
+
+  <!--FIG:12b-plan-import-ready-->
+
+  <h3>Step 4 - check that it landed where it should</h3>
+  <p>This is the step people skip, and it is the only one that catches a wrong CRS. Turn on the
+  <b>Basemap</b>, click <b>Fit map to plan</b>, and look. The line should be on the ground it is
+  supposed to be on - the right country, the right side of the road, the right wadi. A CRS
+  mistake is not subtle at this scale: the plan lands in the wrong zone, the wrong hemisphere,
+  or the middle of the ocean. Then read the <b>Checks</b> pane and clear every error, remembering
+  that a preplot line must have a station number on every point.</p>
+
+  <h3>Step 5 - out again as SPS</h3>
+  <p>An imported pre-plot is already positioned and already numbered, so it does not need the
+  layout wizard: the <b>SPS 2.1</b> button in the plan-export row writes the S, R and X files
+  straight out, using the stations exactly as they are. (That button is offered only when every
+  line is a pre-plot; a line you drew still needs a station interval, so it goes through
+  <b>Generate…</b> instead.) The plan can also leave as <b>CSV</b>, <b>GeoJSON</b> or
+  <b>KML</b> if the recipient wants it in that shape.</p>
+
+  <h3>When the CRS label on an existing survey is simply wrong</h3>
+  <p>Sometimes what arrives is not a CSV but a finished SPS survey carrying the wrong header.
+  Load it on the SPS tab and open <b>Headers…</b>, which shows the H-record block as loaded -
+  the CRS and datum, the administrative records, and the raw records themselves.</p>
+
+  <!--FIG:10a-sps-headers-view-->
+
+  <p>On the <b>CRS / Datum</b> tab there is one choice that decides everything, and it is worth
+  stopping to think about which one you mean:</p>
+  <ul>
+    <li><b>Fix the label only</b> - the coordinates are correct and the header describes them
+    wrongly. The header is rewritten; the numbers are untouched.</li>
+    <li><b>Reproject the coordinates too</b> - the header is right about what the coordinates
+    <i>were</i>, and you want them converted into a different system. <b>The numbers change.</b></li>
+  </ul>
+
+  <!--FIG:10b-sps-headers-crs-->
+
+  <p><b>Apply changes to</b> selects whether the edit hits all the S / R / X files together or
+  one of them, <b>Apply</b> commits it, and <b>Export corrected (ZIP)…</b> saves the edited
+  files. Nothing is written over your originals.</p>
+</section>
+
+<section class="chapter" id="rec-6">
+  <h2>6. Hand the geometry to a GIS and open it in QGIS</h2>
+  <p><b>For:</b> preparing a client deliverable, or getting the survey in front of someone who
+  works in maps rather than in SPS.<br>
+  <b>Assumes:</b> a survey loaded on the SPS tab, and that you know which CRS the recipient
+  wants.</p>
+
+  <p><b>The job.</b> The client wants the geometry in a GIS, and it has to arrive georeferenced -
+  meaning the files carry enough information for the GIS to place them on the earth without
+  anyone typing in a projection.</p>
+
+  <h3>Pick the right export for the recipient</h3>
+  <p>The export row on the SPS tab offers several, and they are not interchangeable:</p>
+  <ul>
+    <li><b>Export shapefile (ZIP)…</b> - sources and receivers as ESRI Shapefile layers
+    (<span class="mono">.shp</span>, <span class="mono">.shx</span>,
+    <span class="mono">.dbf</span> and a <span class="mono">.prj</span>), zipped together. This
+    is the safe default for a GIS: the <span class="mono">.prj</span> is what tells QGIS or
+    ArcGIS where on the earth the points are, and a shapefile without one is a set of numbers
+    nobody can place.</li>
+    <li><b>GeoJSON</b> and <b>KML</b> - single files. GeoJSON is the one to send to a web map or
+    a script; KML is the one to send to somebody who will open it in Google Earth.</li>
+    <li><b>CSV</b> and <b>QC report</b> - the point table and the QC findings, for a
+    spreadsheet rather than a map.</li>
+    <li><b>GeoTIFF…</b> - not points but pictures: fold, an elevation surface and the survey
+    layout as georeferenced rasters. See below.</li>
+  </ul>
+
+  <!--FIG:09c-sps-export-->
+
+  <h3>Choose the CRS deliberately</h3>
+  <p>The <b>Shapefile</b> CRS box has a deliberate empty state: leave it empty and the survey's
+  own coordinates are kept unchanged and simply described in the
+  <span class="mono">.prj</span>; pick a CRS and the points are reprojected into it. Keeping the
+  survey's own coordinates is almost always right - the points then still match the SPS files
+  and the trace headers, and the GIS does any further conversion itself.</p>
+
+  <p class="note">A survey whose CRS cannot be honestly described gets <b>no</b>
+  <span class="mono">.prj</span> rather than a guessed one. If the .prj is missing from your
+  ZIP, that is the app telling you the source survey never carried a CRS it could state - fix
+  that first (recipe 5), rather than typing a projection into the GIS and hoping.</p>
+
+  <h3>What lands where, in QGIS</h3>
+  <ol>
+    <li>Unzip the export. Keep the four files together: a shapefile is not one file, and moving
+    the <span class="mono">.shp</span> without its companions breaks it.</li>
+    <li>Drag the <span class="mono">.shp</span> into QGIS. Sources and receivers arrive as
+    separate point layers, each with its attributes - line, station, coordinates, elevation -
+    in the attribute table.</li>
+    <li>Check the layer's CRS in its properties and compare it against what you exported. If
+    QGIS reports the CRS you expected and the points sit on the right ground under a basemap,
+    the deliverable is correct.</li>
+    <li>If the points appear in an empty part of the world, the CRS is the suspect, not the
+    coordinates. Go back to recipe 5.</li>
+  </ol>
+
+  <h3>Look at it on real imagery before you send it</h3>
+  <p>The SPS tab's <b>Real map</b> view draws the same survey over satellite imagery or street
+  mapping. Two minutes here catches what a text file cannot show: a line crossing a river it
+  should not, a station in a building, a receiver line running off the permit. The <b>Map
+  bearing</b> control rotates the view (the <b>N</b> button snaps it back to north), which is
+  how you get a line running across the page rather than diagonally.</p>
+
+  <!--FIG:09d-sps-real-map-->
+
+  <p class="note">Real map fetches tiles from the internet. The plain <b>Survey grid</b> view
+  needs no network at all, and every calculation and reprojection is done locally either way.</p>
+
+  <h3>When they want rasters: the GeoTIFF export</h3>
+  <p><b>GeoTIFF…</b> opens a wizard that writes georeferenced images, which is what a GIS person
+  means by "give me the fold map". The layers are <b>Fold / coverage</b> (which needs the X-ref
+  relations, so it is unavailable for a survey with no X file), <b>Elevation surface</b>
+  (interpolated from the station elevations) and <b>Survey layout</b> (an RGB picture of the
+  survey).</p>
+
+  <!--FIG:11-geotiff-wizard-->
+
+  <ul>
+    <li><b>Whole survey + margin</b> sets the area from every loaded station plus a margin; or
+    <b>Drag a box on the map…</b> closes the dialog, lets you drag the area you want, and
+    returns.</li>
+    <li><b>Ground resolution</b> is metres per pixel. <b>Use recommended</b> sets the finest
+    resolution the survey's station spacing actually supports - going finer than that only
+    makes the file bigger and emptier, not more accurate.</li>
+    <li><b>Basemap</b> optionally downloads map tiles for the area and resamples them onto the
+    same grid. This needs internet, and the imagery stays subject to the tile provider's
+    terms - which matters if the product is going to a client.</li>
+    <li>The elevation layer never extrapolates: a pixel with no station inside the search radius
+    is written as nodata rather than an invented height. An elevation GeoTIFF with holes in it
+    is being honest with you.</li>
+  </ul>
+</section>
+
+<section class="chapter" id="rec-7">
+  <h2>7. Vibroseis day: design a sweep, check the Klauder wavelet, compare designed against measured</h2>
+  <p><b>For:</b> a vibroseis crew - the observer and the vibrator mechanic.<br>
+  <b>Assumes:</b> Part I, and that you already work with vibrators. This case is not for a
+  first-day reader: it assumes you know what a sweep is for.</p>
+
+  <p><b>The job.</b> The contract specifies a sweep. You have to produce it, hand the right file
+  to the right box, and then prove that what the vibrator actually put into the ground matches
+  what you designed.</p>
+
+  <h3>Step 1 - design it</h3>
+  <p>The Sweeps tab needs no file open. Set:</p>
+  <ul>
+    <li><b>Type</b> - the frequency law. <b>Linear</b> is a constant number of Hz per second.
+    <b>dB/Hz</b> and <b>dB/Octave</b> dwell non-uniformly so the energy spectrum tilts by the
+    slope you give. <b>T-Power</b> grows the sweep rate as time to a power, dwelling at the
+    start frequency.</li>
+    <li><b>Start Hz</b> and <b>End Hz</b> - the band. An end below the start gives a
+    downsweep.</li>
+    <li><b>Length ms</b>, <b>Taper in</b>, <b>Taper out</b> and the taper shape (<b>Cosine</b>
+    or <b>Blackman</b>). The tapers keep the vibrator from slamming to full force instantly and
+    control the ripple at the edges of the band.</li>
+    <li><b>Phase °</b>, <b>Amplitude</b>, and <b>Pilot dt</b> - the sample interval of the
+    exported pilot file only. It is not the vibrator's own rate, and the SCIO
+    <span class="mono">.SV</span> table is always written at 2048 samples per second whatever
+    you choose here.</li>
+    <li><b>Segmented sweep</b> chains up to 16 segments, each with its own law, band and length,
+    with phase kept continuous across every join.</li>
+  </ul>
+  <p><b>Build sweep</b> generates it and refreshes the four plots.</p>
+
+  <!--FIG:18-sweeps-->
+
+  <h3>Step 2 - read the four plots</h3>
+  <ul>
+    <li><b>Pilot signal</b> - the sweep itself, with the tapers visible at the ends.</li>
+    <li><b>Frequency vs time</b> - the law you asked for. In a segmented sweep the joins show as
+    slope changes, and there should be no jumps.</li>
+    <li><b>Amplitude spectrum</b> - the in-band level and the roll-off at the edges. A
+    non-linear sweep shows its designed tilt here, which is how you confirm you got the tilt you
+    meant.</li>
+    <li><b>Klauder wavelet</b> - the sweep's autocorrelation, which is the effective source
+    wavelet you will actually have after correlation. This is the plot that tells you what the
+    sweep buys you: a narrow main lobe means better time resolution, and the peak-to-side-lobe
+    ratio in dB is the number to watch. A longer sweep and a wider band both sharpen it; tapers
+    trade a little in-band energy for much cleaner spectral edges.</li>
+  </ul>
+
+  <h3>Step 3 - export what each part of the crew needs</h3>
+  <ul>
+    <li><b>Pilot SEG-Y…</b> or <b>Pilot SU…</b> - a one-trace file of the designed pilot, for
+    the recorder or for processing.</li>
+    <li><b>SCIO .SV…</b> - the sweep-definition table for the sweep generator.</li>
+    <li><b>Pilot CSV…</b> - sample number, time and amplitude, for anyone who wants the
+    numbers.</li>
+    <li><b>Sweep sheet…</b> - a printable HTML sheet with the parameter table, the four plots
+    and the advisories, for the observer's book. Print it to PDF from the browser.</li>
+    <li><b>Save as…</b> under <b>Survey presets</b> stores the whole design plus the QC
+    thresholds under a name, and <b>Export…</b> / <b>Import…</b> move a preset between machines
+    as JSON - which is how both field machines end up shooting the same specification.</li>
+  </ul>
+  <p class="note">A long sweep at 0.25 ms can exceed the 65,535-sample limit a SEG-Y or SU trace
+  can carry. The exporter says so and suggests a coarser pilot dt or CSV, rather than writing a
+  truncated file.</p>
+
+  <h3>Step 4 - QC the sweep the machine actually made</h3>
+  <p><b>Load measured sweep…</b> opens a recorded pilot, ground-force or similarity trace and
+  compares the trace you pick against the design. What to read:</p>
+  <ul>
+    <li><b>Phase error vs time</b> - the measured instantaneous phase minus the design. Industry
+    practice holds the average within about 10° and the peaks within about 20-25°; the
+    thresholds in the panel (<b>avg phase ≤ °</b>, <b>peak phase ≤ °</b>, <b>THD ≤ %</b>) are
+    editable and saved with the preset, so set them to your contract's specification rather than
+    to the defaults.</li>
+    <li><b>THD vs time</b> - harmonic distortion. High distortion at low frequency usually means
+    the vibrator hit its mass or flow limit, which is a machine limit, not a sweep design
+    fault.</li>
+    <li><b>Envelope and spectrum overlays</b> - drive drop-outs, decoupling and resonances show
+    up here as differences between the measured and designed curves.</li>
+    <li><b>Correlation wavelet</b> - designed against measured. A clean sweep reproduces the
+    Klauder wavelet with its peak at zero lag.</li>
+  </ul>
+
+  <h3>The polarity trap, once per crew</h3>
+  <p>Vibrator electronics following the SEG polarity standard have their accelerometers wired
+  positive-up, while the SEG field-recording convention expects the first breaks of a
+  compressive source to be negative. On Pelton-style systems the practical rule is: if the
+  recorded similarity or ground-force polarity comes out inverted against the pilot, run the
+  pilot at <b>Phase = 180°</b> rather than rewiring, and the correlation restores standard
+  polarity. Check this once per crew and instrument combination with a similarity test before
+  production, and do not assume it.</p>
+
+  <p class="note">The advisories after a build - the force setpoint guidance and the
+  low-frequency displacement limit - are guidance only. The vibrator's own limits always govern
+  what the machine physically does, and the QC verdicts here flag numbers against your
+  thresholds; whether to accept or re-shoot a vibrator point stays the observer's call.</p>
+</section>
+
+<section class="chapter" id="rec-8">
+  <h2>8. Write and export the observer log for a production day</h2>
+  <p><b>For:</b> the observer.<br>
+  <b>Assumes:</b> Part I. Nothing else - the Observer Log needs no seismic file open, though it
+  can use a loaded SPS survey if you have one.</p>
+
+  <p><b>The job.</b> One row per shot, all day, accurate enough that somebody can reconstruct
+  the day from it a month later, and out at the end as a file you can send.</p>
+
+  <h3>Step 1 - build the log once, at the start of the day</h3>
+  <ol>
+    <li>Press <span class="kbd">O</span> for the Observer Log.</li>
+    <li>Work through the setup: the header information for the day, then which column groups you
+    want, then the source type, then the rows. Choose the columns deliberately here - adding one
+    later is easy, but a column you never fill in is noise on every row.</li>
+    <li>Click <b>Build log</b>. The grid appears.</li>
+  </ol>
+
+  <!--FIG:17a-obslog-setup-->
+
+  <p><b>Do this once, not once per day.</b> When the layout is how your crew wants it, use
+  <b>Save as…</b> in the templates row to store the configured-but-empty log as a template.
+  Every following day then starts from <b>Load</b>, and every day's log has the same columns -
+  which is what makes a season's logs comparable. <b>Export</b> and <b>Import</b> move a
+  template between machines as JSON.</p>
+
+  <h3>Step 2 - fill it as you shoot</h3>
+
+  <!--FIG:17b-obslog-grid-->
+
+  <ul>
+    <li><b>+ Add row</b> adds a shot; every cell is editable in place, and rows can be added,
+    inserted, deleted and reordered.</li>
+    <li><b>PC clock</b> stamps the time from the machine. <b>NTP</b> stamps the PC clock
+    corrected by an offset measured against a time server: put the server in the box and click
+    <b>Sync</b> to query it and compute the offset. Field laptops drift, and a log whose times
+    are twenty seconds out is a log nobody can correlate with the recorder.</li>
+    <li><b>Import sources from SPS</b> pulls the source stations from a loaded survey, so the
+    station column is pre-filled in shooting order rather than typed.</li>
+    <li><b>Columns…</b> opens the column manager to rename, reorder, retype, or add and remove
+    columns after the fact.</li>
+  </ul>
+
+  <h3>Step 3 - when the shooting does not go to plan</h3>
+  <p>A stuck shot, a re-shoot or a skipped point breaks the numbering for every row after it.
+  There is no automatic detection and no hold button - deliberately, because guessing here is
+  worse than not guessing. Instead, every shot-point and file-number cell is editable, and
+  <b>Renumber below…</b> recomputes the shot point (and optionally the file number) for a chosen
+  anchor row and every row after it. Set the <b>Anchor row #</b> and <b>Anchor SP</b>, give the
+  <b>Interval (± per row)</b>, and apply. That one dialog is how re-shoots, skips and drift get
+  fixed.</p>
+
+  <h3>Step 4 - let the recorder write the rows, if it can</h3>
+  <p><b>Trigger Watch</b> adds a highlighted row the moment a shot triggers, so the log keeps up
+  with the crew instead of the other way round. <b>Configure…</b> picks the trigger system and
+  its sources: for a Geometrics Geode setup, the SCS trigger event and the recorder's own file
+  number; for other systems, any combination of watching the acquisition folder, tailing the SCS
+  survey log, a UDP listener, or a serial trigger box on a COM port. <b>Sound</b> beeps on every
+  trigger row.</p>
+  <p>Three things are worth knowing before you rely on it. A triggered row is <b>pending</b> and
+  stays highlighted until <i>you</i> edit it - the log is yours and the watch only assists. When
+  the shot file lands, the row is enriched with the file details rather than replaced. And the
+  acquisition folder is only ever watched and read: SeisConv never writes into it.</p>
+
+  <h3>Step 5 - save and export</h3>
+  <ul>
+    <li><b>Save log</b> writes the whole log - header, columns and rows - as a JSON file, and
+    <b>Reload…</b> opens it again. This is the working file: save it whenever you would save
+    anything, and certainly before you close the app.</li>
+    <li>Export the day for the people who need to read it rather than edit it.</li>
+    <li><b>Clear log</b> empties the rows and keeps the column configuration, which is what you
+    want at the start of the next day if you are not using a template.</li>
+  </ul>
+  <p>Every automatic write - a counter advance, an enrichment, a renumber - lands in the audit
+  trail, signed with the name you set in <b>Audit log and signature</b>. That is what makes the
+  log evidence rather than notes.</p>
+</section>
+
+<section class="chapter" id="rec-9">
+  <h2>9. Two machines in the field with no network: move the files</h2>
+  <p><b>For:</b> any field pair - the recording laptop and the QC laptop.<br>
+  <b>Assumes:</b> two Windows machines, both running SeisConv, and no router, no internet and no
+  cloud account.</p>
+
+  <p><b>The job.</b> The records are on the recording machine and you need them on the QC
+  machine, all day, without walking a memory stick back and forth.</p>
+
+  <!--FIG:19-wifisync-->
+
+  <h3>Step 1 - get the two machines onto the same WiFi</h3>
+  <p>If there is a field WiFi, join both machines to it. If there is not, one machine can host
+  one: fill in the hotspot <b>Name</b> and <b>Password</b> (at least eight characters), pick the
+  <b>WiFi adapter</b> that will host it, and click <b>Start hotspot</b>. <b>Status</b> reads the
+  live state, and the <b>Host IP</b> it reports is the address to give the other machine.
+  Connect the second machine's WiFi to that hotspot the ordinary Windows way.</p>
+
+  <h3>Step 2 - choose the folder and the role, on both machines</h3>
+  <ul>
+    <li><b>Choose…</b> the folder that is kept identical. Everything under it is synced,
+    recursively.</li>
+    <li><b>Role</b> - <b>Two-way</b> (the default) has both machines push and pull.
+    <b>Master</b> only serves and never pulls; <b>Slave</b> mirrors the master exactly,
+    including deleting local extras. When one peer advertises Master or Slave the other adopts
+    the complement automatically. For "records flow from the recorder to the QC laptop and
+    nothing flows back", Master on the recorder and Slave on the QC machine says exactly
+    that.</li>
+    <li><b>Sync mode</b> - <b>On change</b> syncs the instant a file changes; <b>Every N s</b>
+    polls on an interval. The rate limit caps transfer speed so a sync does not saturate a weak
+    link.</li>
+  </ul>
+
+  <h3>Step 3 - start it</h3>
+  <ol>
+    <li>Click <b>Start WiFiSync</b> on <i>both</i> machines. A peer should appear in the list
+    within a few seconds.</li>
+    <li>If it does not: click <b>Open firewall ports…</b> on <b>both</b> machines - it opens the
+    two ports WiFiSync uses, for the Windows Private profile only. Then try <b>Scan
+    network</b>, which actively sweeps the selected adapter's subnet instead of waiting for
+    discovery broadcasts. As a last resort, type the peer's address into <b>Peer IP</b> and use
+    <b>Add peer</b>.</li>
+    <li>If the wrong adapter is selected - a machine usually has several - pick the WiFi or
+    hotspot one in <b>Adapter</b>; on a hotspot host it is usually the 192.168.137.x one.</li>
+    <li><b>Sync now</b> forces a single pass immediately. The activity and transfer list shows
+    what was pulled and deleted, newest first.</li>
+  </ol>
+
+  <h3>Two things to be careful about</h3>
+  <ul>
+    <li><b>The file server is unauthenticated by design.</b> Anyone on the same network can talk
+    to it. Run WiFiSync only on a field network you trust, or on the hotspot you host
+    yourself.</li>
+    <li><b>Fix Hyper-V conflict</b> appears only when the hotspot failed to start because a
+    Hyper-V virtual switch is holding the WiFi adapter, and clicking it <b>deletes that virtual
+    switch</b> after a UAC prompt. SeisConv cannot put it back, and any virtual machine, WSL or
+    Docker network that was using the switch loses its connection until you recreate it yourself
+    in Hyper-V Manager. If the machine runs virtual machines you care about, fix the conflict
+    there instead and leave this button alone.</li>
+  </ul>
+  <p class="note">Deletions propagate, so a file deleted on one machine disappears on the other.
+  There is a guard against the worst case - a peer whose drive has gone offline, and so reports
+  an empty folder, cannot wipe your files - but "Slave" does mean "make this folder match the
+  master, including removing what the master does not have".</p>
+</section>
+
+<section class="chapter" id="rec-10">
+  <h2>10. A file will not open: diagnose it to a fix or a defensible verdict</h2>
+  <p><b>For:</b> everyone.<br>
+  <b>Assumes:</b> Part I. This is the case that may end in "this file is corrupt, and here is
+  the evidence", which is a perfectly good outcome as long as it is evidence and not a
+  shrug.</p>
+
+  <p><b>The job.</b> SeisConv refuses the file, or opens it and reports something that cannot be
+  true. You need to end up either with a file that opens, or with a written verdict somebody
+  else can act on.</p>
+
+  <h3>First, the cheap checks</h3>
+  <ol>
+    <li><b>Is the file complete?</b> Compare its size on disk against another record from the
+    same day. A file that is a fraction of its siblings was truncated in transfer or while being
+    written - the commonest cause by a distance, and the one worth eliminating before you spend
+    an hour on anything cleverer.</li>
+    <li><b>Is it the file you think it is?</b> Recorders write more than shot records: monitor
+    files, test files, log files and index files often live in the same folder and often share
+    an extension.</li>
+    <li><b>Copy it again.</b> If it came off a memory stick, over WiFiSync or from a network
+    share, copy it once more and open the fresh copy. If the second copy opens, the first was
+    damaged in transit and the source is fine.</li>
+    <li><b>Try a sibling.</b> Open a different record from the same folder. If every file in the
+    folder fails, the problem is systematic - a recorder setting, a transfer that went wrong
+    wholesale - and not this one file.</li>
+  </ol>
+
+  <h3>Read the message the app gave you</h3>
+  <p>SeisConv is built not to guess. A malformed record is collected as an error and skipped
+  rather than silently accepted, and a file whose header claims something impossible is refused
+  rather than half-read into a plausible-looking lie. So the message is evidence, and it is
+  worth copying verbatim into your report. Appendix C lists the error messages and what each
+  one means.</p>
+  <p>The distinction to draw is between:</p>
+  <ul>
+    <li><b>The file was refused outright</b> - the format could not be identified, or the header
+    is self-contradictory. Nothing was read.</li>
+    <li><b>The file opened, but with errors or a reduced trace count</b> - the beginning was
+    readable and something later was not. This usually means truncation, and it is often
+    recoverable: the traces that did read are real traces.</li>
+  </ul>
+
+  <h3>When it opens but the numbers are wrong</h3>
+  <p>A file that opens with an absurd trace count, an absurd sample count or a sample interval
+  nobody would record at is telling you its header disagrees with its contents. Check what the
+  Converter reports against what the crew actually shot, as in
+  <!--FIGREF:01b-converter-single-loaded-->. Then look at the section
+  (<span class="kbd">3</span>): if the picture is coherent for part of the record and turns to
+  hash partway down, the file was cut short; if it is hash from the first trace, the samples are
+  not being read the way they were written.</p>
+
+  <p>Run the <b>Health scan</b> on what did open, as in <!--FIGREF:05-section-health-scan-->.
+  "Every trace dead from sample 400 onward" is a much more useful sentence in a report than "the
+  file is bad".</p>
+
+  <h3>Try converting the part that reads</h3>
+  <p>If some of the record is readable, convert what opened to SEG-Y Rev 1 and check the output
+  as in <a href="#ch-first-convert">Part I</a>. That gives you a clean file containing the
+  traces that survived, which is often enough to keep the day's work moving while the original
+  is investigated. Say clearly, in writing, that the output is a partial recovery - a rescued
+  file that is not labelled as one will be treated as complete by whoever gets it next.</p>
+
+  <h3>Writing the verdict</h3>
+  <p>A defensible conclusion contains, in this order: what you were given (name, size, where it
+  came from), what SeisConv reported (the exact message, or the exact counts it read), what you
+  eliminated (re-copied, sibling files open normally, size against siblings), and what you
+  concluded. For example: <i>"The file is 4.1 MB where the other 27 records of the same
+  configuration are 11.8 MB. SeisConv reads the first 38 of 96 traces and reports the remainder
+  as errors. Two fresh copies from the source medium behave identically, and the neighbouring
+  records open cleanly. Conclusion: this record was truncated at the recorder or during its
+  first write, and cannot be recovered beyond trace 38. A partial SEG-Y of those 38 traces has
+  been produced and is marked as a partial recovery."</i></p>
+  <p>That is a verdict somebody can act on. "It's corrupt" is not.</p>
+</section>

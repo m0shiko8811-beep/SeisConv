@@ -1,0 +1,43 @@
+{
+  "image": "img/09b-sps-xref-spider.png",
+  "name": "09b-sps-xref-spider",
+  "caption": "The same survey with the X-ref spider ON: every source drawn to its live receivers",
+  "callouts": [
+    {
+      "n": 1,
+      "label": "X-ref spider ON",
+      "selector": "#spsShowXrefs",
+      "rect": {
+        "x": 437,
+        "y": 195,
+        "w": 13,
+        "h": 13
+      }
+    },
+    {
+      "n": 2,
+      "label": "Each shot is now joined to the channels its X record lists",
+      "selector": "#spsCanvas",
+      "rect": {
+        "x": 90,
+        "y": 263,
+        "w": 1478,
+        "h": 619
+      }
+    },
+    {
+      "n": 3,
+      "label": "Fold / coverage can be drawn over the same map",
+      "selector": "#spsShowFold",
+      "rect": {
+        "x": 532,
+        "y": 195,
+        "w": 13,
+        "h": 13
+      }
+    }
+  ],
+  "missingCallouts": [],
+  "frameLeaks": [],
+  "bytes": 848285
+}

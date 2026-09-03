@@ -76,6 +76,28 @@ export function encodeScalar(real: number, scalar: number): number {
   return clampI32(raw);
 }
 
+/**
+ * Largest-magnitude allowed NEGATIVE scalar that still encodes `maxAbs` metres
+ * without overflowing int32, starting from `wanted`.
+ *
+ * `encodeScalar` clamps at ±2147483647, so -10000 silently turns a 700,000 m
+ * easting into 214,748.36 m on read-back, and -1000 overflows any northing above
+ * 2,147,483 m (most of the northern hemisphere). Demoting the scalar to one that
+ * FITS the survey keeps every metre, at fewer decimals - a loss the caller is told
+ * about, instead of a wrong coordinate the caller is not.
+ */
+export function fitScalar(maxAbs: number, wanted: number): number {
+  if (!isFinite(maxAbs) || maxAbs <= 0) return wanted;
+  let s = wanted;
+  while (s < 0 && maxAbs * Math.abs(s) > I32_MAX) {
+    const i = GEOMLOAD_SCALARS.indexOf(s);
+    // GEOMLOAD_SCALARS runs 1, -10, -100, -1000, -10000: step back toward 1.
+    if (i <= 0) return 1;
+    s = GEOMLOAD_SCALARS[i - 1];
+  }
+  return s;
+}
+
 /** Sanitize a requested coordinate scalar to an allowed spec value (default -100). */
 function sanitizeScalar(s: number | undefined): number {
   return typeof s === 'number' && GEOMLOAD_SCALARS.includes(s) ? s : DEFAULT_SCALAR;
@@ -147,8 +169,9 @@ interface Station {
 export function loadGeometry(b: Bytes, sps: SPSData, opts?: GeomLoadOptions): GeomLoadResult {
   const errors: string[] = [];
   const tol = isFinite(opts?.tolM as number) && (opts?.tolM as number) > 0 ? (opts!.tolM as number) : 2;
-  const coordScalar = sanitizeScalar(opts?.coordScalar);
-  const elevScalar = coordScalar; // one selector drives both scalar fields
+  const requestedScalar = sanitizeScalar(opts?.coordScalar);
+  let coordScalar = requestedScalar;
+  let elevScalar = coordScalar; // one selector drives both scalar fields
   const writeCoords = opts?.writeCoords !== false;
   const writeElev = opts?.writeElev !== false;
   const writeOffset = opts?.writeOffset !== false;
@@ -179,6 +202,27 @@ export function loadGeometry(b: Bytes, sps: SPSData, opts?: GeomLoadOptions): Ge
   if (!sources.length && !receivers.length) {
     errors.push('SPS survey carries no source or receiver stations to load');
     return result;
+  }
+
+  // Demote the scalar to one that actually FITS this survey's coordinate range
+  // before a single header is written, and say so. Writing -10000 against a
+  // 700,000 m easting used to clamp at int32 and report success.
+  let maxAbs = 0;
+  for (const arr of [sources, receivers]) {
+    for (const p of arr) {
+      for (const v of [p.easting, p.northing, p.elevation]) {
+        if (typeof v === 'number' && isFinite(v) && Math.abs(v) > maxAbs) maxAbs = Math.abs(v);
+      }
+    }
+  }
+  const fitted = fitScalar(maxAbs, coordScalar);
+  if (fitted !== coordScalar) {
+    errors.push(
+      `Coordinate scalar ${coordScalar} would overflow 32-bit storage for this survey (max |coordinate| ${Math.round(maxAbs)}); wrote ${fitted} instead`
+    );
+    coordScalar = fitted;
+    elevScalar = fitted;
+    result.coordScalar = fitted;
   }
 
   const meta = parseSegyMeta(out);

@@ -1,0 +1,47 @@
+<!-- Part IV - hand-written prose for the analyst. NOT generated.
+     Every claim must be traceable to a file and line in the working notes, though the
+     citations do not appear in the finished manual. -->
+<section class="chapter" id="ch-segy">
+  <h2>SEG-Y: byte layout, revisions and sample encodings</h2>
+  <p class="summary">One-line summary goes here.</p>
+  <p class="scaffold">To write from core/formats/segy.ts: the textual and binary header maps,
+  the trace-header fields SeisConv reads and writes, IBM vs IEEE floats, the integer
+  encodings, what Rev 0 / 1 / 2 change, and where a conversion is lossy.</p>
+</section>
+
+<section class="chapter" id="ch-segd">
+  <h2>SEG-D: revisions 1 and 3</h2>
+  <p class="summary">One-line summary goes here.</p>
+  <p class="scaffold">To write from core/formats/segd.ts: general headers, channel sets,
+  extended headers, demultiplexing, and what survives a SEG-D to SEG-Y conversion.</p>
+</section>
+
+<section class="chapter" id="ch-seg2-su">
+  <h2>SEG-2 and Seismic Unix</h2>
+  <p class="summary">One-line summary goes here.</p>
+  <p class="scaffold">To write from core/formats/seg2.ts and core/formats/su.ts: the free-form
+  string headers of SEG-2, the fixed SU trace header, and endianness detection.</p>
+</section>
+
+<section class="chapter" id="ch-coords">
+  <h2>Coordinates, projections and the bin grid</h2>
+  <p class="summary">One-line summary goes here.</p>
+  <p class="scaffold">To write from core/coords.ts, core/sps/reproject.ts and the EPSG
+  registry: geodetic datums, the projections implemented, datum shifts, the SEG-Y coordinate
+  scalar, and how the bin grid is defined.</p>
+</section>
+
+<section class="chapter" id="ch-dsp">
+  <h2>The maths behind the analysis tools</h2>
+  <p class="summary">One-line summary goes here.</p>
+  <p class="scaffold">To write from core/dsp/: FFT and windowing, AGC, semblance and NMO, the
+  spectrogram, F-K, correlation and the Klauder wavelet.</p>
+</section>
+
+<section class="chapter" id="ch-limits">
+  <h2>Limits and bounds the parsers enforce</h2>
+  <p class="summary">One-line summary goes here.</p>
+  <p class="scaffold">To write: the trace, sample, line and length caps, why they exist, and
+  what a file that trips one of them looks like on screen. Every number pulled from the code
+  by a helper in docs/manual/sources.ts, never retyped.</p>
+</section>

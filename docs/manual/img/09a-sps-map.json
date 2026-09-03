@@ -1,0 +1,65 @@
+{
+  "image": "img/09a-sps-map.png",
+  "name": "09a-sps-map",
+  "caption": "SPS tab: the loaded survey on the grid view, QC run",
+  "callouts": [
+    {
+      "n": 1,
+      "label": "Open an SPS survey (S / R / X)",
+      "selector": "#spsLoadBtn",
+      "rect": {
+        "x": 90,
+        "y": 185,
+        "w": 91,
+        "h": 32
+      }
+    },
+    {
+      "n": 2,
+      "label": "What was loaded: sources, receivers, cross-references",
+      "selector": "#spsStats",
+      "rect": {
+        "x": 90,
+        "y": 233,
+        "w": 549,
+        "h": 17
+      }
+    },
+    {
+      "n": 3,
+      "label": "The survey map",
+      "selector": "#spsCanvas",
+      "rect": {
+        "x": 90,
+        "y": 263,
+        "w": 1478,
+        "h": 619
+      }
+    },
+    {
+      "n": 4,
+      "label": "The X-ref spider is OFF here",
+      "selector": "#spsShowXrefs",
+      "rect": {
+        "x": 437,
+        "y": 195,
+        "w": 13,
+        "h": 13
+      }
+    },
+    {
+      "n": 5,
+      "label": "What QC found, against the intervals and tolerance beside it",
+      "selector": "#qcResults",
+      "rect": {
+        "x": 90,
+        "y": 938,
+        "w": 1478,
+        "h": 65
+      }
+    }
+  ],
+  "missingCallouts": [],
+  "frameLeaks": [],
+  "bytes": 205997
+}

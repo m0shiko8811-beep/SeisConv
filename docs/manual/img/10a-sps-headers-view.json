@@ -1,0 +1,65 @@
+{
+  "image": "img/10a-sps-headers-view.png",
+  "name": "10a-sps-headers-view",
+  "caption": "SPS header editor: the H-record block as loaded",
+  "callouts": [
+    {
+      "n": 1,
+      "label": "View: the H records exactly as they are in the files",
+      "selector": "#spsHdrTabView",
+      "rect": {
+        "x": 416,
+        "y": 266,
+        "w": 50,
+        "h": 26
+      }
+    },
+    {
+      "n": 2,
+      "label": "CRS / Datum: the projection as a form",
+      "selector": "#spsHdrTabCrs",
+      "rect": {
+        "x": 466,
+        "y": 266,
+        "w": 94,
+        "h": 26
+      }
+    },
+    {
+      "n": 3,
+      "label": "Admin: survey area, date, client, contractor",
+      "selector": "#spsHdrTabAdmin",
+      "rect": {
+        "x": 560,
+        "y": 266,
+        "w": 60,
+        "h": 26
+      }
+    },
+    {
+      "n": 4,
+      "label": "Raw records: edit any H record directly",
+      "selector": "#spsHdrTabRaw",
+      "rect": {
+        "x": 620,
+        "y": 266,
+        "w": 90,
+        "h": 26
+      }
+    },
+    {
+      "n": 5,
+      "label": "Which of the three files the edit applies to",
+      "selector": "#spsHdrScope",
+      "rect": {
+        "x": 513,
+        "y": 219,
+        "w": 213,
+        "h": 32
+      }
+    }
+  ],
+  "missingCallouts": [],
+  "frameLeaks": [],
+  "bytes": 224555
+}

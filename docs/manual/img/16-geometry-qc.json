@@ -1,0 +1,54 @@
+{
+  "image": "img/16-geometry-qc.png",
+  "name": "16-geometry-qc",
+  "caption": "Geometry QC finding a mismatch: the open file's receiver coordinates match no station in the loaded survey",
+  "callouts": [
+    {
+      "n": 1,
+      "label": "Cross-check the headers against the survey",
+      "selector": "#spsGeomChkBtn",
+      "rect": {
+        "x": 293,
+        "y": 225,
+        "w": 142,
+        "h": 32
+      }
+    },
+    {
+      "n": 2,
+      "label": "Match tolerance, in metres",
+      "selector": "#geomChkTol",
+      "rect": {
+        "x": 504,
+        "y": 228,
+        "w": 62,
+        "h": 26
+      }
+    },
+    {
+      "n": 3,
+      "label": "Stamp the survey coordinates into the headers and save a new SEG-Y",
+      "selector": "#spsGeomLoadBtn",
+      "rect": {
+        "x": 264,
+        "y": 463,
+        "w": 162,
+        "h": 32
+      }
+    },
+    {
+      "n": 4,
+      "label": "Or diff the as-laid survey against a pre-plot",
+      "selector": "#spsDeltaBtn",
+      "rect": {
+        "x": 235,
+        "y": 549,
+        "w": 182,
+        "h": 32
+      }
+    }
+  ],
+  "missingCallouts": [],
+  "frameLeaks": [],
+  "bytes": 131660
+}

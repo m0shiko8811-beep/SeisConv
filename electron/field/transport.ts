@@ -25,7 +25,17 @@ import {
   encodeNotFound,
   manifestFromJson,
   WFSYNC_TMP_SUFFIX,
+  MAX_MANIFEST_BYTES,
+  MAX_FILE_BYTES,
+  SOCKET_HIGH_WATER,
+  SOCKET_LOW_WATER,
+  SOCKET_MAX_BUFFER,
 } from '../../core/field';
+
+/** '::ffff:192.168.1.5' → '192.168.1.5'; everything else passes through. */
+export function normalizeAddr(a: string): string {
+  return a.startsWith('::ffff:') ? a.slice(7) : a;
+}
 
 const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
 
@@ -37,18 +47,33 @@ export class RemoteFileNotFoundError extends Error {
   }
 }
 
-/** Buffers a socket's incoming bytes and hands out exact-length reads (recv_exact). */
+/** Buffers a socket's incoming bytes and hands out exact-length reads (recv_exact).
+ *  The peer is untrusted, so unread bytes are bounded: the socket is paused above
+ *  SOCKET_HIGH_WATER (real backpressure, no data lost) and the connection is
+ *  failed outright above SOCKET_MAX_BUFFER, which a well-behaved peer never hits. */
 class SocketReader {
   private chunks: Buffer[] = [];
   private buffered = 0;
   private waiter: { n: number; resolve: (b: Buffer) => void; reject: (e: Error) => void } | null = null;
   private err: Error | null = null;
   private ended = false;
+  private paused = false;
+  private readonly sock: net.Socket;
 
   constructor(sock: net.Socket) {
+    this.sock = sock;
     sock.on('data', (d: Buffer) => {
       this.chunks.push(d);
       this.buffered += d.length;
+      if (this.buffered > SOCKET_MAX_BUFFER) {
+        this.chunks = [];
+        this.buffered = 0;
+        this.err = new Error(`peer sent more than ${SOCKET_MAX_BUFFER} unread bytes`);
+        try { sock.destroy(); } catch { /* ignore */ }
+      } else if (!this.paused && this.buffered > SOCKET_HIGH_WATER) {
+        this.paused = true;
+        sock.pause();
+      }
       this.pump();
     });
     sock.on('end', () => {
@@ -82,6 +107,10 @@ class SocketReader {
       }
     }
     this.buffered -= n;
+    if (this.paused && this.buffered < SOCKET_LOW_WATER) {
+      this.paused = false;
+      this.sock.resume();
+    }
     return out;
   }
 
@@ -145,6 +174,9 @@ export function fetchManifest(peerIp: string, peerPort: number): Promise<Manifes
       (async () => {
         const lenBuf = await reader.readExact(4);
         const len = lenBuf.readUInt32BE(0);
+        if (len > MAX_MANIFEST_BYTES) {
+          throw new Error(`peer manifest too large (${len} bytes > ${MAX_MANIFEST_BYTES})`);
+        }
         const data = await reader.readExact(len);
         if (done) return;
         done = true;
@@ -202,6 +234,9 @@ export function fetchFile(
         if (status[0] !== STATUS_OK) throw new RemoteFileNotFoundError(relPath);
         const mtime = (await reader.readExact(8)).readDoubleBE(0);
         const size = Number((await reader.readExact(8)).readBigUInt64BE(0));
+        if (!Number.isFinite(size) || size < 0 || size > MAX_FILE_BYTES) {
+          throw new Error(`peer declared an implausible file size for '${relPath}': ${size}`);
+        }
 
         await fsp.mkdir(path.dirname(absDest), { recursive: true });
         fh = await fsp.open(tmp, 'w');
@@ -238,6 +273,11 @@ export interface FileServerOptions {
   /** Bind host. undefined → all interfaces (spec default). Tests pass '127.0.0.1'. */
   host?: string;
   limiter?: RateLimiter;
+  /** Optional per-connection allowlist. Returning false closes the connection
+   *  before any manifest or file byte leaves this machine, so an un-approved host
+   *  on the same hotspot cannot enumerate or read the shared folder. A bare TCP
+   *  connect still succeeds, which keeps peer probing/scanning working. */
+  isPeerAllowed?: (remoteAddress: string) => boolean;
   onLog?: (msg: string) => void;
 }
 
@@ -255,6 +295,15 @@ export class FileServer {
     return new Promise((resolve, reject) => {
       const server = net.createServer((conn) => {
         conn.setTimeout(120000, () => conn.destroy());
+        const gate = this.opts.isPeerAllowed;
+        if (gate) {
+          const addr = normalizeAddr(conn.remoteAddress ?? '');
+          if (!gate(addr)) {
+            this.log(`Refused un-approved peer ${addr || '(unknown)'} - approve it in WiFiSync to share.`);
+            conn.destroy();
+            return;
+          }
+        }
         this.handle(conn).catch((e) => this.log(`Error handling client: ${e}`));
       });
       server.on('error', reject);

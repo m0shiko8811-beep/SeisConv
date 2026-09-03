@@ -1,0 +1,99 @@
+/* docs/manual/print.css - the SeisConv manual's print stylesheet.
+   Target: Chromium's print engine via Electron `printToPDF` (docs/manual/render-pdf.mjs),
+   NOT a browser print dialog. Page size, margins, running header/footer and page
+   numbers are supplied by printToPDF's pageSize / margins / headerTemplate /
+   footerTemplate options, so @page here only sets the safe fallback. Fonts are the
+   system stack shipped with the app - no webfont download, so the PDF embeds
+   whatever the rendering machine has and stays small. */
+
+@page { size: A4; margin: 18mm 16mm 18mm 16mm; }
+
+html { font-size: 10.5pt; }
+body {
+  margin: 0;
+  font-family: "Segoe UI", "Helvetica Neue", Arial, sans-serif;
+  color: #14181d;
+  background: #fff;
+  line-height: 1.45;
+  -webkit-print-color-adjust: exact;
+  print-color-adjust: exact;
+}
+.mono, code, pre, .kbd { font-family: "Cascadia Mono", Consolas, "DejaVu Sans Mono", monospace; }
+
+/* ---- cover ------------------------------------------------------------- */
+.cover { height: 245mm; display: flex; flex-direction: column; justify-content: center; text-align: center; page-break-after: always; }
+.cover h1 { font-size: 40pt; margin: 0 0 4mm; letter-spacing: 1px; }
+.cover .tagline { font-size: 13pt; color: #4a5560; margin: 0 0 16mm; }
+.cover .ver { font-size: 12pt; }
+.cover .ver b { font-size: 15pt; }
+.cover .built { color: #6b757f; margin-top: 3mm; font-size: 10pt; }
+.cover .foot { margin-top: auto; color: #6b757f; font-size: 9pt; }
+
+/* ---- table of contents ------------------------------------------------- */
+.toc { page-break-after: always; }
+.toc h2 { border: 0; }
+.toc ol { list-style: none; padding-left: 0; }
+.toc > ol > li { margin: 2.5mm 0; font-weight: 600; }
+.toc ol ol { padding-left: 6mm; font-weight: 400; }
+.toc a { color: inherit; text-decoration: none; }
+.toc .pg { color: #8b949e; }
+
+/* ---- structure --------------------------------------------------------- */
+.part { page-break-before: always; page-break-after: always; padding-top: 60mm; }
+.part .kicker { color: #7a848e; letter-spacing: 3px; text-transform: uppercase; font-size: 10pt; }
+.part h1 { font-size: 30pt; margin: 2mm 0 4mm; }
+.part .blurb { color: #4a5560; max-width: 120mm; }
+
+.chapter { page-break-before: always; }
+h1, h2, h3, h4 { page-break-after: avoid; break-after: avoid-page; }
+h2 { font-size: 19pt; margin: 0 0 3mm; padding-bottom: 2mm; border-bottom: 2px solid #d7dde3; }
+h3 { font-size: 12.5pt; margin: 6mm 0 2mm; color: #24303b; }
+p, li { orphans: 3; widows: 3; }
+ul, ol { padding-left: 6mm; }
+li { margin: 1.2mm 0; break-inside: avoid; }
+
+.summary { background: #f2f5f8; border-left: 3px solid #4a76a8; padding: 2.5mm 4mm; margin: 0 0 4mm; break-inside: avoid; }
+.note { color: #6b757f; font-style: italic; }
+.scaffold { border: 1px dashed #b7c0c9; background: #fbfcfd; padding: 3mm 4mm; margin: 3mm 0; color: #55606b; break-inside: avoid; }
+
+.kbd {
+  display: inline-block; border: 1px solid #b7c0c9; border-bottom-width: 2px; border-radius: 3px;
+  padding: 0 1.2mm; font-size: 0.88em; background: #f6f8fa; white-space: nowrap;
+}
+.todo { background: #ffe9a8; border: 1px solid #d9ad2b; border-radius: 2px; padding: 0 1mm; font-size: 0.9em; }
+
+table { border-collapse: collapse; width: 100%; margin: 3mm 0; font-size: 0.95em; }
+th, td { border: 1px solid #d7dde3; padding: 1.5mm 2.5mm; text-align: left; vertical-align: top; }
+th { background: #eef2f6; }
+thead { display: table-header-group; }   /* repeat the head when a long table splits */
+tr { break-inside: avoid; }
+
+/* ---- figures ------------------------------------------------------------ */
+/* A screenshot must never be cut in half by a page break, and must never be wider
+   than the text column: `break-inside: avoid` keeps the picture, its caption and its
+   numbered legend on one page, and the max-height keeps a tall shot inside a single
+   page even at A4's shorter text height (245mm text box minus room for the caption). */
+figure { break-inside: avoid; page-break-inside: avoid; margin: 5mm 0; }
+figure img {
+  display: block; max-width: 100%; width: 100%; height: auto;
+  max-height: 175mm; object-fit: contain;
+  border: 1px solid #d7dde3; border-radius: 2px; background: #10141a;
+}
+figcaption { color: #6b757f; font-size: 0.9em; margin-top: 1.5mm; }
+figure .legend {
+  margin: 1.5mm 0 0; padding-left: 7mm; font-size: 0.88em; color: #37424d;
+  break-inside: avoid;
+}
+figure .legend li { margin: 0.6mm 0; }
+/* Missing screenshot: the build still produces a document, and says so on the page. */
+.img-missing {
+  border: 1px dashed #b7c0c9; background: #fbfcfd; color: #55606b;
+  padding: 12mm 6mm; text-align: center; font-size: 0.9em;
+}
+.figref { color: #2c5b96; text-decoration: none; white-space: nowrap; }
+
+/* On screen only: a page-width frame so the HTML preview looks like the PDF. */
+@media screen {
+  body { background: #e9edf1; }
+  .sheet { width: 178mm; margin: 0 auto; padding: 16mm; background: #fff; }
+}

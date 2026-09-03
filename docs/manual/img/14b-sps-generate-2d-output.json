@@ -1,0 +1,43 @@
+{
+  "image": "img/14b-sps-generate-2d-output.png",
+  "name": "14b-sps-generate-2d-output",
+  "caption": "The lower half of the same wizard: the relation and the output files",
+  "callouts": [
+    {
+      "n": 1,
+      "label": "The relation written into the X file",
+      "selector": "#cRelType",
+      "rect": {
+        "x": 426,
+        "y": 697,
+        "w": 358,
+        "h": 32
+      }
+    },
+    {
+      "n": 2,
+      "label": "Base name for the S / R / X files",
+      "selector": "#cBaseName",
+      "rect": {
+        "x": 426,
+        "y": 825,
+        "w": 358,
+        "h": 32
+      }
+    },
+    {
+      "n": 3,
+      "label": "Create & Save…",
+      "selector": "#spsWizardCreate",
+      "rect": {
+        "x": 1077,
+        "y": 905,
+        "w": 112,
+        "h": 30
+      }
+    }
+  ],
+  "missingCallouts": [],
+  "frameLeaks": [],
+  "bytes": 368299
+}

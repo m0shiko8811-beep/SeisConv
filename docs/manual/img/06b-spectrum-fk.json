@@ -1,0 +1,32 @@
+{
+  "image": "img/06b-spectrum-fk.png",
+  "name": "06b-spectrum-fk",
+  "caption": "The same file as an F-K panel: the ground-roll fan spreads in wavenumber while the flat reflections stay near kx = 0",
+  "callouts": [
+    {
+      "n": 1,
+      "label": "F-K display selected",
+      "selector": "#specDispFk",
+      "rect": {
+        "x": 310,
+        "y": 228,
+        "w": 42,
+        "h": 26
+      }
+    },
+    {
+      "n": 2,
+      "label": "Frequency against wavenumber over the whole record; slope f/kx is apparent velocity",
+      "selector": "#specCanvas",
+      "rect": {
+        "x": 90,
+        "y": 269,
+        "w": 1488,
+        "h": 619
+      }
+    }
+  ],
+  "missingCallouts": [],
+  "frameLeaks": [],
+  "bytes": 329955
+}

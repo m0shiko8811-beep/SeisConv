@@ -1,0 +1,43 @@
+{
+  "image": "img/15-sps-generate-3d.png",
+  "name": "15-sps-generate-3d",
+  "caption": "The same wizard in 3D: the picked lines become receiver lines and source lines are generated across them",
+  "callouts": [
+    {
+      "n": 1,
+      "label": "3D acquisition",
+      "selector": "#spsCreate3d",
+      "rect": {
+        "x": 132,
+        "y": 184,
+        "w": 39,
+        "h": 26
+      }
+    },
+    {
+      "n": 2,
+      "label": "Receiver interval along each picked line",
+      "selector": "#cRcvInt",
+      "rect": {
+        "x": 426,
+        "y": 346,
+        "w": 358,
+        "h": 26
+      }
+    },
+    {
+      "n": 3,
+      "label": "Source interval along the generated source lines",
+      "selector": "#cSrcInt",
+      "rect": {
+        "x": 802,
+        "y": 346,
+        "w": 358,
+        "h": 26
+      }
+    }
+  ],
+  "missingCallouts": [],
+  "frameLeaks": [],
+  "bytes": 373740
+}

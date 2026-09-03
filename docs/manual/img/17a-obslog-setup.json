@@ -1,0 +1,21 @@
+{
+  "image": "img/17a-obslog-setup.png",
+  "name": "17a-obslog-setup",
+  "caption": "Observer Log setup: choose the column groups before the log is built",
+  "callouts": [
+    {
+      "n": 1,
+      "label": "Build the log with the chosen columns",
+      "selector": "#ologBuildBtn",
+      "rect": {
+        "x": 109,
+        "y": 920,
+        "w": 122,
+        "h": 41
+      }
+    }
+  ],
+  "missingCallouts": [],
+  "frameLeaks": [],
+  "bytes": 130026
+}

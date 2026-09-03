@@ -1,0 +1,43 @@
+{
+  "image": "img/02b-converter-batch-run.png",
+  "name": "02b-converter-batch-run",
+  "caption": "The batch panel scrolled to the destination and the run button",
+  "callouts": [
+    {
+      "n": 1,
+      "label": "Pick the destination folder",
+      "selector": "#pickOutBtn",
+      "rect": {
+        "x": 1423,
+        "y": 780,
+        "w": 126,
+        "h": 32
+      }
+    },
+    {
+      "n": 2,
+      "label": "Convert every file found - disabled until a destination is set",
+      "selector": "#runBatchBtn",
+      "rect": {
+        "x": 109,
+        "y": 846,
+        "w": 158,
+        "h": 41
+      }
+    },
+    {
+      "n": 3,
+      "label": "Clear the list",
+      "selector": "#clearBatchBtn",
+      "rect": {
+        "x": 277,
+        "y": 850,
+        "w": 77,
+        "h": 32
+      }
+    }
+  ],
+  "missingCallouts": [],
+  "frameLeaks": [],
+  "bytes": 143768
+}

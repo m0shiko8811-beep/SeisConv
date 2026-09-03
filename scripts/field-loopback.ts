@@ -67,8 +67,11 @@ async function main(): Promise<void> {
   const logsA: string[] = [];
   const logsB: string[] = [];
 
-  const engineA = new SyncEngine({ folder: folderA, mode: 'both', onLog: (m) => logsA.push(m) });
-  const engineB = new SyncEngine({ folder: folderB, mode: 'both', onLog: (m) => logsB.push(m) });
+  // allowRemoteDeletes is OFF by default (a peer must not be able to delete local
+  // data unasked); this proof covers the deletion-propagation path, so both sides
+  // opt in explicitly - exactly what the WiFiSync checkbox does.
+  const engineA = new SyncEngine({ folder: folderA, mode: 'both', allowRemoteDeletes: true, onLog: (m) => logsA.push(m) });
+  const engineB = new SyncEngine({ folder: folderB, mode: 'both', allowRemoteDeletes: true, onLog: (m) => logsB.push(m) });
 
   const serverA = new FileServer({ folder: folderA, getManifest: () => engineA.getMergedManifest(), port: 0, host: '127.0.0.1' });
   const serverB = new FileServer({ folder: folderB, getManifest: () => engineB.getMergedManifest(), port: 0, host: '127.0.0.1' });

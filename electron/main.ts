@@ -17,7 +17,7 @@ import { epsgCount, getEpsg, searchEpsgRegistry } from '../core/sps/epsgdb';
 import type { CRS } from '../core/sps/reproject';
 import { projToLatLon, type Projection } from '../core/coords';
 import { writeGeoTIFF } from '../core/gis/geotiff';
-import { fitZoom, resampleMosaic, TILE_SIZE } from '../core/gis/tilemosaic';
+import { fitZoom, resampleMosaic, zoomForResolution, TILE_SIZE } from '../core/gis/tilemosaic';
 import * as dns from 'node:dns';
 import * as path from 'node:path';
 import JSZip from 'jszip';
@@ -25,7 +25,7 @@ import { writeTapeVolHeader, writeTapeEnd, parseUdpTrigger, parseTriggerLine, pa
 import { RateLimiter, TCP_FILE_PORT, complementRole, type Role as FieldRole } from '../core/field';
 import {
   SyncEngine, FileServer, DiscoveryService, HistoryLog,
-  loadSettings, saveSettings, DEFAULT_SETTINGS,
+  loadSettings, saveSettings, DEFAULT_SETTINGS, sanitizeTrustedPeers, MAX_TRUSTED_PEERS, normalizeAddr,
   type WifiSyncSettings,
   windows as fieldWin,
 } from './field';
@@ -489,8 +489,27 @@ ipcMain.handle('seisconv:pickOutputFolder', async () => {
 });
 
 // Strip characters illegal in file names so a templated base is always safe.
+//
+// Beyond the Win32 reserved punctuation this also removes C0/C1 CONTROL
+// characters and bidi OVERRIDES, and caps the length. Established by execution
+// on Windows, not by inspection: a base carrying U+0000 makes writeFile throw
+// ERR_INVALID_ARG_VALUE, U+0001-U+001F gives ENOENT, and a 300-character base
+// blows past MAX_PATH - so an un-stripped name turned every file in a batch
+// into a failed conversion instead of a saved one. A bidi override additionally
+// display-spoofs the extension (a name ending U+202E + "gpj.exe" reads as
+// ".jpg" in Explorer). Trailing dots/spaces are dropped because Windows strips
+// them silently, which would otherwise make two distinct names collide.
+// MUST stay identical to the renderer's sanitizeName (renderer/src/app.ts).
 function sanitizeBaseName(s: string): string {
-  return s.replace(/[\\/:*?"<>|]/g, '_').replace(/\s+/g, ' ').trim() || 'output';
+  return s
+    .replace(/[\u0000-\u001f\u007f-\u009f]/g, '')
+    .replace(/[\u202a-\u202e\u2066-\u2069\u200e\u200f]/g, '')
+    .replace(/[\\/:*?"<>|]/g, '_')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .slice(0, 120)
+    .replace(/[. ]+$/, '')
+    .trim() || 'output';
 }
 
 // Apply the output-name template for one file → a safe base name (no extension).
@@ -1213,16 +1232,16 @@ const BASEMAP_SOURCES: Record<string, { url: string; attribution: string; maxZoo
     label: 'OpenStreetMap',
   },
   light: {
-    url: 'https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}.png',
-    attribution: '(c) OpenStreetMap contributors, (c) CARTO',
-    maxZoom: 19,
-    label: 'CARTO Positron',
+    url: 'https://server.arcgisonline.com/ArcGIS/rest/services/Canvas/World_Light_Gray_Base/MapServer/tile/{z}/{y}/{x}',
+    attribution: 'Esri Light Gray Canvas - Esri, HERE, Garmin, (c) OpenStreetMap contributors',
+    maxZoom: 16,
+    label: 'Esri Light Gray Canvas',
   },
   dark: {
-    url: 'https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}.png',
-    attribution: '(c) OpenStreetMap contributors, (c) CARTO',
-    maxZoom: 19,
-    label: 'CARTO Dark Matter',
+    url: 'https://server.arcgisonline.com/ArcGIS/rest/services/Canvas/World_Dark_Gray_Base/MapServer/tile/{z}/{y}/{x}',
+    attribution: 'Esri Dark Gray Canvas - Esri, HERE, Garmin, (c) OpenStreetMap contributors',
+    maxZoom: 16,
+    label: 'Esri Dark Gray Canvas',
   },
 };
 
@@ -1368,6 +1387,15 @@ async function buildBasemapBand(
   const resM = outCrs.subtype === 'GEO'
     ? grid.pixelSize * 111320 * Math.max(0.05, Math.cos((midLat * Math.PI) / 180))
     : grid.pixelSize * unit;
+  // A provider's own zoom ceiling is a SILENT limit: fitZoom clamps to it and
+  // reports no downgrade, so an export at a finer pixel size than the source can
+  // resolve would bake permanently-soft imagery into a deliverable with nothing
+  // to explain it. Ask for the zoom the resolution deserves with the cap lifted,
+  // and if the provider cannot reach it, say so.
+  const wantZoom = zoomForResolution(resM, midLat, 22);
+  if (Number.isFinite(wantZoom) && wantZoom > src.maxZoom) {
+    notes.push(`Basemap: ${src.label} has imagery only to zoom ${src.maxZoom}; the ${grid.pixelSize} units/pixel grid asked for zoom ${wantZoom}, so the imagery is upscaled and soft. Esri World Imagery (Satellite) reaches zoom 19.`);
+  }
   const fit = fitZoom({ south, west, north, east }, resM, MAX_BASEMAP_TILES, src.maxZoom);
   if (fit.downgraded) {
     notes.push(`Basemap: the area needs more than ${MAX_BASEMAP_TILES} tiles at full detail, so zoom ${fit.zoom} was used - the imagery is coarser than the raster's ${grid.pixelSize} units/pixel.`);
@@ -2509,6 +2537,12 @@ class FieldHub {
   private broadcastAddr = '<broadcast>';
   private manualMode = false;
   private running = false;
+  /** Explicitly approved crew machines (IPv4). Nothing is pulled from, and
+   *  nothing is served to, a host that is not in here. Persisted in settings. */
+  private trusted = new Set<string>();
+  /** Discovered-but-unapproved hosts, kept only so the UI can offer "Approve". */
+  private readonly pending = new Map<string, FieldPeer>();
+  private allowRemoteDelete = false;
 
   // Settings / history / log live under the Electron userData dir (the app's own
   // per-user store) - the SeisConv analogue of WiFiSync's exe-adjacent files.
@@ -2526,7 +2560,19 @@ class FieldHub {
   }
   setSettings(s: Partial<WifiSyncSettings>): { ok: boolean; error?: string } {
     try {
-      const merged: WifiSyncSettings = { ...this.getSettings(), ...s };
+      const prev = this.getSettings();
+      const patch: Partial<WifiSyncSettings> = { ...s };
+      // `folder` is the path this hub later serves to the LAN. Only a path the
+      // user picked through the folder dialog may be stored, so the persisted
+      // value stays a trustworthy source for folderAllowed() after a restart.
+      if (patch.folder !== undefined && !isAuthorizedDir(String(patch.folder))) {
+        if (path.resolve(String(patch.folder) || '.') !== path.resolve(prev.folder || '.')) {
+          delete patch.folder;
+        }
+      }
+      if (patch.trusted_peers !== undefined) patch.trusted_peers = sanitizeTrustedPeers(patch.trusted_peers);
+      if (patch.allow_remote_delete !== undefined) patch.allow_remote_delete = patch.allow_remote_delete === true;
+      const merged: WifiSyncSettings = { ...prev, ...patch };
       saveSettings(this.settingsPath(), merged);
       return { ok: true };
     } catch (e) { return { ok: false, error: (e as Error).message }; }
@@ -2548,8 +2594,75 @@ class FieldHub {
       discoveryOn: !!this.discovery,
       manual: this.manualMode,
       folder: this.folder,
-      peers: [...this.peers.entries()].map(([ip, p]) => ({ ip, port: p.port, role: p.role })),
+      peers: [...this.peers.entries()].map(([ip, p]) => ({ ip, port: p.port, role: p.role, trusted: true })),
+      pending: [...this.pending.entries()].map(([ip, p]) => ({ ip, port: p.port, role: p.role, trusted: false })),
+      allowRemoteDelete: this.allowRemoteDelete,
     };
+  }
+
+  // -- peer trust ---------------------------------------------------------------
+  // WiFiSync's beacon is a plain 26-byte UDP packet with a fixed magic and no
+  // secret, so ANY host on the hotspot can claim to be a peer. Rather than invent
+  // a home-grown crypto handshake, trust is EXPLICIT: a newly seen host is parked
+  // as "pending" and shown in the UI; only after the user approves it is it added
+  // to the sync engine (pull direction) and allowed past the file server's
+  // connection gate (serve direction). Approvals persist in settings, so a real
+  // crew approves each machine once.
+  private isTrusted(ip: string): boolean {
+    return this.trusted.has(normalizeAddr(ip));
+  }
+
+  private loadTrust(): void {
+    const s = this.getSettings();
+    this.trusted = new Set(sanitizeTrustedPeers(s.trusted_peers));
+    this.allowRemoteDelete = s.allow_remote_delete === true;
+  }
+
+  private persistTrust(): void {
+    this.setSettings({ trusted_peers: [...this.trusted], allow_remote_delete: this.allowRemoteDelete });
+  }
+
+  /** Approve (or revoke) a peer. Approving promotes a pending peer into the
+   *  engine immediately; revoking removes it from the engine at once. */
+  trustPeer(ipRaw: string, trusted: boolean): { ok: boolean; error?: string } {
+    const ip = normalizeAddr(String(ipRaw ?? '').trim());
+    if (!/^\d{1,3}(\.\d{1,3}){3}$/.test(ip) || ip.split('.').some((o) => Number(o) > 255)) {
+      return { ok: false, error: 'Not a valid IPv4 address.' };
+    }
+    if (trusted) {
+      if (!this.trusted.has(ip) && this.trusted.size >= MAX_TRUSTED_PEERS) {
+        return { ok: false, error: `Too many approved peers (max ${MAX_TRUSTED_PEERS}). Revoke one first.` };
+      }
+      this.trusted.add(ip);
+      const p = this.pending.get(ip);
+      const port = p?.port ?? TCP_FILE_PORT;
+      const role = p?.role ?? 'both';
+      this.pending.delete(ip);
+      if (this.running) {
+        this.peers.set(ip, { port, role });
+        this.engine?.addPeer(ip, port);
+      }
+      this.log(`Peer ${ip} approved - syncing with it from now on.`);
+    } else {
+      this.trusted.delete(ip);
+      this.peers.delete(ip);
+      this.engine?.removePeer(ip);
+      this.log(`Peer ${ip} approval revoked - no longer syncing with it.`);
+    }
+    this.persistTrust();
+    this.send({ type: 'status', ...this.status() });
+    return { ok: true };
+  }
+
+  /** Session + persisted switch for peer-driven local deletions (higher bar than
+   *  a plain pull: a tombstone destroys local data). */
+  setAllowRemoteDelete(on: boolean): { ok: boolean } {
+    this.allowRemoteDelete = !!on;
+    this.engine?.setAllowRemoteDeletes(this.allowRemoteDelete);
+    this.persistTrust();
+    this.log(`Peer-driven local deletions ${this.allowRemoteDelete ? 'ENABLED' : 'disabled'}.`);
+    this.send({ type: 'status', ...this.status() });
+    return { ok: true };
   }
 
   private makeDiscovery(): DiscoveryService {
@@ -2561,9 +2674,17 @@ class FieldHub {
       role: this.role,
       onLog: (m) => this.log(m),
       onPeerFound: (ip, port, role) => {
+        if (!this.isTrusted(ip)) {
+          // Unknown host: park it for the user to approve. No manifest fetch, no
+          // pull, no delete, and the file server still refuses it.
+          if (!this.pending.has(ip)) this.log(`New host ${ip} is offering to sync - approve it in the Peers list to allow it.`);
+          this.pending.set(ip, { port, role });
+          this.send({ type: 'peer', action: 'pending', ip, port, role, trusted: false });
+          return;
+        }
         this.peers.set(ip, { port, role });
         this.engine?.addPeer(ip, port);
-        this.send({ type: 'peer', action: 'found', ip, port, role });
+        this.send({ type: 'peer', action: 'found', ip, port, role, trusted: true });
         // Auto-negotiation: adopt the complement of a definite-role peer once per
         // session (peer master → we slave, peer slave → we master). A 'both' peer
         // triggers none. The renderer mirrors the radio lock.
@@ -2577,6 +2698,7 @@ class FieldHub {
         }
       },
       onPeerLost: (ip) => {
+        this.pending.delete(ip);
         this.peers.delete(ip);
         this.engine?.removePeer(ip);
         this.send({ type: 'peer', action: 'lost', ip });
@@ -2585,12 +2707,28 @@ class FieldHub {
     });
   }
 
+  /** The shared folder is served, unauthenticated, to the LAN AND written into by
+   *  peers, so it may only ever be a directory the USER picked. Accept it if the
+   *  folder picker authorized it this session, or if it is exactly the folder
+   *  persisted in our own userData settings - which setSettings only lets an
+   *  already-authorized path reach. A renderer-supplied path gets no other way in. */
+  private folderAllowed(dir: string): boolean {
+    if (isAuthorizedDir(dir)) return true;
+    try {
+      const saved = this.getSettings().folder;
+      return !!saved && path.resolve(saved) === path.resolve(dir);
+    } catch { return false; }
+  }
+
   async start(cfg: FieldStartCfg): Promise<{ ok: boolean; error?: string; serverOn: boolean; discoveryOn: boolean }> {
     await this.stop();
     // Validate folder.
     let dir = '';
     try {
       dir = path.resolve(cfg.folder);
+      if (!this.folderAllowed(dir)) {
+        return { ok: false, error: 'Choose the shared folder with "Pick folder" first - WiFiSync only shares a folder you selected.', serverOn: false, discoveryOn: false };
+      }
       if (!(await stat(dir)).isDirectory()) return { ok: false, error: 'Shared folder does not exist.', serverOn: false, discoveryOn: false };
     } catch {
       return { ok: false, error: 'Shared folder does not exist.', serverOn: false, discoveryOn: false };
@@ -2607,6 +2745,8 @@ class FieldHub {
     this.manualMode = !!cfg.manualIp;
     this.instanceId = randomBytes(16);
     this.peers.clear();
+    this.pending.clear();
+    this.loadTrust();
     const maxKbps = Math.max(0, cfg.maxKbps || 0);
 
     // Engine (receive/diff path) + its own rate limiter.
@@ -2617,6 +2757,7 @@ class FieldHub {
       watchMode: cfg.watchMode,
       syncInterval: cfg.syncInterval,
       maxKbps,
+      allowRemoteDeletes: this.allowRemoteDelete,
       onLog: (m) => this.log(m),
       onSyncResult: (ok, detail) => this.send({ type: 'sync', ok, detail: detail ?? '' }),
       onFileEvent: (kind, relPath, peerIp, size) => {
@@ -2632,7 +2773,12 @@ class FieldHub {
       folder: dir,
       getManifest: () => this.engine!.getMergedManifest(),
       port: TCP_FILE_PORT,
+      // Bind to the SELECTED adapter only, so the shared folder is reachable on
+      // the crew's network and nowhere else. Manual-peer mode has no adapter
+      // selection, so it must listen on all interfaces to answer that peer.
+      host: this.bindIp || undefined,
       limiter: new RateLimiter(maxKbps),
+      isPeerAllowed: (addr) => this.isTrusted(addr),
       onLog: (m) => this.log(m),
     });
     try {
@@ -2649,10 +2795,14 @@ class FieldHub {
     if (cfg.manualIp) {
       // Manual peer: test TCP reachability, then add it (no discovery).
       const reachable = await this.testPeer(cfg.manualIp, TCP_FILE_PORT);
-      if (reachable) {
+      if (reachable && !this.isTrusted(cfg.manualIp)) {
+        this.pending.set(cfg.manualIp, { port: TCP_FILE_PORT, role: 'both' });
+        this.send({ type: 'peer', action: 'pending', ip: cfg.manualIp, port: TCP_FILE_PORT, role: 'both', trusted: false });
+        this.log(`Manual peer ${cfg.manualIp}:${TCP_FILE_PORT} reachable - approve it in the Peers list to start syncing.`);
+      } else if (reachable) {
         this.peers.set(cfg.manualIp, { port: TCP_FILE_PORT, role: 'both' });
         this.engine.addPeer(cfg.manualIp, TCP_FILE_PORT);
-        this.send({ type: 'peer', action: 'found', ip: cfg.manualIp, port: TCP_FILE_PORT, role: 'both' });
+        this.send({ type: 'peer', action: 'found', ip: cfg.manualIp, port: TCP_FILE_PORT, role: 'both', trusted: true });
         this.log(`Manual peer ${cfg.manualIp}:${TCP_FILE_PORT} reachable - added.`);
       } else {
         this.log(`Manual peer ${cfg.manualIp}:${TCP_FILE_PORT} not reachable yet - will retry when you Sync.`);
@@ -2673,6 +2823,7 @@ class FieldHub {
     if (this.engine) { try { await this.engine.stop(); } catch { /* ignore */ } this.engine = null; }
     if (this.server) { try { await this.server.stop(); } catch { /* ignore */ } this.server = null; }
     this.peers.clear();
+    this.pending.clear();
     this.roleNegotiated = false;
     const was = this.running;
     this.running = false;
@@ -2709,9 +2860,16 @@ class FieldHub {
     if (!/^\d{1,3}(\.\d{1,3}){3}$/.test(ip)) return { ok: false, error: 'Enter a valid IPv4 address.' };
     const ok = await this.testPeer(ip, port);
     if (!ok) return { ok: false, error: `No WiFiSync peer answering at ${ip}:${port}.` };
+    if (!this.isTrusted(ip)) {
+      // Typing an address is a strong hint, but not proof of who answers it - the
+      // approval step stays, it is just pre-filled and one click away.
+      this.pending.set(ip, { port, role: 'both' });
+      this.send({ type: 'peer', action: 'pending', ip, port, role: 'both', trusted: false });
+      return { ok: false, error: `${ip} answered - approve it in the Peers list to start syncing.` };
+    }
     this.peers.set(ip, { port, role: 'both' });
     this.engine.addPeer(ip, port);
-    this.send({ type: 'peer', action: 'found', ip, port, role: 'both' });
+    this.send({ type: 'peer', action: 'found', ip, port, role: 'both', trusted: true });
     return { ok: true };
   }
 
@@ -2739,7 +2897,10 @@ ipcMain.handle('seisconv:field:pickFolder', async () => {
   if (!win) return null;
   const res = await dialog.showOpenDialog(win, { properties: ['openDirectory'] });
   if (res.canceled || res.filePaths.length === 0) return null;
-  return res.filePaths[0];
+  // Authorize the chosen directory: field:start serves this folder to the whole
+  // LAN and lets peers write into it, so it must be a folder the USER picked -
+  // not any string a (possibly compromised) renderer hands us.
+  return authorizeDir(res.filePaths[0]);
 });
 
 // Adapter list for the sync bind dropdown (ipconfig-based; §8j). Read-only.
@@ -2771,6 +2932,9 @@ ipcMain.handle('seisconv:field:setRole', (_e, role: unknown) => {
   return { ok: true, role: r };
 });
 ipcMain.handle('seisconv:field:syncNow', () => fieldHub.syncNow());
+ipcMain.handle('seisconv:field:trustPeer', (_e, args: { ip?: string; trusted?: boolean }) =>
+  fieldHub.trustPeer(String(args?.ip ?? ''), args?.trusted !== false));
+ipcMain.handle('seisconv:field:setAllowRemoteDelete', (_e, on: unknown) => fieldHub.setAllowRemoteDelete(on === true));
 ipcMain.handle('seisconv:field:connectPeer', (_e, args: { ip?: string; port?: number }) =>
   fieldHub.connectPeer(String(args?.ip ?? ''), Number(args?.port) || TCP_FILE_PORT));
 

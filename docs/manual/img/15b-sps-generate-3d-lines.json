@@ -1,0 +1,43 @@
+{
+  "image": "img/15b-sps-generate-3d-lines.png",
+  "name": "15b-sps-generate-3d-lines",
+  "caption": "The 3D-only controls: how the source lines are laid across the receiver lines",
+  "callouts": [
+    {
+      "n": 1,
+      "label": "Spacing of the generated source lines",
+      "selector": "#cSrcLineSpacing",
+      "rect": {
+        "x": 426,
+        "y": 577,
+        "w": 358,
+        "h": 26
+      }
+    },
+    {
+      "n": 2,
+      "label": "Azimuth of the generated source lines",
+      "selector": "#cAzimuth",
+      "rect": {
+        "x": 802,
+        "y": 577,
+        "w": 358,
+        "h": 26
+      }
+    },
+    {
+      "n": 3,
+      "label": "Create & Save…",
+      "selector": "#spsWizardCreate",
+      "rect": {
+        "x": 1077,
+        "y": 905,
+        "w": 112,
+        "h": 30
+      }
+    }
+  ],
+  "missingCallouts": [],
+  "frameLeaks": [],
+  "bytes": 371540
+}

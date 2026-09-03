@@ -1,6 +1,6 @@
 {
   "name": "seisconv",
-  "version": "0.7.11",
+  "version": "0.7.12",
   "description": "SeisConv - desktop seismic data converter & toolkit for SEG-Y, SEG-D, SEG-2, SU and SPS survey geometry",
   "author": {
     "name": "Moshe Fridin",
@@ -39,7 +39,10 @@
     "gen:manual": "tsx scripts/gen-manual.ts",
     "test:crossformat": "tsx scripts/test-crossformat.ts",
     "test:fuzz": "tsx scripts/test-fuzz.ts",
-    "test:all": "npm run typecheck && npm run test:core && npm run test:fuzz && npm run test:crossformat && npm run qa"
+    "test:all": "npm run typecheck && npm run test:core && npm run test:fuzz && npm run test:crossformat && npm run qa",
+    "manual": "tsx docs/manual/build.ts",
+    "manual:shots": "node docs/manual/shots.mjs",
+    "manual:pdf": "electron docs/manual/render-pdf.mjs"
   },
   "dependencies": {
     "@types/leaflet": "^1.9.21",
@@ -49,7 +52,7 @@
   },
   "devDependencies": {
     "@types/node": "^22.10.0",
-    "electron": "^39.8.10",
+    "electron": "^44.1.1",
     "electron-builder": "^26.15.3",
     "epsg-index": "^2.0.0",
     "esbuild": "^0.28.2",

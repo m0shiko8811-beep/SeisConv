@@ -1,0 +1,87 @@
+{
+  "image": "img/11-geotiff-wizard.png",
+  "name": "11-geotiff-wizard",
+  "caption": "GeoTIFF export wizard, area and resolution set from the loaded survey",
+  "callouts": [
+    {
+      "n": 1,
+      "label": "Use the whole survey plus a margin",
+      "selector": "#gtWholeBtn",
+      "rect": {
+        "x": 624,
+        "y": 331,
+        "w": 158,
+        "h": 32
+      }
+    },
+    {
+      "n": 2,
+      "label": "Or drag a box on the map instead",
+      "selector": "#gtDragBtn",
+      "rect": {
+        "x": 446,
+        "y": 331,
+        "w": 166,
+        "h": 32
+      }
+    },
+    {
+      "n": 3,
+      "label": "Ground resolution, in units per pixel",
+      "selector": "#gtRes",
+      "rect": {
+        "x": 550,
+        "y": 460,
+        "w": 62,
+        "h": 26
+      }
+    },
+    {
+      "n": 4,
+      "label": "The finest resolution this station spacing actually supports",
+      "selector": "#gtResAuto",
+      "rect": {
+        "x": 686,
+        "y": 457,
+        "w": 131,
+        "h": 32
+      }
+    },
+    {
+      "n": 5,
+      "label": "Which rasters to write",
+      "selector": "#gtLayerFold",
+      "rect": {
+        "x": 446,
+        "y": 586,
+        "w": 13,
+        "h": 13
+      }
+    },
+    {
+      "n": 6,
+      "label": "CRS of the output raster",
+      "selector": "#gtCrsSearch",
+      "rect": {
+        "x": 446,
+        "y": 688,
+        "w": 708,
+        "h": 32
+      }
+    },
+    {
+      "n": 7,
+      "label": "Write the GeoTIFF set as a ZIP",
+      "selector": "#gtExportBtn",
+      "rect": {
+        "x": 917,
+        "y": 766,
+        "w": 152,
+        "h": 32
+      }
+    }
+  ],
+  "missingCallouts": [],
+  "frameLeaks": [],
+  "bytes": 251896
+}

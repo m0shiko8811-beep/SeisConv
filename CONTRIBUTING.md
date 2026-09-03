@@ -52,6 +52,11 @@ run it for you - do not simply skip it in silence.
 - Never let a non-finite number reach a canvas draw call.
 - For any visual or behavioural change, build the app and actually look at it.
   "It compiles and the tests pass" is necessary, not sufficient.
+- **Changing a control means regenerating the reference documentation.** The user
+  manual has one source of truth, `renderer/src/manual.ts`. If you add, rename or
+  change a control, update its topic there and re-run `npm run gen:manual` (which
+  rewrites `MANUAL.md`) and `npm run manual` (which regenerates Part III of the PDF
+  manual). Never hand-edit `MANUAL.md` or a Part III chapter.
 
 ## A note on data privacy
 

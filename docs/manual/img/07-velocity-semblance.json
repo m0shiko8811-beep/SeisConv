@@ -1,0 +1,54 @@
+{
+  "image": "img/07-velocity-semblance.png",
+  "name": "07-velocity-semblance",
+  "caption": "Velocity tab: NMO semblance over the synthetic shot, three reflectors",
+  "callouts": [
+    {
+      "n": 1,
+      "label": "Velocity scan range and step",
+      "selector": "#velMin",
+      "rect": {
+        "x": 123,
+        "y": 184,
+        "w": 62,
+        "h": 26
+      }
+    },
+    {
+      "n": 2,
+      "label": "Compute semblance",
+      "selector": "#velComputeBtn",
+      "rect": {
+        "x": 411,
+        "y": 181,
+        "w": 141,
+        "h": 32
+      }
+    },
+    {
+      "n": 3,
+      "label": "Semblance: time down, stacking velocity across; click a maximum to pick",
+      "selector": "#velCanvas",
+      "rect": {
+        "x": 90,
+        "y": 255,
+        "w": 1488,
+        "h": 619
+      }
+    },
+    {
+      "n": 4,
+      "label": "Export the picks as CSV",
+      "selector": "#velExportBtn",
+      "rect": {
+        "x": 563,
+        "y": 181,
+        "w": 129,
+        "h": 32
+      }
+    }
+  ],
+  "missingCallouts": [],
+  "frameLeaks": [],
+  "bytes": 164586
+}

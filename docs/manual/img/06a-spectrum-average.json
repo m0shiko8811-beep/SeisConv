@@ -1,0 +1,54 @@
+{
+  "image": "img/06a-spectrum-average.png",
+  "name": "06a-spectrum-average",
+  "caption": "Spectrum tab: average amplitude spectrum over a trace range",
+  "callouts": [
+    {
+      "n": 1,
+      "label": "Average spectrum",
+      "selector": "#specDispAvg",
+      "rect": {
+        "x": 93,
+        "y": 228,
+        "w": 123,
+        "h": 26
+      }
+    },
+    {
+      "n": 2,
+      "label": "Spectrogram",
+      "selector": "#specDispGram",
+      "rect": {
+        "x": 216,
+        "y": 228,
+        "w": 94,
+        "h": 26
+      }
+    },
+    {
+      "n": 3,
+      "label": "F-K",
+      "selector": "#specDispFk",
+      "rect": {
+        "x": 310,
+        "y": 228,
+        "w": 42,
+        "h": 26
+      }
+    },
+    {
+      "n": 4,
+      "label": "Amplitude against frequency, averaged over the trace range, with the peak and the -6 dB band marked",
+      "selector": "#specCanvas",
+      "rect": {
+        "x": 90,
+        "y": 299,
+        "w": 1488,
+        "h": 619
+      }
+    }
+  ],
+  "missingCallouts": [],
+  "frameLeaks": [],
+  "bytes": 167443
+}

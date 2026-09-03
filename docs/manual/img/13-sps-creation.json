@@ -1,0 +1,87 @@
+{
+  "image": "img/13-sps-creation.png",
+  "name": "13-sps-creation",
+  "caption": "SPS Creation with the imported plan on the satellite basemap, two lines drawn",
+  "callouts": [
+    {
+      "n": 1,
+      "label": "The basemap layer and its opacity; the layer picker at the top right of the map chooses satellite, streets or a grey regional canvas",
+      "selector": "#plTilesOn",
+      "rect": {
+        "x": 1267,
+        "y": 313,
+        "w": 13,
+        "h": 13
+      }
+    },
+    {
+      "n": 2,
+      "label": "Import a plan from a file",
+      "selector": "#spsPlanImportBtn",
+      "rect": {
+        "x": 307,
+        "y": 181,
+        "w": 103,
+        "h": 32
+      }
+    },
+    {
+      "n": 3,
+      "label": "Draw mode: view, add points, drag points",
+      "selector": "#plModeAdd",
+      "rect": {
+        "x": 1408,
+        "y": 488,
+        "w": 91,
+        "h": 26
+      }
+    },
+    {
+      "n": 4,
+      "label": "The plan on the map",
+      "selector": "#spsPlanCanvas",
+      "rect": {
+        "x": 90,
+        "y": 251,
+        "w": 1146,
+        "h": 619
+      }
+    },
+    {
+      "n": 5,
+      "label": "Points, Lines and Checks panes",
+      "selector": "#spsPlanTabPts",
+      "rect": {
+        "x": 196,
+        "y": 900,
+        "w": 57,
+        "h": 26
+      }
+    },
+    {
+      "n": 6,
+      "label": "The CRS the survey will be generated in",
+      "selector": "#spsCreateCrsBtn",
+      "rect": {
+        "x": 187,
+        "y": 181,
+        "w": 108,
+        "h": 32
+      }
+    },
+    {
+      "n": 7,
+      "label": "Generate the SPS survey from this plan",
+      "selector": "#spsCreateGenerate",
+      "rect": {
+        "x": 1264,
+        "y": 182,
+        "w": 85,
+        "h": 30
+      }
+    }
+  ],
+  "missingCallouts": [],
+  "frameLeaks": [],
+  "bytes": 1629264
+}

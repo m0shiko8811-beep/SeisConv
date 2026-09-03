@@ -1,0 +1,54 @@
+{
+  "image": "img/12a-plan-import-mapping.png",
+  "name": "12a-plan-import-mapping",
+  "caption": "Survey plan import: the file is read and its columns are mapped",
+  "callouts": [
+    {
+      "n": 1,
+      "label": "Choose the plan file (CSV / TSV / GeoJSON)",
+      "selector": "#piPickFile",
+      "rect": {
+        "x": 426,
+        "y": 301,
+        "w": 99,
+        "h": 32
+      }
+    },
+    {
+      "n": 2,
+      "label": "One row per column in the file; SeisConv guesses, you correct",
+      "selector": "#piMapRows",
+      "rect": {
+        "x": 414,
+        "y": 502,
+        "w": 757,
+        "h": 214
+      }
+    },
+    {
+      "n": 3,
+      "label": "Projected easting/northing, or WGS84 lat/long",
+      "selector": "#piKindProj",
+      "rect": {
+        "x": 560,
+        "y": 774,
+        "w": 125,
+        "h": 26
+      }
+    },
+    {
+      "n": 4,
+      "label": "Import stays disabled until the mapping, CRS and role are all set",
+      "selector": "#piImport",
+      "rect": {
+        "x": 1126,
+        "y": 905,
+        "w": 63,
+        "h": 30
+      }
+    }
+  ],
+  "missingCallouts": [],
+  "frameLeaks": [],
+  "bytes": 345797
+}

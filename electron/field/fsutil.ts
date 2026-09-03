@@ -198,6 +198,11 @@ export interface WifiSyncSettings {
   sync_interval: string;
   throttle_enabled: boolean;
   throttle_kbps: string;
+  /** IPv4 addresses the user has explicitly approved as crew machines. Only these
+   *  are served files and only these are pulled from. */
+  trusted_peers: string[];
+  /** Whether an approved peer's tombstones may unlink local files. */
+  allow_remote_delete: boolean;
 }
 
 export const DEFAULT_SETTINGS: WifiSyncSettings = {
@@ -205,13 +210,42 @@ export const DEFAULT_SETTINGS: WifiSyncSettings = {
   adapter: '',
   manual_ip: '',
   hs_ssid: 'WifiSync_Host',
-  hs_pass: 'wifisync1',
+  hs_pass: '',
   role: 'both',
   sync_mode: 'on_change',
   sync_interval: '5',
   throttle_enabled: false,
   throttle_kbps: '500',
+  trusted_peers: [],
+  allow_remote_delete: false,
 };
+
+/** Max remembered trusted peers (a /24 crew is far smaller than this). */
+export const MAX_TRUSTED_PEERS = 64;
+const IPV4_RE = /^\d{1,3}(\.\d{1,3}){3}$/;
+
+/** Keep only well-formed, de-duplicated IPv4 strings, capped. Anything else is
+ *  dropped rather than throwing, so a hand-edited settings file can't break start. */
+export function sanitizeTrustedPeers(v: unknown): string[] {
+  if (!Array.isArray(v)) return [];
+  const out: string[] = [];
+  for (const item of v) {
+    if (typeof item !== 'string') continue;
+    const ip = item.trim();
+    if (!IPV4_RE.test(ip)) continue;
+    if (ip.split('.').some((o) => Number(o) > 255)) continue;
+    if (out.includes(ip)) continue;
+    out.push(ip);
+    if (out.length >= MAX_TRUSTED_PEERS) break;
+  }
+  return out;
+}
+
+/** The hardcoded hotspot password shipped up to 0.7.12. It was compiled into every
+ *  released installer, so it is public knowledge and must never be honoured as a
+ *  stored value: settings carrying it are migrated to an empty password, forcing
+ *  the operator to pick their own before a hotspot can start. */
+export const LEGACY_HS_PASS = 'wifisync1';
 
 /** Load settings, validating enums and applying only known keys. Missing file → defaults. */
 export function loadSettings(filePath: string): WifiSyncSettings {
@@ -226,9 +260,19 @@ export function loadSettings(filePath: string): WifiSyncSettings {
     if (raw[k] === undefined) continue;
     if (k === 'role' && !['both', 'master', 'slave'].includes(String(raw[k]))) continue;
     if (k === 'sync_mode' && !['on_change', 'interval'].includes(String(raw[k]))) continue;
+    if (k === 'trusted_peers') {
+      out.trusted_peers = sanitizeTrustedPeers(raw[k]);
+      continue;
+    }
+    if (k === 'allow_remote_delete') {
+      out.allow_remote_delete = raw[k] === true;
+      continue;
+    }
     // @ts-expect-error indexed assignment across a validated union
     out[k] = raw[k];
   }
+  // Retire the leaked shipped default rather than silently keeping it.
+  if (out.hs_pass === LEGACY_HS_PASS) out.hs_pass = '';
   return out;
 }
 

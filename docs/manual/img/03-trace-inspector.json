@@ -1,0 +1,54 @@
+{
+  "image": "img/03-trace-inspector.png",
+  "name": "03-trace-inspector",
+  "caption": "Trace Inspector on one channel of the synthetic shot",
+  "callouts": [
+    {
+      "n": 1,
+      "label": "The trace: time down, amplitude across (sample value, no physical unit)",
+      "selector": "#traceCanvas",
+      "rect": {
+        "x": 90,
+        "y": 299,
+        "w": 1478,
+        "h": 619
+      }
+    },
+    {
+      "n": 2,
+      "label": "Step between traces",
+      "selector": "#tracePrev",
+      "rect": {
+        "x": 90,
+        "y": 225,
+        "w": 58,
+        "h": 32
+      }
+    },
+    {
+      "n": 3,
+      "label": "Switch this panel to the trace spectrum",
+      "selector": "#traceSpec",
+      "rect": {
+        "x": 612,
+        "y": 228,
+        "w": 76,
+        "h": 26
+      }
+    },
+    {
+      "n": 4,
+      "label": "Send this trace to the Trace Workbench",
+      "selector": "#traceToWb",
+      "rect": {
+        "x": 1436,
+        "y": 225,
+        "w": 132,
+        "h": 32
+      }
+    }
+  ],
+  "missingCallouts": [],
+  "frameLeaks": [],
+  "bytes": 183095
+}

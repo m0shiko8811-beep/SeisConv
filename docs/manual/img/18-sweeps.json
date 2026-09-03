@@ -1,0 +1,76 @@
+{
+  "image": "img/18-sweeps.png",
+  "name": "18-sweeps",
+  "caption": "Sweeps: an 8-96 Hz, 12 s linear sweep and its Klauder wavelet",
+  "callouts": [
+    {
+      "n": 1,
+      "label": "Start and end frequency",
+      "selector": "#swF0",
+      "rect": {
+        "x": 313,
+        "y": 254,
+        "w": 78,
+        "h": 26
+      }
+    },
+    {
+      "n": 2,
+      "label": "Sweep length and taper",
+      "selector": "#swLen",
+      "rect": {
+        "x": 599,
+        "y": 254,
+        "w": 88,
+        "h": 26
+      }
+    },
+    {
+      "n": 3,
+      "label": "Build the sweep and refresh every plot",
+      "selector": "#swBuildBtn",
+      "rect": {
+        "x": 109,
+        "y": 293,
+        "w": 91,
+        "h": 30
+      }
+    },
+    {
+      "n": 4,
+      "label": "The pilot signal",
+      "selector": "#swSignalCanvas",
+      "rect": {
+        "x": 90,
+        "y": 530,
+        "w": 733,
+        "h": 320
+      }
+    },
+    {
+      "n": 5,
+      "label": "The Klauder wavelet this sweep will produce",
+      "selector": "#swKlauderCanvas",
+      "rect": {
+        "x": 835,
+        "y": 881,
+        "w": 733,
+        "h": 320
+      }
+    },
+    {
+      "n": 6,
+      "label": "Export a printable sweep sheet",
+      "selector": "#swExpSheet",
+      "rect": {
+        "x": 553,
+        "y": 467,
+        "w": 106,
+        "h": 32
+      }
+    }
+  ],
+  "missingCallouts": [],
+  "frameLeaks": [],
+  "bytes": 233703
+}

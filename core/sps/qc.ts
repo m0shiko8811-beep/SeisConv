@@ -84,6 +84,16 @@ export function runSPSQC(data: SPSData, params: QCParams = {}): QCResult[] {
   // X-file existence checks
   if (data.xrefs.length > 0) {
     const srcMap = new Map(data.sources.map((s) => [`${s.lineName}|${s.point}`, s]));
+    // Receiver-line station ranges, computed ONCE. The per-record form rebuilt and
+    // rescanned a whole line's point list twice for every X-record (O(xrefs x line
+    // length)); this map is the identical result computed in one pass.
+    const rcvRange = new Map<string, { lo: number; hi: number; n: number }>();
+    for (const [line, pts] of Object.entries(rcvByLine)) {
+      let lo = Infinity, hi = -Infinity;
+      for (const r of pts) { if (r.point < lo) lo = r.point; if (r.point > hi) hi = r.point; }
+      rcvRange.set(line, { lo, hi, n: pts.length });
+    }
+    const EMPTY_RANGE = { lo: Infinity, hi: -Infinity, n: 0 };
     for (const x of data.xrefs) {
       if (!srcMap.has(`${x.srcLine}|${num(x.srcPt)}`))
         res.push({ sev: 'error', cat: 'X-Ref', msg: `Missing source in X-file: Line ${x.srcLine} SP ${x.srcPt} (FFID ${x.ffid})` });
@@ -94,13 +104,8 @@ export function runSPSQC(data: SPSData, params: QCParams = {}): QCResult[] {
       // line this reduces to the original single-line check.
       const fromLine = String(x.rcvLineFrom).trim();
       const toLine = String(x.rcvLineTo ?? x.rcvLineFrom).trim();
-      const rangeOf = (pts: number[]) => {
-        let lo = Infinity, hi = -Infinity;
-        for (const v of pts) { if (v < lo) lo = v; if (v > hi) hi = v; }
-        return { lo, hi, n: pts.length };
-      };
-      const fromR = rangeOf((rcvByLine[fromLine] || []).map((r) => r.point));
-      const toR = toLine === fromLine ? fromR : rangeOf((rcvByLine[toLine] || []).map((r) => r.point));
+      const fromR = rcvRange.get(fromLine) ?? EMPTY_RANGE;
+      const toR = toLine === fromLine ? fromR : (rcvRange.get(toLine) ?? EMPTY_RANGE);
       const fromBad = fromR.n > 0 && num(x.rcvPtFrom) < fromR.lo;
       const toBad = toR.n > 0 && num(x.rcvPtTo) > toR.hi;
       if (fromBad || toBad)

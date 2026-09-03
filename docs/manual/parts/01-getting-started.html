@@ -1,0 +1,300 @@
+<!-- Part I - hand-written prose. NOT generated; edit freely.
+     Keep each section's first line a plain-language <p class="summary"> one-liner.
+     Figures are placed with FIG comments and cited with FIGREF comments; both are
+     expanded by docs/manual/build.ts from the callout keys in docs/manual/img/. -->
+<section class="chapter" id="ch-what-is-seismic-data">
+  <h2>What seismic data is, in plain words</h2>
+  <p class="summary">A seismic file is a bundle of recordings of the ground shaking, one recording per sensor, all started at the same instant.</p>
+
+  <p>You do not need any geophysics to use SeisConv, but you do need four words. They are the
+  only vocabulary Part I assumes, and every one of them is defined here.</p>
+
+  <h3>Sample, trace, record, header</h3>
+  <ul>
+    <li><b>Sample</b> - one number. It is how hard the ground pushed on one sensor at one
+    instant. A sample carries <i>no</i> physical unit of its own: it is whatever number the
+    recorder wrote down. SeisConv therefore always labels the vertical axis
+    "Amplitude (sample value)" and never pretends it is millivolts or anything else.</li>
+    <li><b>Trace</b> - one sensor's whole recording, which is a long list of samples in time
+    order. If the recorder takes a sample every 2 milliseconds for 2 seconds, that trace is
+    1000 samples long. The gap between samples is the <b>sample interval</b> (often written
+    <span class="mono">dt</span>); 2 ms is a common one.</li>
+    <li><b>Record</b> (also called a <i>shot record</i> or <i>shot gather</i>) - every trace
+    from one bang. You fire a source - a weight drop, an explosive charge, a vibrator truck -
+    and every geophone on the line records at once. Ninety-six geophones give a record of
+    96 traces. One file usually holds one record, sometimes many.</li>
+    <li><b>Header</b> - the label on the tin. Beside the numbers, the file carries fields
+    saying how many traces there are, how long each one is, what the sample interval was, which
+    shot this was, and often where the source and each receiver stood on the ground. When
+    people say "the geometry is wrong", they mean those position fields are wrong.</li>
+  </ul>
+
+  <h3>Why there are half a dozen incompatible formats</h3>
+  <p>The recorder in the field, the QC laptop and the processing house were each built by
+  different companies in different decades, and each wrote the numbers down its own way. The
+  arrangement of samples and headers inside the file is the <b>format</b>. The common ones,
+  all of which SeisConv reads and writes:</p>
+  <ul>
+    <li><b>SEG-D</b> - what many recorders write in the field, straight off the instrument.</li>
+    <li><b>SEG-Y</b> - the exchange format almost every processing system expects. It comes in
+    revisions 0, 1 and 2, which differ in what the headers are allowed to contain.</li>
+    <li><b>SEG-2</b> (files often named <span class="mono">.dat</span>) - common on
+    engineering and shallow-seismic instruments.</li>
+    <li><b>SU</b> - Seismic Unix; a bare stream of traces with no reel header at all.</li>
+  </ul>
+  <p>They hold the same physics. Converting between them is moving the same samples into a
+  different arrangement of bytes, and that is the job the Converter tab does.</p>
+
+  <h3>And the geometry files</h3>
+  <p>Where each source and receiver actually stood is normally kept in a separate set of files,
+  not in the seismic file. The usual one is an <b>SPS</b> triplet: an <span class="mono">S</span>
+  file listing the source points, an <span class="mono">R</span> file listing the receiver
+  points, and an <span class="mono">X</span> file (the "cross-reference" or relation file)
+  saying which receivers listened to which shot. SeisConv also reads the same information when
+  it arrives as SEG-P1, IOGP P1/11 or P6/11, or as a plain coordinate CSV.</p>
+
+  <p class="note">If a sentence later in this manual uses a word that was not defined here, it
+  belongs in the Glossary at the back; check there before assuming it matters.</p>
+</section>
+
+<section class="chapter" id="ch-install">
+  <h2>Installing and starting SeisConv</h2>
+  <p class="summary">Download one installer, click through a SmartScreen warning that is expected, and start it - there is no account, no licence key and no internet connection required afterwards.</p>
+
+  <h3>What you need</h3>
+  <p>Windows 10 or 11, 64-bit. macOS and Linux targets exist in the build configuration but are
+  not built or distributed, so on those platforms you would build from source.</p>
+
+  <h3>Installing</h3>
+  <ol>
+    <li>Download the installer, named <span class="mono">SeisConv-Setup-&lt;version&gt;.exe</span>,
+    from the project's releases page.</li>
+    <li>Run it. It lets you choose the installation directory. By default it installs for you
+    alone and needs no administrator rights; there is an option to elevate and install for all
+    users on the machine.</li>
+    <li><b>Windows will warn you, and that is expected.</b> The installer is not code-signed, so
+    SmartScreen shows <i>"Windows protected your PC"</i> with only a <b>Don't run</b> button
+    visible. Click <b>More info</b>, then <b>Run anyway</b>. That warning means the file has no
+    purchased signing certificate attached; it is not a statement that anything is wrong with
+    the download. If your site blocks unsigned installers, that is a decision for your IT
+    department rather than something to work around.</li>
+  </ol>
+
+  <h3>First launch, and the promise the app makes</h3>
+  <p>SeisConv runs entirely on your machine. There is no account to create, no sign-in, no
+  licence server, and your data never leaves the computer. The one exception is deliberate and
+  visible: map backgrounds on the SPS and SPS Creation tabs, and the optional basemap layer in
+  the GeoTIFF export, download map tiles from the internet when you switch them on. Everything
+  else works with the network cable out, which is the normal state of a field laptop.</p>
+
+  <h3>Checking that the version matches this manual</h3>
+  <p>This manual's cover names the exact version it describes, and its reference chapters were
+  generated from that version's own source. The same text, from the same source, is in the app:
+  press <span class="kbd">?</span> on any tab to open it, as in <!--FIGREF:20-help-modal-->.</p>
+
+  <!--FIG:20-help-modal-->
+
+  <p>If the version on the cover and the version you are running differ, trust the app: press
+  <span class="kbd">?</span> and read its Help, then get the manual that matches your build.</p>
+
+  <h3>The window itself</h3>
+  <p>SeisConv draws its own title bar rather than using Windows'. The three buttons at the top
+  right are therefore app buttons: <b>Minimize</b>, <b>Maximize / Restore</b> and <b>Close</b>.
+  Beside them sit <b>Dark</b> and <b>Light</b> (the theme), <b>Audit log and signature</b> and
+  <b>Send feedback</b>. At the bottom right of the status bar are three zoom controls -
+  <b>Zoom out</b>, the percentage (click it to reset to 100%) and <b>Zoom in</b> - which scale
+  the whole interface, and match <span class="kbd">Ctrl</span> with
+  <span class="kbd">-</span>, <span class="kbd">0</span> and <span class="kbd">=</span>.</p>
+
+  <h3>Sign your work once</h3>
+  <p>Open <b>Audit log and signature</b> in the header, put your name in the <b>Signature</b>
+  box and click <b>Save</b>. Every change you make afterwards is recorded against that name,
+  which is what makes an exported log or a rewritten geometry file defensible weeks later. Do
+  it now, before you touch data: otherwise the app asks for it the first time you do something
+  it audits, and it asks in the middle of whatever you were doing.</p>
+</section>
+
+<section class="chapter" id="ch-tour">
+  <h2>The twelve tabs, one sentence each</h2>
+  <p class="summary">The icon rail down the left side switches between twelve tabs; here is what each is for, in rail order.</p>
+
+  <ol>
+    <li><b>Converter</b> - convert one file, or a whole folder at once, into another format.</li>
+    <li><b>Trace Inspector</b> - look at one trace at a time as a waveform or a spectrum, with
+    that trace's header fields beside it.</li>
+    <li><b>File Viewer</b> - see the whole record at once as a section image, and run the trace
+    health scan and first-break picking over it.</li>
+    <li><b>SPS</b> - load, plot, QC, reproject and re-export survey geometry, on a plain grid
+    or over a real map.</li>
+    <li><b>SPS Creation</b> - draw acquisition lines on a map, or import a pre-plot, and
+    generate a fresh SPS survey from them.</li>
+    <li><b>Geometry QC</b> - cross-check the open seismic file's header geometry against the
+    loaded survey, diff as-laid against pre-plot, and stamp survey coordinates into a SEG-Y.</li>
+    <li><b>Velocity</b> - compute an NMO semblance panel and pick a stacking-velocity function
+    on it.</li>
+    <li><b>Spectrum</b> - the record's frequency content, as an average amplitude spectrum, a
+    spectrogram, or an F-K panel.</li>
+    <li><b>Trace Workbench</b> - collect traces from one file or several and compare them
+    against each other.</li>
+    <li><b>Observer Log</b> - the per-shot field log: build it from a wizard, fill it as you
+    shoot, and export it.</li>
+    <li><b>Sweeps</b> - design a vibroseis pilot sweep, inspect it, export it, and QC a
+    recorded sweep against the design.</li>
+    <li><b>WiFiSync</b> - keep a folder identical on two machines over WiFi, with no router,
+    no cloud and no account.</li>
+  </ol>
+
+  <p>Number keys <span class="kbd">1</span> to <span class="kbd">9</span> jump to the first
+  nine of those, in exactly that order, and <span class="kbd">O</span> goes to the Observer
+  Log. Sweeps and WiFiSync have no key; click them on the rail. All of these keys are ignored
+  while you are typing in a box, so a note containing a digit or an "o" stays in the field. The
+  full key list is Appendix B, and it is read out of the app's own key handler, so it cannot
+  drift from the app.</p>
+
+  <p><b>One open file, shared by every tab.</b> This is the single most useful thing to
+  understand about the app. When you open a seismic file - from the header, from any tab's
+  <b>Open file…</b> button, or with <span class="kbd">Ctrl</span>+<span class="kbd">O</span> -
+  every tab is now working on that same file. Open it once in the Converter and it is already
+  waiting in the Trace Inspector, the File Viewer, the Spectrum tab and Geometry QC. The header
+  centre shows what is loaded: the seismic file, and separately the SPS survey, each showing
+  "-" when nothing is loaded. <b>Clear</b> forgets it again, everywhere.</p>
+</section>
+
+<section class="chapter" id="ch-first-file">
+  <h2>Opening your first file and looking at it</h2>
+  <p class="summary">Open the file, read back what SeisConv says it found, then look at one trace and at the whole record.</p>
+
+  <h3>Open it</h3>
+  <ol>
+    <li>Press <span class="kbd">1</span> for the Converter. It starts in single-file mode -
+    the <b>Convert single file</b> card is selected, as in
+    <!--FIGREF:01a-converter-mode-single-->.</li>
+    <li>Click <b>Pick a seismic file…</b> and choose your file. You do not have to tell
+    SeisConv what format it is, what revision, how the samples are encoded or which way round
+    the bytes go: it works all of that out by reading the file.</li>
+  </ol>
+
+  <!--FIG:01a-converter-mode-single-->
+
+  <h3>Read back what it found</h3>
+  <p>The panel now describes the file: its format and revision, how many traces it holds, how
+  many samples each trace has, and the sample interval. <b>Read this before anything else.</b>
+  It is the app telling you what it believes it just opened, and it is the cheapest QC you will
+  ever do. Two things it catches immediately:</p>
+  <ul>
+    <li>The trace count is not what the crew shot - so the file is truncated, or it is not the
+    record you thought it was.</li>
+    <li>The sample interval is 1 ms when the recorder was set to 2 ms - so the instrument
+    settings and the paperwork disagree.</li>
+  </ul>
+
+  <!--FIG:01b-converter-single-loaded-->
+
+  <h3>Look at one trace</h3>
+  <p>Press <span class="kbd">2</span> for the Trace Inspector. The file is already there. You
+  get one trace drawn as a waveform, with its header fields beside it, and a slider plus
+  <b>‹ Prev</b> / <b>Next ›</b> to step through the traces. Hovering the plot reads out time
+  and amplitude at the cursor. <b>Waveform</b> and <b>Spectrum</b> switch between the trace
+  itself and its frequency content; <b>+</b>, <b>−</b> and <b>Fit</b> zoom the time axis; and
+  <b>Box-zoom a region</b> lets you drag a box to open that patch enlarged
+  (<span class="kbd">Esc</span> leaves that mode).</p>
+
+  <!--FIG:03-trace-inspector-->
+
+  <p>What you are checking on a first pass: does the trace look like ground motion - quiet,
+  then a sharp arrival, then decaying shaking - or does it look like a flat line (a dead
+  channel), or like fuzz with no arrival at all (a noisy one)?</p>
+
+  <h3>Look at the whole record</h3>
+  <p>Press <span class="kbd">3</span> for the File Viewer. Now every trace is drawn side by
+  side, time running down, so the record reads as a picture. <b>Gain</b> brightens it, the
+  display <b>Mode</b> chooses how each trace is drawn (Variable Density, Wiggle, Variable Area,
+  or VD + Wiggle), and the colour picker offers Seismic, Gray, Amber and Viridis.</p>
+
+  <p>The one control worth understanding on day one is <b>AGC</b>. Seismic energy gets weaker
+  with time, so the top of a record is loud and the bottom is faint: the deep reflections are
+  there, but too small to see beside the shallow ones. AGC (automatic gain control) rescales
+  each part of each trace against its own neighbourhood, so late, weak events become visible.
+  Compare <!--FIGREF:04a-section-agc-off--> with <!--FIGREF:04b-section-agc-on-->: the same
+  file, the same data, AGC off and on.</p>
+
+  <!--FIG:04a-section-agc-off-->
+  <!--FIG:04b-section-agc-on-->
+
+  <p class="note">AGC is a <i>display</i> setting. It changes how the picture looks, never the
+  samples in the file, and nothing you export is affected by it.</p>
+
+  <p>If the file sits in a folder of similar files, <span class="kbd">[</span> and
+  <span class="kbd">]</span> step to the previous and next file in that folder without going
+  back to a dialog - which is how you flick through a morning's shots.</p>
+</section>
+
+<section class="chapter" id="ch-first-convert">
+  <h2>Converting a file and saving the result</h2>
+  <p class="summary">Pick the output format, decide what the file will be called, click Convert &amp; Save, then re-open the result and check it.</p>
+
+  <h3>The shortest honest path</h3>
+  <ol>
+    <li>Open the file, as in <a href="#ch-first-file">the previous chapter</a>. Do not skip
+    reading back what SeisConv says it found.</li>
+    <li>On the Converter, in the <b>Output format</b> row, click the chip you need. There is
+    one chip per format the app can write as a single file. If you do not know which, the
+    answer is almost always <b>SEG-Y Rev 1</b>: it is what processing systems expect. The exact
+    list, and which formats are offered in single-file versus folder mode, is in
+    <a href="#about-release">About this release</a> at the front of this manual, where it is
+    read out of the app's own writer registry.</li>
+    <li>Scroll down to the output-name builder and decide what the file will be called
+    (below).</li>
+    <li>Click <b>Convert &amp; Save…</b>, choose where the file goes in the save dialog that
+    opens, and confirm. When it has finished, an <b>Open folder</b> button appears that takes
+    you straight to the saved file.</li>
+  </ol>
+
+  <!--FIG:01c-converter-output-name-->
+
+  <h3>Naming the output</h3>
+  <p>Rather than typing a name, you switch on the pieces you want and the app assembles them.
+  The toggles are <b>Original name</b>, <b>Format</b>, <b>Date YYYYMMDD</b>, <b>Time HHMM</b>,
+  <b>Sequence #</b> (batch mode) and <b>Custom text</b>, and the <b>Separator</b> control joins
+  them with an underscore, a hyphen or nothing. The preview updates as you click, so you see
+  the filename you are about to create before you create it. <b>Original name</b> plus
+  <b>Format</b> is a sensible default: it keeps the shot identifiable and records what you
+  turned it into.</p>
+
+  <h3>Converting a whole folder</h3>
+  <p>Switch the mode card to <b>Convert a folder (batch)</b> - or press
+  <span class="kbd">Ctrl</span>+<span class="kbd">B</span> from anywhere. Point <b>Pick
+  folder…</b> at the folder of inputs, choose the format, choose a destination with <b>Pick
+  destination…</b>, then click the run button, which names the count it is about to do
+  ("Convert 3 files"). It stays disabled until it has everything it needs: a folder with
+  seismic files in it, a format and a destination. <b>Clear</b> empties the list, and
+  <b>Cancel</b> appears while a run is in progress and stops it.</p>
+
+  <!--FIG:02-converter-batch-->
+  <!--FIG:02b-converter-batch-run-->
+
+  <h3>Check the result, every time</h3>
+  <p>A conversion you have not checked is a conversion you are guessing about. It takes twenty
+  seconds:</p>
+  <ol>
+    <li>Open the file you just wrote, the same way you opened the input.</li>
+    <li>Compare what SeisConv reports about it against the input: trace count, sample count and
+    sample interval must all match, and the format and revision should be the one you asked
+    for.</li>
+    <li>Press <span class="kbd">3</span> and look at the section. It should look like the same
+    record you started with.</li>
+  </ol>
+  <p>If the trace count dropped, something in the input was rejected rather than silently
+  copied - which is deliberate: SeisConv collects malformed records as errors instead of
+  writing out a plausible-looking lie. Recipe 10 in Part II works through what to do next.</p>
+
+  <p class="note">Two honest limits worth knowing before you rely on an output. <b>CSV</b> is
+  an export only: it writes the samples as plain numbers, and SeisConv cannot read it back as
+  seismic data. And SeisConv-written <b>SEG-D</b> round-trips correctly through SeisConv's own
+  reader, but interchange with acquisition-vendor software has not been independently verified
+  - check it in the receiving system before you depend on it.</p>
+
+  <p><b>That is Part I.</b> You can now open an unknown file, say what it is, look at it as a
+  trace and as a record, convert it to what processing asked for, and check that what you wrote
+  is what you meant. That is a useful person on a crew.</p>
+</section>

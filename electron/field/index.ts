@@ -13,7 +13,7 @@ export type {
   FileEventKind,
 } from './engine';
 
-export { FileServer, fetchManifest, fetchFile, RemoteFileNotFoundError } from './transport';
+export { FileServer, fetchManifest, fetchFile, RemoteFileNotFoundError, normalizeAddr } from './transport';
 export type { FileServerOptions } from './transport';
 
 export { DiscoveryService } from './discovery';
@@ -32,6 +32,8 @@ export {
   loadSettings,
   saveSettings,
   DEFAULT_SETTINGS,
+  sanitizeTrustedPeers,
+  MAX_TRUSTED_PEERS,
 } from './fsutil';
 export type { HistoryEntry, WifiSyncSettings } from './fsutil';
 

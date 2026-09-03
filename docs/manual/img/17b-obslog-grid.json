@@ -1,0 +1,65 @@
+{
+  "image": "img/17b-obslog-grid.png",
+  "name": "17b-obslog-grid",
+  "caption": "Observer Log with rows: the live grid, the time source and the auto-trigger",
+  "callouts": [
+    {
+      "n": 1,
+      "label": "Add a row by hand",
+      "selector": "#ologAddRowBtn",
+      "rect": {
+        "x": 90,
+        "y": 222,
+        "w": 84,
+        "h": 30
+      }
+    },
+    {
+      "n": 2,
+      "label": "Trigger Watch: add a row the moment a shot fires",
+      "selector": "#otwToggle",
+      "rect": {
+        "x": 109,
+        "y": 181,
+        "w": 133,
+        "h": 32
+      }
+    },
+    {
+      "n": 3,
+      "label": "Where the timestamp comes from: PC clock or NTP",
+      "selector": "#ologTsPc",
+      "rect": {
+        "x": 91,
+        "y": 267,
+        "w": 71,
+        "h": 22
+      }
+    },
+    {
+      "n": 4,
+      "label": "Edit the columns",
+      "selector": "#ologColsBtn",
+      "rect": {
+        "x": 323,
+        "y": 221,
+        "w": 85,
+        "h": 32
+      }
+    },
+    {
+      "n": 5,
+      "label": "Save the log as JSON",
+      "selector": "#ologSaveBtn",
+      "rect": {
+        "x": 704,
+        "y": 221,
+        "w": 74,
+        "h": 32
+      }
+    }
+  ],
+  "missingCallouts": [],
+  "frameLeaks": [],
+  "bytes": 177268
+}

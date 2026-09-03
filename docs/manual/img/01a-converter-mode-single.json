@@ -1,0 +1,32 @@
+{
+  "image": "img/01a-converter-mode-single.png",
+  "name": "01a-converter-mode-single",
+  "caption": "Converter, single-file mode, before a file is open",
+  "callouts": [
+    {
+      "n": 1,
+      "label": "Single-file mode: open one file, inspect it, export it",
+      "selector": "#modeSingle",
+      "rect": {
+        "x": 90,
+        "y": 137,
+        "w": 732,
+        "h": 88
+      }
+    },
+    {
+      "n": 2,
+      "label": "Folder (batch) mode: convert every seismic file in a folder",
+      "selector": "#modeBatch",
+      "rect": {
+        "x": 836,
+        "y": 137,
+        "w": 732,
+        "h": 88
+      }
+    }
+  ],
+  "missingCallouts": [],
+  "frameLeaks": [],
+  "bytes": 143222
+}

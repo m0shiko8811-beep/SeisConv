@@ -1,0 +1,32 @@
+{
+  "image": "img/04a-section-agc-off.png",
+  "name": "04a-section-agc-off",
+  "caption": "File Viewer, variable density, AGC OFF - amplitude decays with time",
+  "callouts": [
+    {
+      "n": 1,
+      "label": "AGC is OFF here",
+      "selector": "#secAgc",
+      "rect": {
+        "x": 781,
+        "y": 235,
+        "w": 13,
+        "h": 13
+      }
+    },
+    {
+      "n": 2,
+      "label": "The shot record: 96 traces, 2 s, three reflectors under the direct arrival",
+      "selector": "#secCanvas",
+      "rect": {
+        "x": 90,
+        "y": 378,
+        "w": 1478,
+        "h": 619
+      }
+    }
+  ],
+  "missingCallouts": [],
+  "frameLeaks": [],
+  "bytes": 286864
+}

@@ -1,0 +1,65 @@
+{
+  "image": "img/10b-sps-headers-crs.png",
+  "name": "10b-sps-headers-crs",
+  "caption": "The CRS / Datum tab, and the switch that decides whether coordinates move",
+  "callouts": [
+    {
+      "n": 1,
+      "label": "Projection type",
+      "selector": "#crsProjType",
+      "rect": {
+        "x": 809,
+        "y": 393,
+        "w": 378,
+        "h": 32
+      }
+    },
+    {
+      "n": 2,
+      "label": "Zone and hemisphere",
+      "selector": "#crsZone",
+      "rect": {
+        "x": 413,
+        "y": 457,
+        "w": 62,
+        "h": 26
+      }
+    },
+    {
+      "n": 3,
+      "label": "Fix the LABEL only: the header is rewritten, the coordinates are untouched",
+      "selector": "#crsModeLabel",
+      "rect": {
+        "x": 413,
+        "y": 721,
+        "w": 13,
+        "h": 13
+      }
+    },
+    {
+      "n": 4,
+      "label": "Reproject the COORDINATES too: this changes every station",
+      "selector": "#crsModeReproject",
+      "rect": {
+        "x": 413,
+        "y": 742,
+        "w": 13,
+        "h": 13
+      }
+    },
+    {
+      "n": 5,
+      "label": "Write the corrected S/R/X out as a ZIP",
+      "selector": "#spsHdrExportBtn",
+      "rect": {
+        "x": 961,
+        "y": 875,
+        "w": 160,
+        "h": 32
+      }
+    }
+  ],
+  "missingCallouts": [],
+  "frameLeaks": [],
+  "bytes": 228222
+}

@@ -40,6 +40,10 @@ export interface SyncEngineOptions {
   watchMode?: 'on_change' | 'interval';
   syncInterval?: number; // seconds (min 1)
   maxKbps?: number; // 0 = unlimited
+  /** Apply a PEER's tombstones by unlinking local files. Default false: a remote
+   *  host must never be able to delete a crew's local data just by being on the
+   *  same hotspot. The UI turns this on explicitly per session. */
+  allowRemoteDeletes?: boolean;
   onLog?: OnLog;
   onSyncResult?: OnSyncResult;
   onFileEvent?: OnFileEvent;
@@ -54,6 +58,7 @@ export class SyncEngine {
   private readonly watchMode: 'on_change' | 'interval';
   private readonly syncInterval: number;
   private readonly limiter: RateLimiter;
+  private allowRemoteDeletes: boolean;
   private readonly onLog: OnLog;
   private readonly onSyncResult: OnSyncResult;
   private readonly onFileEvent?: OnFileEvent;
@@ -74,6 +79,7 @@ export class SyncEngine {
     this.watchMode = opts.watchMode ?? 'on_change';
     this.syncInterval = Math.max(1, opts.syncInterval ?? SYNC_INTERVAL_SEC);
     this.limiter = new RateLimiter(opts.maxKbps ?? 0);
+    this.allowRemoteDeletes = opts.allowRemoteDeletes ?? false;
     this.onLog = opts.onLog ?? (() => {});
     this.onSyncResult = opts.onSyncResult ?? (() => {});
     this.onFileEvent = opts.onFileEvent;
@@ -90,6 +96,12 @@ export class SyncEngine {
   }
   clearPeers(): void {
     this.peers.clear();
+  }
+  setAllowRemoteDeletes(on: boolean): void {
+    this.allowRemoteDeletes = on;
+  }
+  getAllowRemoteDeletes(): boolean {
+    return this.allowRemoteDeletes;
   }
   setMode(mode: SyncMode): void {
     this.mode = mode;
@@ -217,6 +229,14 @@ export class SyncEngine {
       } catch (e) {
         this.onLog(`[ERROR] Failed to pull '${rel}': ${(e as Error).message}`);
       }
+    }
+
+    if (plan.toDeleteLocally.length > 0 && !this.allowRemoteDeletes) {
+      this.onLog(
+        `[SAFETY] ${plan.toDeleteLocally.length} local file(s) are deleted on ${peerIp} - NOT deleting here. ` +
+          `Enable "Let peers delete my local files" in WiFiSync to allow remote deletions.`,
+      );
+      return transferred;
     }
 
     for (const rel of plan.toDeleteLocally) {

@@ -1,0 +1,32 @@
+{
+  "image": "img/02-converter-batch.png",
+  "name": "02-converter-batch",
+  "caption": "Converter, folder (batch) mode with a folder scanned and a destination chosen",
+  "callouts": [
+    {
+      "n": 1,
+      "label": "Pick the folder to scan",
+      "selector": "#pickFolderBtn",
+      "rect": {
+        "x": 1456,
+        "y": 827,
+        "w": 93,
+        "h": 30
+      }
+    },
+    {
+      "n": 2,
+      "label": "How many seismic files were found, and where",
+      "selector": "#batchFound",
+      "rect": {
+        "x": 109,
+        "y": 756,
+        "w": 1440,
+        "h": 42
+      }
+    }
+  ],
+  "missingCallouts": [],
+  "frameLeaks": [],
+  "bytes": 149222
+}

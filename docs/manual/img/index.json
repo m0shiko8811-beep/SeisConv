@@ -1,0 +1,266 @@
+{
+  "generated": "docs/manual/shots.mjs",
+  "app": "SeisConv",
+  "window": {
+    "w": 1600,
+    "h": 1180
+  },
+  "fixtures": {
+    "seed": 6165952,
+    "origin": {
+      "east": 500000,
+      "north": 4000000,
+      "epsg": 32636,
+      "zone": 36,
+      "hemi": "N"
+    },
+    "counts": {
+      "traces": 96,
+      "samples": 1000,
+      "dtMs": 2,
+      "sources": 18,
+      "receivers": 192,
+      "xrefs": 36
+    }
+  },
+  "shots": [
+    {
+      "name": "01a-converter-mode-single",
+      "image": "img/01a-converter-mode-single.png",
+      "caption": "Converter, single-file mode, before a file is open",
+      "callouts": 2,
+      "bytes": 143222
+    },
+    {
+      "name": "01b-converter-single-loaded",
+      "image": "img/01b-converter-single-loaded.png",
+      "caption": "Converter with a SEG-Y open: what was read, and the output format",
+      "callouts": 3,
+      "bytes": 155078
+    },
+    {
+      "name": "01c-converter-output-name",
+      "image": "img/01c-converter-output-name.png",
+      "caption": "The same panel scrolled to the output-name builder and Convert",
+      "callouts": 4,
+      "bytes": 137232
+    },
+    {
+      "name": "02-converter-batch",
+      "image": "img/02-converter-batch.png",
+      "caption": "Converter, folder (batch) mode with a folder scanned and a destination chosen",
+      "callouts": 2,
+      "bytes": 149222
+    },
+    {
+      "name": "02b-converter-batch-run",
+      "image": "img/02b-converter-batch-run.png",
+      "caption": "The batch panel scrolled to the destination and the run button",
+      "callouts": 3,
+      "bytes": 143768
+    },
+    {
+      "name": "03-trace-inspector",
+      "image": "img/03-trace-inspector.png",
+      "caption": "Trace Inspector on one channel of the synthetic shot",
+      "callouts": 4,
+      "bytes": 183095
+    },
+    {
+      "name": "04a-section-agc-off",
+      "image": "img/04a-section-agc-off.png",
+      "caption": "File Viewer, variable density, AGC OFF - amplitude decays with time",
+      "callouts": 2,
+      "bytes": 286864
+    },
+    {
+      "name": "04b-section-agc-on",
+      "image": "img/04b-section-agc-on.png",
+      "caption": "The same record with AGC ON - the deep reflectors become visible",
+      "callouts": 4,
+      "bytes": 353455
+    },
+    {
+      "name": "05-section-health-scan",
+      "image": "img/05-section-health-scan.png",
+      "caption": "Trace health scan: every trace judged against its local neighbours",
+      "callouts": 4,
+      "bytes": 373914
+    },
+    {
+      "name": "06a-spectrum-average",
+      "image": "img/06a-spectrum-average.png",
+      "caption": "Spectrum tab: average amplitude spectrum over a trace range",
+      "callouts": 4,
+      "bytes": 167443
+    },
+    {
+      "name": "06b-spectrum-fk",
+      "image": "img/06b-spectrum-fk.png",
+      "caption": "The same file as an F-K panel: the ground-roll fan spreads in wavenumber while the flat reflections stay near kx = 0",
+      "callouts": 2,
+      "bytes": 329955
+    },
+    {
+      "name": "07-velocity-semblance",
+      "image": "img/07-velocity-semblance.png",
+      "caption": "Velocity tab: NMO semblance over the synthetic shot, three reflectors",
+      "callouts": 4,
+      "bytes": 164586
+    },
+    {
+      "name": "08-workbench-overlay",
+      "image": "img/08-workbench-overlay.png",
+      "caption": "Trace Workbench: two collected traces overlaid for comparison",
+      "callouts": 3,
+      "bytes": 221494
+    },
+    {
+      "name": "08b-workbench-collection",
+      "image": "img/08b-workbench-collection.png",
+      "caption": "The collected traces and the export row, further down the same panel",
+      "callouts": 2,
+      "bytes": 163582
+    },
+    {
+      "name": "09a-sps-map",
+      "image": "img/09a-sps-map.png",
+      "caption": "SPS tab: the loaded survey on the grid view, QC run",
+      "callouts": 5,
+      "bytes": 205997
+    },
+    {
+      "name": "09b-sps-xref-spider",
+      "image": "img/09b-sps-xref-spider.png",
+      "caption": "The same survey with the X-ref spider ON: every source drawn to its live receivers",
+      "callouts": 3,
+      "bytes": 848285
+    },
+    {
+      "name": "09d-sps-real-map",
+      "image": "img/09d-sps-real-map.png",
+      "caption": "The same survey on the real basemap: satellite imagery, with the layer picker and the bearing control",
+      "callouts": 4,
+      "bytes": 1919101
+    },
+    {
+      "name": "09c-sps-export",
+      "image": "img/09c-sps-export.png",
+      "caption": "The SPS tab scrolled to the export row",
+      "callouts": 4,
+      "bytes": 715522
+    },
+    {
+      "name": "10a-sps-headers-view",
+      "image": "img/10a-sps-headers-view.png",
+      "caption": "SPS header editor: the H-record block as loaded",
+      "callouts": 5,
+      "bytes": 224555
+    },
+    {
+      "name": "10b-sps-headers-crs",
+      "image": "img/10b-sps-headers-crs.png",
+      "caption": "The CRS / Datum tab, and the switch that decides whether coordinates move",
+      "callouts": 5,
+      "bytes": 228222
+    },
+    {
+      "name": "11-geotiff-wizard",
+      "image": "img/11-geotiff-wizard.png",
+      "caption": "GeoTIFF export wizard, area and resolution set from the loaded survey",
+      "callouts": 7,
+      "bytes": 251896
+    },
+    {
+      "name": "12a-plan-import-mapping",
+      "image": "img/12a-plan-import-mapping.png",
+      "caption": "Survey plan import: the file is read and its columns are mapped",
+      "callouts": 4,
+      "bytes": 345797
+    },
+    {
+      "name": "12b-plan-import-ready",
+      "image": "img/12b-plan-import-ready.png",
+      "caption": "The same wizard scrolled to the role and mode, with Import now enabled",
+      "callouts": 4,
+      "bytes": 367609
+    },
+    {
+      "name": "13-sps-creation",
+      "image": "img/13-sps-creation.png",
+      "caption": "SPS Creation with the imported plan on the satellite basemap, two lines drawn",
+      "callouts": 7,
+      "bytes": 1629264
+    },
+    {
+      "name": "14-sps-generate-2d",
+      "image": "img/14-sps-generate-2d.png",
+      "caption": "SPS generate wizard, 2D: sources and receivers laid along each picked line",
+      "callouts": 4,
+      "bytes": 376114
+    },
+    {
+      "name": "14b-sps-generate-2d-output",
+      "image": "img/14b-sps-generate-2d-output.png",
+      "caption": "The lower half of the same wizard: the relation and the output files",
+      "callouts": 3,
+      "bytes": 368299
+    },
+    {
+      "name": "15-sps-generate-3d",
+      "image": "img/15-sps-generate-3d.png",
+      "caption": "The same wizard in 3D: the picked lines become receiver lines and source lines are generated across them",
+      "callouts": 3,
+      "bytes": 373740
+    },
+    {
+      "name": "15b-sps-generate-3d-lines",
+      "image": "img/15b-sps-generate-3d-lines.png",
+      "caption": "The 3D-only controls: how the source lines are laid across the receiver lines",
+      "callouts": 3,
+      "bytes": 371540
+    },
+    {
+      "name": "16-geometry-qc",
+      "image": "img/16-geometry-qc.png",
+      "caption": "Geometry QC finding a mismatch: the open file's receiver coordinates match no station in the loaded survey",
+      "callouts": 4,
+      "bytes": 131660
+    },
+    {
+      "name": "17a-obslog-setup",
+      "image": "img/17a-obslog-setup.png",
+      "caption": "Observer Log setup: choose the column groups before the log is built",
+      "callouts": 1,
+      "bytes": 130026
+    },
+    {
+      "name": "17b-obslog-grid",
+      "image": "img/17b-obslog-grid.png",
+      "caption": "Observer Log with rows: the live grid, the time source and the auto-trigger",
+      "callouts": 5,
+      "bytes": 177268
+    },
+    {
+      "name": "18-sweeps",
+      "image": "img/18-sweeps.png",
+      "caption": "Sweeps: an 8-96 Hz, 12 s linear sweep and its Klauder wavelet",
+      "callouts": 6,
+      "bytes": 233703
+    },
+    {
+      "name": "19-wifisync",
+      "image": "img/19-wifisync.png",
+      "caption": "WiFiSync: move files between two field machines with no network",
+      "callouts": 6,
+      "bytes": 183630
+    },
+    {
+      "name": "20-help-modal",
+      "image": "img/20-help-modal.png",
+      "caption": "The in-app Help: the same source this manual's reference chapter is generated from",
+      "callouts": 3,
+      "bytes": 269558
+    }
+  ]
+}

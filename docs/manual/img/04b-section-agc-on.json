@@ -1,0 +1,54 @@
+{
+  "image": "img/04b-section-agc-on.png",
+  "name": "04b-section-agc-on",
+  "caption": "The same record with AGC ON - the deep reflectors become visible",
+  "callouts": [
+    {
+      "n": 1,
+      "label": "AGC is ON: each trace is balanced in a sliding window",
+      "selector": "#secAgc",
+      "rect": {
+        "x": 781,
+        "y": 235,
+        "w": 13,
+        "h": 13
+      }
+    },
+    {
+      "n": 2,
+      "label": "Display gain",
+      "selector": "#secGain",
+      "rect": {
+        "x": 669,
+        "y": 233,
+        "w": 100,
+        "h": 16
+      }
+    },
+    {
+      "n": 3,
+      "label": "Display mode: variable density, wiggle, variable area",
+      "selector": "#secMode",
+      "rect": {
+        "x": 410,
+        "y": 225,
+        "w": 125,
+        "h": 32
+      }
+    },
+    {
+      "n": 4,
+      "label": "Colour map",
+      "selector": "#secColor",
+      "rect": {
+        "x": 547,
+        "y": 225,
+        "w": 80,
+        "h": 32
+      }
+    }
+  ],
+  "missingCallouts": [],
+  "frameLeaks": [],
+  "bytes": 353455
+}

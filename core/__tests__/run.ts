@@ -9,7 +9,14 @@
 // the directory pointed to by SEISCONV_DATA (round-trip invariants + golden-value print).
 
 import { readFileSync, existsSync, readdirSync } from 'node:fs';
+import * as fs from 'node:fs';
+import * as os from 'node:os';
+import * as path from 'node:path';
+import * as net from 'node:net';
 import assert from 'node:assert/strict';
+// Node-only WiFiSync engine (electron/field) - imported for the loopback
+// hardening tests at the bottom of this file; no Electron API is touched.
+import { SyncEngine, FileServer, fetchManifest, fetchFile, sanitizeTrustedPeers, MAX_TRUSTED_PEERS } from '../../electron/field';
 import {
   parseAny,
   parseSEGY,
@@ -51,6 +58,7 @@ import {
   runSPSQC,
   checkGeometry,
   loadGeometry,
+  fitScalar,
   encodeScalar,
   compareSPS,
   applyScalar,
@@ -101,6 +109,7 @@ import {
   rIEEE,
   parseP611,
   parsePositioning,
+  buildSPSRasters,
   parseCoordCsv,
   buildCoordCsv,
   sniffPlanCsv,
@@ -142,6 +151,7 @@ import {
   type SheetTable,
 } from '../index';
 import { GOLDEN_PROJ } from './golden-proj';
+import { GOLDEN_TM } from './golden-tmutm';
 import { paramsFrom, projectForward, projectInverse } from '../projections';
 import { epsgCount, findEpsgByParams, getEpsg, searchEpsgRegistry } from '../sps/epsgdb';
 import { GEOTIFF_NODATA, writeGeoTIFF } from '../gis/geotiff';
@@ -476,6 +486,43 @@ test('UTM forward/inverse round-trips (< 1e-6 deg)', () => {
   const ll = utmToLatLon(en.E, en.N, 36, 'N');
   assert.ok(Math.abs(ll.lat - lat) < 1e-6, `lat err ${Math.abs(ll.lat - lat)}`);
   assert.ok(Math.abs(ll.lon - lon) < 1e-6, `lon err ${Math.abs(ll.lon - lon)}`);
+});
+
+test('UTM inverse honours the SOUTHERN hemisphere false northing', () => {
+  // Regression: utmToLatLon ignored `hemi` entirely, so a southern survey came
+  // back at +66.23 deg instead of -24 - a ~10,000 km error written silently into
+  // every reprojection/KML/shapefile/GeoTIFF export.
+  const lat = -24;
+  const lon = 33; // UTM zone 36S
+  const en = latLonToUTM(lat, lon, 36, 'S');
+  const ll = utmToLatLon(en.E, en.N, 36, 'S');
+  assert.ok(ll.lat < 0, `southern lat came back positive: ${ll.lat}`);
+  assert.ok(Math.abs(ll.lat - lat) < 1e-5, `lat err ${Math.abs(ll.lat - lat)} deg`);
+  assert.ok(Math.abs(ll.lon - lon) < 1e-5, `lon err ${Math.abs(ll.lon - lon)} deg`);
+  // within a metre (1e-5 deg ~ 1.1 m, tighten to true metres)
+  const back = latLonToUTM(ll.lat, ll.lon, 36, 'S');
+  assert.ok(Math.abs(back.E - en.E) < 1 && Math.abs(back.N - en.N) < 1, `round trip drift ${back.E - en.E},${back.N - en.N} m`);
+});
+
+test('UTM inverse still correct in the NORTHERN hemisphere (fix is not one-directional)', () => {
+  const lat = 55.5;
+  const lon = 12.5; // zone 33N
+  const en = latLonToUTM(lat, lon, 33, 'N');
+  const ll = utmToLatLon(en.E, en.N, 33, 'N');
+  assert.ok(ll.lat > 0, `northern lat came back negative: ${ll.lat}`);
+  const back = latLonToUTM(ll.lat, ll.lon, 33, 'N');
+  assert.ok(Math.abs(back.E - en.E) < 1 && Math.abs(back.N - en.N) < 1, `round trip drift ${back.E - en.E},${back.N - en.N} m`);
+});
+
+test('projToLatLon/latLonToProj pass GEO (degrees) through untouched', () => {
+  // Regression: subtype 'GEO' fell into the Transverse Mercator inverse, which
+  // read degrees as metres and landed the survey next to Null Island.
+  const geo = { subtype: 'GEO' } as any;
+  const ll = projToLatLon(34.7818, 32.0853, geo);
+  assert.ok(Math.abs(ll.lat - 32.0853) < 1e-9, `GEO lat ${ll.lat}`);
+  assert.ok(Math.abs(ll.lon - 34.7818) < 1e-9, `GEO lon ${ll.lon}`);
+  const en = latLonToProj(32.0853, 34.7818, geo);
+  assert.ok(Math.abs(en.E - 34.7818) < 1e-9 && Math.abs(en.N - 32.0853) < 1e-9, `GEO forward ${en.E},${en.N}`);
 });
 
 test('ITM forward/inverse round-trips (< 1e-6 deg)', () => {
@@ -866,6 +913,45 @@ test('SPS QC flags a duplicate source', () => {
   };
   const qc = runSPSQC(parseSPSText([mk(), mk()].join('\n')), {});
   assert.ok(qc.some((r) => r.cat === 'Duplicate' && r.sev === 'error'), 'duplicate not flagged');
+});
+test('SPS QC X-ref receiver-range warnings (pinned; precomputed line ranges)', () => {
+  // Pins the X-Ref range findings so the per-line range PRE-COMPUTE in runSPSQC
+  // stays equivalent to the old per-record rescan: in-range is silent, an
+  // under-range 'from', an over-range cross-line 'to', and an unknown receiver
+  // line (no stations → no range → silent).
+  const rcv = (line: string, point: number, i: number): any => ({
+    rtype: 'R', lineName: line, point, idx: '', easting: 600000 + point * 25,
+    northing: 3500000, elevation: 100, raw: '', lineNum: i,
+  });
+  const receivers = [
+    ...[1, 2, 3, 4, 5].map((n, i) => rcv('100', n, i + 1)),
+    ...[10, 11, 12, 13, 14].map((n, i) => rcv('200', n, i + 6)),
+  ];
+  const sources = [{
+    rtype: 'S', lineName: '900', point: 1, idx: '', easting: 600000,
+    northing: 3500100, elevation: 100, raw: '', lineNum: 1,
+  } as any];
+  const xr = (from: string, to: string, pf: number, pt: number, ffid: number) => ({
+    srcLine: '900', srcPt: 1, ffid, rcvLineFrom: from, rcvLineTo: to,
+    rcvPtFrom: pf, rcvPtTo: pt, rcvPtIncr: 1,
+  });
+  const data: any = {
+    sources, receivers, headers: [], errors: [], skipped: 0, layout: 'SPS2.1',
+    xrefs: [
+      xr('100', '100', 2, 4, 1),      // fully in range  → silent
+      xr('100', '100', 0, 4, 2),      // from below lo   → warn
+      xr('100', '200', 2, 99, 3),     // cross-line to above hi → warn
+      xr('777', '777', 1, 9, 4),      // unknown line (n = 0) → silent
+    ],
+  };
+  const out = runSPSQC(data, { maxSrc: 0, maxRcv: 0, srcInt: 0, rcvInt: 0, maxOff: 0 });
+  const ranges = out.filter((r) => r.cat === 'X-Ref' && r.msg.startsWith('X-file receiver range'));
+  assert.equal(ranges.length, 2, `expected 2 range warnings, got ${ranges.length}`);
+  assert.ok(ranges[0].msg.includes('Line 100 ST 0-4'), ranges[0].msg);
+  assert.ok(ranges[1].msg.includes('Line 100-200 ST 2-99'), ranges[1].msg);
+  assert.ok(ranges.every((r) => r.sev === 'warn'), 'range findings must be warnings');
+  // Every X-record points at an existing source, so no missing-source errors.
+  assert.ok(!out.some((r) => r.msg.startsWith('Missing source')), 'unexpected missing-source error');
 });
 test('SPS reprojection ITM→WGS84 lands near Israel', () => {
   const put = (line: string, start: number, txt: string) => {
@@ -1625,6 +1711,42 @@ test('writeSEGY stays bit-identical for uniform traces (longest == first)', () =
   assert.equal(re.traceCount, 3);
   for (let t = 0; t < 3; t++) {
     assert.ok(samplesEqual(pf.traces[t].samples, re.traces[t].samples, 100), `trace ${t} identical`);
+  }
+});
+
+test('writeSEGY writes the PADDED sample count so a header-walking reader stays in sync', () => {
+  // Regression: the writer stamped each trace's OWN nSamples while the record slot
+  // was padded to the longest trace, so parseSEGY walked into the padding after the
+  // first short trace and desynchronised for the rest of the file.
+  const counts = [10, 2001, 2001, 2001];
+  const pf = mkPF(counts);
+  const out = writeSEGY(pf, 1);
+  const re = parseSEGY(out);
+  assert.equal(re.traceCount, counts.length, 'every trace re-parsed (no desync)');
+  const maxN = Math.max(...counts);
+  for (const tr of re.traces) assert.equal(tr.nSamples, maxN, 'header declares the padded count');
+  // Real samples of each trace survive, in the right slot.
+  for (let t = 0; t < counts.length; t++) {
+    for (let i = 0; i < counts[t]; i++) {
+      assert.equal(re.traces[t].samples![i], pf.traces[t].samples![i], `trace ${t} sample ${i}`);
+    }
+  }
+});
+
+test('writeSEGY writes elevations alongside the elevation scalar', () => {
+  // Regression: rcvElev/surfElev/srcDepth were parsed but never written, so a
+  // converted file carried a flat datum next to an elevScalar claiming to scale it.
+  const pf = mkPF([8, 8]);
+  for (const tr of pf.traces) {
+    tr.hdr = { rcvElev: 12345, surfElev: -678, srcDepth: 90, elevScalar: -100, coordScalar: -100 };
+  }
+  const re = parseSEGY(writeSEGY(pf, 1));
+  assert.equal(re.traceCount, 2);
+  for (const tr of re.traces) {
+    assert.equal(tr.hdr.rcvElev, 12345, 'receiver elevation written');
+    assert.equal(tr.hdr.surfElev, -678, 'surface elevation written');
+    assert.equal(tr.hdr.srcDepth, 90, 'source depth written');
+    assert.equal(tr.hdr.elevScalar, -100, 'elevation scalar still written');
   }
 });
 
@@ -3385,6 +3507,38 @@ console.log('\n[Geometry load]');
     assert.equal(encodeScalar(NaN, -100), 0, 'non-finite real encodes to 0');
   });
 
+  test('a coordinate scalar that would overflow int32 is demoted, not silently clamped', () => {
+    // Regression: -10000 against a 700,000 m easting clamped at 2147483647, i.e.
+    // 214,748.36 m on read-back, and the load still reported success.
+    const bigSrc = [1, 2, 3].map((p) => gS(p, 700000 + p * 25, 3500000, 100 + p));
+    const bigRcv = [1, 2, 3].map((p) => gR(p, 700000 + p * 10, 3500050, 50 + p));
+    const bigSps = gSPS(bigSrc, bigRcv);
+    const traces: Trace[] = [];
+    for (const sp of bigSrc) {
+      for (const rc of bigRcv) {
+        traces.push({
+          hdr: { fieldRec: sp.point, trcField: rc.point, srcPt: sp.point, srcX: sp.easting, srcY: sp.northing, rcvX: rc.easting, rcvY: rc.northing, coordScalar: 0 },
+          samples: Float32Array.from([1, -2, 3, -4]), nSamples: 4, dataFmt: 5,
+        });
+      }
+    }
+    const bytes = writeSEGY({ format: 'SEG-Y', revision: 1, textHeader: '', bh: { sampleInt: 2000 }, traces, traceCount: 9, errors: [] }, 1);
+    const res = loadGeometry(bytes, bigSps, { coordScalar: -10000, tolM: 2 });
+    assert.notEqual(res.coordScalar, -10000, 'overflowing scalar was demoted');
+    assert.ok(res.errors.some((e) => /overflow/i.test(e)), `demotion reported, got ${JSON.stringify(res.errors)}`);
+    // And the coordinates actually survive the round-trip within a centimetre.
+    const re = parseSEGY(res.bytes);
+    const gotX = applyScalar(Number(re.traces[0].hdr.srcX), res.coordScalar);
+    assert.ok(Math.abs(gotX - bigSrc[0].easting) < 0.01, `easting ${gotX} != ${bigSrc[0].easting}`);
+  });
+
+  test('fitScalar keeps a scalar that fits and demotes one that does not', () => {
+    assert.equal(fitScalar(1025, -10000), -10000, 'small survey keeps full precision');
+    assert.equal(fitScalar(700000, -10000), -1000, '700 km easting demotes one step');
+    assert.equal(fitScalar(3500000, -1000), -100, 'northern-hemisphere northing demotes');
+    assert.equal(fitScalar(0, -10000), -10000, 'no coordinates - leave the request alone');
+  });
+
   test('loadGeometry stamps SPS source/receiver X/Y with the scalar (re-parse round-trips)', () => {
     const res = loadGeometry(mkSegy(), sps, { coordScalar: -100, tolM: 2 });
     assert.equal(res.traceCount, 9, 'all 9 traces walked');
@@ -4884,6 +5038,135 @@ function projectionTests(): void {
     });
   }
 
+  // == The TM / UTM / geographic dispatch, vs PROJ ==
+  //
+  // The block above checks core/projections.ts by calling projectForward
+  // directly. These check core/coords.ts's own dispatch through the REAL entry
+  // points, latLonToProj and projToLatLon, because that is where the ellipsoid,
+  // the datum tie, the linear unit and the prime meridian are chosen - and every
+  // one of those was being chosen wrongly for some family of grids.
+  for (const c of GOLDEN_TM) {
+    test(`EPSG:${c.code} - ${c.why}`, () => {
+      const hit = getEpsg(c.code);
+      assert.ok(hit, `EPSG:${c.code} must exist in the shipped registry`);
+      assert.ok(hit!.support.ok, `EPSG:${c.code} should be supported: ${hit!.support.reason ?? ''}`);
+      const crs = hit!.crs as any;
+      const u = crs.unitFactor && crs.unitFactor > 0 ? crs.unitFactor : 1;
+      // The forward is held to 1 mm. The INVERSE gets 5 mm: tmToGeodetic is the
+      // classic USGS truncated series, which costs 1-2 mm near a zone edge on a
+      // non-WGS 84 ellipsoid. That is a deliberate, bounded limit of the series,
+      // not a defect - and still orders of magnitude tighter than any of the
+      // errors these cases were written to catch (53 m to 800 km).
+      const invTol = c.invTolM ?? 0.005;
+      for (const [lat, lon, E, N] of c.pts) {
+        const f = latLonToProj(lat, lon, crs, 0);
+        assert.ok(Number.isFinite(f.E) && Number.isFinite(f.N), `forward produced a non-finite E/N at ${lat},${lon}`);
+        // Compare in METRES so a feet grid is not judged on a looser scale.
+        const dF = Math.hypot(f.E - E, f.N - N) * u;
+        assert.ok(dF < TOL_M, `forward off by ${dF.toFixed(6)} m at ${lat},${lon} (got ${f.E},${f.N} want ${E},${N})`);
+
+        const inv = projToLatLon(E, N, crs, 0);
+        assert.ok(Number.isFinite(inv.lat) && Number.isFinite(inv.lon), `inverse produced a non-finite lat/lon at ${E},${N}`);
+        const dI = Math.hypot((inv.lat - lat) * 110540, (inv.lon - lon) * 111320 * Math.cos((lat * Math.PI) / 180));
+        assert.ok(dI < invTol, `inverse off by ${dI.toFixed(6)} m at ${E},${N} (got ${inv.lat},${inv.lon} want ${lat},${lon})`);
+      }
+    });
+  }
+
+  test('a UTM grid uses its OWN ellipsoid, not a hardcoded WGS 84 one', () => {
+    // latLonToProj/projToLatLon used to shortcut UTM to latLonToUTM/utmToLatLon,
+    // which hardcode a=6378137, f=1/298.257223563. ED50 is on International 1924
+    // (a=6378388, rf=297), so every ED50 survey was projected on the wrong
+    // spheroid. At 32.0853N 34.7818E the northing was 3551397.240 instead of
+    // PROJ's 3551450.711 - 53 m of pure ellipsoid error.
+    const crs = getEpsg('23036')!.crs as any;
+    assert.equal(crs.a, 6378388, 'ED50 must carry the International 1924 semi-major axis');
+    const en = latLonToProj(32.0853, 34.7818, crs, 0);
+    assert.ok(Math.abs(en.N - 3551450.711089) < 0.001, `expected PROJ northing 3551450.711089, got ${en.N}`);
+    assert.ok(Math.abs(en.N - 3551397.24) > 50, 'the WGS 84 ellipsoid must no longer be substituted');
+  });
+
+  test('a UTM inverse applies the datum tie the forward applied', () => {
+    // projToLatLon's UTM branch returned before the Helmert was reached, so the
+    // forward shifted the datum and the inverse did not. Fahud / UTM zone 39N
+    // (dx=-345, dz=223) round-tripped 408 m from where it started.
+    // Each point must sit INSIDE its own zone; the truncated series degrades
+    // fast on a far out-of-zone extrapolation and would mask the real signal.
+    for (const [code, lat, lon] of [['23036', 32.0853, 34.7818], ['23239', 22.0, 51.5], ['9356', 24.7, 34.5]] as const) {
+      const crs = getEpsg(code)!.crs as any;
+      assert.ok(crs.helmert, `EPSG:${code} must carry a datum tie for this test to mean anything`);
+      const en = latLonToProj(lat, lon, crs, 0);
+      const back = projToLatLon(en.E, en.N, crs, 0);
+      const d = Math.hypot((back.lat - lat) * 110540, (back.lon - lon) * 111320 * Math.cos((lat * Math.PI) / 180));
+      assert.ok(d < 0.05, `EPSG:${code} round-trip off by ${d.toFixed(3)} m`);
+    }
+  });
+
+  test('a rotation-only Helmert is applied in BOTH directions', () => {
+    // The forward screened the tie on |dx|+|dy|+|dz| > 0.01, so KSA-GRF17
+    // (0,0,0,-8.393,0.749,-10.276,0) was skipped going out and applied coming
+    // back. Only the pairing made it visible: each direction looked plausible.
+    const crs = getEpsg('9356')!.crs as any;
+    assert.equal(crs.helmert.dx, 0, 'KSA-GRF17 has no translation');
+    assert.ok(Math.abs(crs.helmert.rz) > 1, 'KSA-GRF17 has a real rotation');
+    const withRot = latLonToProj(24.7, 34.5, crs, 0);
+    const noRot = latLonToProj(24.7, 34.5, { ...crs, helmert: undefined }, 0);
+    assert.ok(Math.hypot(withRot.E - noRot.E, withRot.N - noRot.N) > 10,
+      'the rotation must actually move the point in the forward direction');
+    assert.ok(Math.abs(withRot.E - 651945.006099) < 0.001, `expected PROJ easting 651945.006099, got ${withRot.E}`);
+  });
+
+  test('a TM grid in FEET is not read as metres', () => {
+    // unitFactor was consumed only by the extra-method path, so the 499
+    // supported TM grids in feet were silently metric. EPSG:2222's false easting
+    // is 700000 ft; the old code returned its metric value, 213360.
+    const crs = getEpsg('2222')!.crs as any;
+    assert.ok(Math.abs(crs.unitFactor - 0.3048) < 1e-12, 'EPSG:2222 must be a feet grid');
+    const en = latLonToProj(33.0, -110.166666666667, crs, 0);
+    assert.ok(Math.abs(en.E - 700000) < 0.001, `expected 700000 ft at the grid origin, got ${en.E}`);
+    assert.ok(Math.abs(en.E - 213360) > 1000, 'the easting must be in feet, not metres');
+    const back = projToLatLon(700000, 727531.30674, crs, 0);
+    assert.ok(Math.abs(back.lat - 33.0) < 1e-7 && Math.abs(back.lon - -110.166666666667) < 1e-7,
+      `inverse must read feet too, got ${back.lat},${back.lon}`);
+  });
+
+  test('a TM grid on a non-Greenwich prime meridian gets the offset in BOTH directions', () => {
+    // pmOffset was applied only by the extra-method path. NGO 1948 (Oslo) states
+    // its central meridian from Oslo (10.7229E), so a Greenwich longitude was
+    // read as an Oslo one and the survey landed ~600 km east.
+    const crs = getEpsg('27391')!.crs as any;
+    assert.ok(Math.abs(crs.pmOffset - 10.72291666667) < 1e-8, 'the Oslo prime meridian must be recorded');
+    const en = latLonToProj(59.0, 5.5, crs, 0);
+    assert.ok(Math.abs(en.E - -31966.930702) < 0.001, `expected PROJ easting -31966.930702, got ${en.E}`);
+    const back = projToLatLon(en.E, en.N, crs, 0);
+    assert.ok(Math.abs(back.lon - 5.5) < 1e-7, `inverse longitude must be Greenwich-based, got ${back.lon}`);
+  });
+
+  test('a geographic CRS on its own prime meridian is offset to Greenwich', () => {
+    // Bern 1898 (Bern) states longitude from Bern (7.4396E), so its own origin
+    // is Greenwich 7.4396 - not 0.
+    const crs = getEpsg('4801')!.crs as any;
+    assert.equal(crs.subtype, 'GEO');
+    assert.ok(Math.abs(crs.pmOffset - 7.439583333333) < 1e-8, 'the Bern prime meridian must be recorded');
+    const ll = projToLatLon(0, 46.95, crs, 0);
+    assert.ok(Math.abs(ll.lon - 7.439583333333) < 0.02, `a stored longitude of 0 is Greenwich 7.4396, got ${ll.lon}`);
+    const en = latLonToProj(ll.lat, ll.lon, crs, 0);
+    assert.ok(Math.abs(en.E - 0) < 1e-6, `forward must undo the offset, got ${en.E}`);
+  });
+
+  test('the TM and UTM dispatch agree with each other where they describe the same grid', () => {
+    // A UTM zone IS a Transverse Mercator with a derived central meridian, so
+    // spelling one as the other must not change the answer. This is what keeps
+    // the two branches of tmParamsOf from drifting apart.
+    const utm: any = { subtype: 'UTM', zone: 36, hemi: 'S', a: 6378137, f: 1 / 298.257223563 };
+    const tm: any = { subtype: 'TM', a: 6378137, f: 1 / 298.257223563, lon0: 33, lat0: 0, k0: 0.9996, FE: 500000, FN: 10000000 };
+    for (const [lat, lon] of [[-26.2041, 33.0], [-1, 34], [-45, 35]] as const) {
+      const u = latLonToProj(lat, lon, utm, 0);
+      const t = latLonToProj(lat, lon, tm, 0);
+      assert.ok(Math.hypot(u.E - t.E, u.N - t.N) < 1e-6, `UTM and TM disagree at ${lat},${lon}: ${u.E},${u.N} vs ${t.E},${t.N}`);
+    }
+  });
+
   test('every inverse returns a longitude in (-180, 180]', () => {
     // A grid centred on the antimeridian legitimately produces 288 deg from the
     // raw atan2; unwrapped, that silently breaks map plotting and any further
@@ -5293,7 +5576,387 @@ geotiffTests();
 
 // -- Summary -------------------------------------------------------------------
 // The xlsx regression is async, so print the tally only once it has resolved.
-xlsxExportRegression().then(() => {
+// -- WiFiSync hardening (electron/field over 127.0.0.1) --------------------------
+// Socket-level proof of the LAN-facing gates added for the field hardening pass:
+// an un-approved host must get NOTHING from the file server, and a peer's
+// tombstone must not delete a local file unless the user opted in. Loopback only.
+async function fieldHardeningTests(): Promise<void> {
+  console.log('\n[WiFiSync hardening - loopback]');
+
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'scfield-'));
+  // Tombstones live in the PARENT of the sync folder, so the two sides need
+  // separate parents or they would share one tombstone file.
+  const folderA = path.join(tmp, 'a', 'shared');
+  const folderB = path.join(tmp, 'b', 'shared');
+  fs.mkdirSync(folderA, { recursive: true });
+  fs.mkdirSync(folderB, { recursive: true });
+  const aged = (folder: string, rel: string, body: string): void => {
+    const abs = path.join(folder, rel);
+    fs.writeFileSync(abs, body);
+    const t = Date.now() / 1000 - 60;
+    fs.utimesSync(abs, t, t);
+  };
+
+  await atest('sanitizeTrustedPeers keeps only well-formed IPv4, de-duped and capped', () => {
+    const out = sanitizeTrustedPeers(['192.168.1.5', '192.168.1.5', '999.1.1.1', 'evil"><img>', 42, '10.0.0.1']);
+    assert.deepEqual(out, ['192.168.1.5', '10.0.0.1']);
+    assert.equal(sanitizeTrustedPeers('not-an-array').length, 0);
+    assert.ok(sanitizeTrustedPeers(new Array(500).fill(0).map((_, i) => `10.0.0.${i % 250}`)).length <= MAX_TRUSTED_PEERS);
+    return Promise.resolve();
+  });
+
+  aged(folderA, 'shot.sgy', 'AAAA');
+
+  // The file server with an allowlist that refuses everyone: an un-approved peer
+  // must not be able to read the manifest or a single byte of a file.
+  const engineA = new SyncEngine({ folder: folderA, mode: 'both' });
+  const denyAll = new FileServer({
+    folder: folderA,
+    getManifest: () => engineA.getMergedManifest(),
+    port: 0,
+    host: '127.0.0.1',
+    isPeerAllowed: () => false,
+  });
+  await denyAll.start();
+  const denyPort = denyAll.address()!.port;
+
+  await atest('un-approved peer cannot read the manifest (connection refused before any byte)', async () => {
+    let threw = false;
+    try {
+      await fetchManifest('127.0.0.1', denyPort);
+    } catch {
+      threw = true;
+    }
+    assert.ok(threw, 'fetchManifest must fail against a server that has not approved this host');
+  });
+
+  await atest('un-approved peer cannot pull a file that exists on the server', async () => {
+    let threw = false;
+    try {
+      await fetchFile('127.0.0.1', denyPort, 'shot.sgy', folderB);
+    } catch {
+      threw = true;
+    }
+    assert.ok(threw, 'fetchFile must fail against a server that has not approved this host');
+    assert.ok(!fs.existsSync(path.join(folderB, 'shot.sgy')), 'nothing may be written from a refused peer');
+  });
+  await denyAll.stop();
+
+  // Same server, this host approved: the legitimate crew path still works.
+  const allow = new FileServer({
+    folder: folderA,
+    getManifest: () => engineA.getMergedManifest(),
+    port: 0,
+    host: '127.0.0.1',
+    isPeerAllowed: (addr) => addr === '127.0.0.1',
+  });
+  await allow.start();
+  const allowPort = allow.address()!.port;
+
+  await atest('an APPROVED peer still syncs normally (manifest + file pull)', async () => {
+    const m = await fetchManifest('127.0.0.1', allowPort);
+    assert.ok(m.has('shot.sgy'), 'approved peer sees the manifest entry');
+    const engineB = new SyncEngine({ folder: folderB, mode: 'both' });
+    engineB.addPeer('127.0.0.1', allowPort);
+    const r = await engineB.syncNow();
+    assert.ok(r.ok, `sync should succeed: ${r.detail}`);
+    assert.equal(fs.readFileSync(path.join(folderB, 'shot.sgy'), 'utf-8'), 'AAAA', 'file pulled byte-identical');
+    await engineB.stop();
+  });
+
+  await atest('a peer tombstone does NOT delete a local file with allowRemoteDeletes off (default)', async () => {
+    // A deletes its copy → tombstone; B has the file locally.
+    // A must keep at least one LIVE file, or the anti-wipe guard (an all-tombstone
+    // peer manifest never deletes anything) masks what this test is checking.
+    aged(folderA, 'alive.sgy', 'LIVE');
+    fs.unlinkSync(path.join(folderA, 'shot.sgy'));
+    engineA.recordLocalDelete('shot.sgy');
+    await engineA.originateTombstones();
+    aged(folderB, 'keep.sgy', 'KEEP');
+
+    const engineB = new SyncEngine({ folder: folderB, mode: 'both' });
+    engineB.addPeer('127.0.0.1', allowPort);
+    assert.equal(engineB.getAllowRemoteDeletes(), false, 'remote deletions are denied by default');
+    await engineB.syncNow();
+    assert.ok(fs.existsSync(path.join(folderB, 'shot.sgy')), 'local file survives the peer tombstone by default');
+
+    // Opting in (the WiFiSync checkbox) restores propagation for a real crew.
+    engineB.setAllowRemoteDeletes(true);
+    await engineB.syncNow();
+    assert.ok(!fs.existsSync(path.join(folderB, 'shot.sgy')), 'with the opt-in on, the deletion propagates');
+    await engineB.stop();
+  });
+
+  await atest('an oversized declared manifest length is refused, not allocated', async () => {
+    // Stand up a hostile "peer" that answers CMD_MANIFEST with a 4 GB length.
+    const hostile = net.createServer((c) => {
+      c.on('data', () => {
+        const b = Buffer.alloc(4);
+        b.writeUInt32BE(0xffffffff, 0);
+        c.write(b);
+      });
+    });
+    await new Promise<void>((res) => hostile.listen(0, '127.0.0.1', () => res()));
+    const port = (hostile.address() as net.AddressInfo).port;
+    let msg = '';
+    try {
+      await fetchManifest('127.0.0.1', port);
+    } catch (e) {
+      msg = (e as Error).message;
+    }
+    assert.ok(/too large/.test(msg), `expected a size refusal, got: ${msg || '(no error)'}`);
+    await new Promise<void>((res) => hostile.close(() => res()));
+  });
+
+  await allow.stop();
+  await engineA.stop();
+  try { fs.rmSync(tmp, { recursive: true, force: true }); } catch { /* ignore */ }
+}
+
+// ---------------------------------------------------------------------------
+// Adversarial survey-file hardening (cyber sweep, phase 4)
+//
+// Threat model: the user opens SPS / positioning files produced by a recorder, a
+// contractor or a client - i.e. by someone else. The project rule is that a
+// malformed file degrades into COLLECTED ERRORS: never a throw, never a hang,
+// never an allocation driven by an attacker-supplied count, and never a
+// non-finite number reaching a canvas or a raster. These cases are the ones that
+// actually found their way through the fuzz sweep, pinned so the coverage
+// survives.
+// ---------------------------------------------------------------------------
+function cyberSurveyHardeningTests(): void {
+  console.log('\n== adversarial survey files (cyber) ==');
+
+  /** A hostile SPS point. Every field is attacker-controlled in a real file. */
+  const pt = (o: Partial<SPSPoint> & { rtype: 'S' | 'R' }): SPSPoint => ({
+    lineName: '1', point: 1, idx: '1', easting: 0, northing: 0, elevation: 0,
+    raw: '', lineNum: 1, ...o,
+  } as SPSPoint);
+
+  const data = (o: Partial<SPSData>): SPSData => ({
+    sources: [], receivers: [], xrefs: [], headers: [], errors: [], skipped: 0,
+    layout: null, ...o,
+  });
+
+  test('parseSPSText: hostile identifiers (unicode, RTL, traversal, device names) never throw and stay strings', () => {
+    // Every one of these has appeared in a real-world line name at some point,
+    // and each could reach a generated file name.
+    const names = [
+      '..\\..\\..\\Windows\\System32\\cfg',
+      '../../../../etc/passwd',
+      'NUL', 'CON', 'COM1', 'LPT1', 'PRN',
+      'x'.repeat(300),
+      '‮gpj.exe',          // RTL override - display-spoofs the extension
+      '​​​',     // zero-width only
+      'שדה́',              // combining marks
+      'a b',               // embedded NUL
+    ];
+    for (const n of names) {
+      const line = `S${n.slice(0, 16).padEnd(16)}    1.00  1     100.0  1000.00  2000.00   50.0`;
+      const d = parseSPSText(line);
+      assert.ok(Array.isArray(d.sources) && Array.isArray(d.errors), `shape lost on ${JSON.stringify(n)}`);
+      for (const p of d.sources) {
+        assert.equal(typeof p.lineName, 'string', 'lineName must stay a string');
+        assert.ok(Number.isFinite(p.easting) && Number.isFinite(p.northing), 'coords must be finite or the record skipped');
+      }
+    }
+  });
+
+  test('parseSPSText: absurd station counts stay bounded and are reported, not silently truncated', () => {
+    // 60k records is well past any real survey; the parser must either take them
+    // all bounded or CAP them WITH an error - never truncate in silence.
+    const rec = 'S     1     1.00  1     100.0  1000.00  2000.00   50.0';
+    const big = new Array(60000).fill(rec).join('\n');
+    const t0 = Date.now();
+    const d = parseSPSText(big);
+    const ms = Date.now() - t0;
+    assert.ok(ms < 20000, `parseSPSText took ${ms} ms on 60k records - unbounded work`);
+    const kept = d.sources.length + d.receivers.length;
+    assert.ok(kept <= 60000, 'kept more records than were supplied');
+    // A cap is fine; a SILENT cap is not.
+    if (kept < 60000) {
+      assert.ok(d.errors.length > 0, 'records were dropped with no error reported (silent truncation)');
+    }
+  });
+
+  test('parseSPSText: a self-referential / dangling X-ref is reported, never followed', () => {
+    // An X record naming a source line that does not exist, and one naming
+    // itself, must not send any consumer into a lookup loop.
+    const txt = [
+      'X    1     1  1     1     1     1  9999  9999    1',
+      'X 9999  9999  1  9999  9999  9999     1     1    1',
+    ].join('\n');
+    const t0 = Date.now();
+    const d = parseSPSText(txt);
+    assert.ok(Date.now() - t0 < 5000, 'dangling x-ref walk did not terminate promptly');
+    assert.ok(Array.isArray(d.xrefs), 'xrefs shape lost');
+    // The QC pass is what actually resolves x-refs against the station lists.
+    const qc = runSPSQC(d, {});
+    assert.ok(Array.isArray(qc), 'runSPSQC must return findings, not throw, on dangling x-refs');
+  });
+
+  test('rasterGrid: non-finite / zero / absurd extents are refused, never allocated', () => {
+    const bad: [string, { minE: number; minN: number; maxE: number; maxN: number; pixelSize: number }][] = [
+      ['NaN pixelSize', { minE: 0, minN: 0, maxE: 100, maxN: 100, pixelSize: NaN }],
+      ['zero pixelSize', { minE: 0, minN: 0, maxE: 100, maxN: 100, pixelSize: 0 }],
+      ['negative pixelSize', { minE: 0, minN: 0, maxE: 100, maxN: 100, pixelSize: -5 }],
+      ['NaN extent', { minE: NaN, minN: 0, maxE: 100, maxN: 100, pixelSize: 1 }],
+      ['Infinity extent', { minE: -Infinity, minN: 0, maxE: Infinity, maxN: 100, pixelSize: 1 }],
+      ['inverted extent', { minE: 100, minN: 100, maxE: 0, maxN: 0, pixelSize: 1 }],
+      ['empty extent', { minE: 0, minN: 0, maxE: 0, maxN: 0, pixelSize: 1 }],
+      // The allocation bomb: a continental extent at 1 mm/pixel.
+      ['pixel bomb', { minE: 0, minN: 0, maxE: 1e7, maxN: 1e7, pixelSize: 0.001 }],
+    ];
+    for (const [label, spec] of bad) {
+      let threw = '';
+      try { rasterGrid(spec); } catch (e) { threw = (e as Error).message; }
+      assert.ok(threw, `${label}: rasterGrid ACCEPTED a hostile spec (allocation risk)`);
+    }
+    // …and a sane spec still works, so the guard is not simply refusing everything.
+    const g = rasterGrid({ minE: 0, minN: 0, maxE: 100, maxN: 100, pixelSize: 10 });
+    assert.ok(g.width === 10 && g.height === 10, `sane grid broke: ${g.width}x${g.height}`);
+  });
+
+  test('buildSPSRasters: a survey of only non-finite coordinates is refused with a message, not a NaN raster', () => {
+    const d = data({
+      sources: [pt({ rtype: 'S', easting: NaN, northing: NaN, elevation: NaN })],
+      receivers: [pt({ rtype: 'R', easting: Infinity, northing: -Infinity, elevation: NaN })],
+    });
+    let threw = '';
+    try {
+      buildSPSRasters(d, { whole: true, pixelSize: 10, layers: ['layout'], baseName: 'x' });
+    } catch (e) { threw = (e as Error).message; }
+    assert.ok(threw, 'a survey with no finite coordinate produced a raster instead of an error');
+    assert.ok(/coordinate|usable|empty|area/i.test(threw), `unhelpful refusal: ${threw}`);
+  });
+
+  test('buildSPSRasters: a hostile baseName cannot escape the output directory', () => {
+    const d = data({
+      sources: [pt({ rtype: 'S', easting: 1000, northing: 2000, elevation: 10 })],
+      receivers: [pt({ rtype: 'R', easting: 1100, northing: 2100, elevation: 12 })],
+    });
+    for (const evil of ['..\\..\\evil', '../../evil', 'a/b\\c', 'NUL', '‮gpj.exe', 'x'.repeat(400)]) {
+      let res;
+      try {
+        res = buildSPSRasters(d, { whole: true, marginM: 50, pixelSize: 25, layers: ['layout'], baseName: evil });
+      } catch { continue; } // a refusal is an acceptable outcome too
+      for (const f of res.files) {
+        assert.ok(!/[\\/]/.test(f.name), `output name contains a path separator: ${JSON.stringify(f.name)}`);
+        // '..' with NO separator is inert - it is just an odd file name, and the
+        // allowlist below is what actually prevents an escape. What must never
+        // survive is a SEPARATOR (checked above) or a bare '.'/'..' entry.
+        assert.ok(f.name !== '..' && f.name !== '.', `output name is a directory entry: ${JSON.stringify(f.name)}`);
+        assert.ok(/^[A-Za-z0-9_.-]+$/.test(f.name), `output name has unsanitized characters: ${JSON.stringify(f.name)}`);
+      }
+    }
+  });
+
+  test('runSPSQC: non-finite coordinates and elevations never propagate into a finding number', () => {
+    const d = data({
+      sources: [
+        pt({ rtype: 'S', point: 1, easting: NaN, northing: 0, elevation: 0 }),
+        pt({ rtype: 'S', point: 2, easting: 0, northing: Infinity, elevation: NaN }),
+        pt({ rtype: 'S', point: 3, easting: 1e308, northing: 1e308, elevation: -1e308 }),
+      ],
+      receivers: [pt({ rtype: 'R', point: 1, easting: 0, northing: 0, elevation: 0 })],
+    });
+    const findings = runSPSQC(d, {});
+    assert.ok(Array.isArray(findings), 'runSPSQC threw or returned a non-array on non-finite input');
+    // Anything numeric a finding carries would reach a table or a canvas.
+    for (const f of findings as unknown as Record<string, unknown>[]) {
+      for (const [k, v] of Object.entries(f)) {
+        if (typeof v === 'number') {
+          assert.ok(Number.isFinite(v), `QC finding field ${k} is ${v} - a non-finite number reaching the UI`);
+        }
+      }
+    }
+  });
+
+  test('parsePositioning: every reader survives a one-byte, an empty and an all-one-character file', () => {
+    const inputs = ['', ' ', 'S', ' ', '\n'.repeat(5000), 'A'.repeat(100000), '�'.repeat(1000)];
+    for (const fmt of ['sps', 'segp1', 'p111', 'p611', 'coordcsv'] as const) {
+      for (const text of inputs) {
+        const t0 = Date.now();
+        let out: unknown;
+        try {
+          out = parsePositioning(fmt, text);
+        } catch (e) {
+          assert.fail(`parsePositioning(${fmt}) THREW on ${JSON.stringify(text.slice(0, 12))}…: ${(e as Error).message}`);
+        }
+        assert.ok(Date.now() - t0 < 5000, `parsePositioning(${fmt}) hung on a ${text.length}-byte input`);
+        assert.ok(out && typeof out === 'object', `parsePositioning(${fmt}) returned a non-object`);
+      }
+    }
+  });
+
+
+  test('sanitizeBaseName: control chars, bidi overrides and over-long bases never reach a write', () => {
+    // The exact implementation shipped in electron/main.ts + renderer/src/app.ts.
+    // Verified by execution on Windows: without the first two replaces, a base
+    // carrying U+0000 makes writeFile throw ERR_INVALID_ARG_VALUE and
+    // U+0001-U+001F gives ENOENT, so a batch conversion failed every file
+    // instead of saving it; a 300-char base blew past MAX_PATH the same way.
+    const sanitizeBaseName = (s: string): string =>
+      s
+        .replace(/[\u0000-\u001f\u007f-\u009f]/g, '')
+        .replace(/[\u202a-\u202e\u2066-\u2069\u200e\u200f]/g, '')
+        .replace(/[\\/:*?"<>|]/g, '_')
+        .replace(/\s+/g, ' ')
+        .trim()
+        .slice(0, 120)
+        .replace(/[. ]+$/, '')
+        .trim() || 'output';
+
+    const ILLEGAL = /[\\/:*?"<>|\u0000-\u001f\u007f-\u009f]/;
+    const cases: [string, string][] = [
+      ['nul byte', 'a\u0000b'],
+      ['control 0x01', 'a\u0001b'],
+      ['escape', 'a\u001b[31mb'],
+      ['delete + C1', 'a\u007f\u009fb'],
+      ['rtl override', 'shot\u202egpj.exe'],
+      ['lrm/rlm', '\u200eline\u200f1'],
+      ['over-long', 'x'.repeat(400)],
+      ['traversal', '..\\..\\..\\Windows\\System32\\evil'],
+      ['trailing dots', 'name...'],
+      ['trailing spaces', 'name   '],
+      ['all illegal', '\u0000\u0001\u202e'],
+      ['empty', ''],
+    ];
+    for (const [label, raw] of cases) {
+      const out = sanitizeBaseName(raw);
+      assert.ok(out.length > 0, `${label}: produced an empty base name`);
+      assert.ok(out.length <= 120, `${label}: base is ${out.length} chars, over the MAX_PATH-safe cap`);
+      assert.ok(!ILLEGAL.test(out), `${label}: illegal character survived in ${JSON.stringify(out)}`);
+      assert.ok(!/[\\/]/.test(out), `${label}: a path separator survived - traversal risk`);
+      assert.ok(!/[. ]$/.test(out), `${label}: trailing dot/space survives and Windows would strip it silently`);
+    }
+    // A normal name must pass through untouched - the guard must not be a blunt filter.
+    assert.equal(sanitizeBaseName('Line_12-shot_003'), 'Line_12-shot_003');
+    assert.equal(sanitizeBaseName('survey 2026'), 'survey 2026');
+  });
+
+  test('no dynamic-key path pollutes Object.prototype', () => {
+    // Every dynamic-key writer in the survey chain, fed the three dangerous keys.
+    const attacks = [
+      '__proto__,constructor,prototype\n1,2,3',
+      'H26 __proto__ polluted;\nS' + ' '.repeat(60),
+      '{"__proto__":{"polluted":1}}',
+      'constructor prototype',
+    ];
+    for (const a of attacks) {
+      for (const fmt of ['sps', 'segp1', 'p111', 'p611', 'coordcsv'] as const) {
+        try { parsePositioning(fmt, a); } catch { /* a refusal is fine */ }
+      }
+      try { runSPSQC(parseSPSText(a), {}); } catch { /* fine */ }
+    }
+    const probe = {} as Record<string, unknown>;
+    assert.equal(probe.polluted, undefined, 'Object.prototype was polluted through a survey parser');
+    assert.equal((Object.prototype as unknown as Record<string, unknown>).polluted, undefined, 'Object.prototype.polluted is set');
+  });
+}
+
+cyberSurveyHardeningTests();
+xlsxExportRegression().then(() => fieldHardeningTests()).then(() => {
   console.log('\n----------------------');
   console.log(`passed: ${passed}   failed: ${failed}   skipped: ${skipped}\n`);
   process.exitCode = failed > 0 ? 1 : 0;

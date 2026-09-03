@@ -169,34 +169,15 @@ export function latLonToUTM(lat_deg: number, lon_deg: number, zone: number, hemi
 
 /** Inverse UTM (WGS84). */
 export function utmToLatLon(E: number, N: number, zone: number, hemi: 'N' | 'S'): LatLon {
-  const a = 6378137;
-  const f = 1 / 298.257223563;
-  const b = a * (1 - f);
-  const e2 = 1 - (b / a) ** 2;
-  const ep2 = e2 / (1 - e2);
-  const k0 = 0.9996;
-  const E0 = 500000;
-  const lon0 = (zone * 6 - 183) * D2R;
-  const M = N / k0;
-  const mu = M / (a * (1 - e2 / 4 - (3 * e2 ** 2) / 64 - (5 * e2 ** 3) / 256));
-  const e1 = (1 - Math.sqrt(1 - e2)) / (1 + Math.sqrt(1 - e2));
-  const phi1 =
-    mu +
-    ((3 * e1) / 2 - (27 * e1 ** 3) / 32) * Math.sin(2 * mu) +
-    ((21 * e1 ** 2) / 16 - (55 * e1 ** 4) / 32) * Math.sin(4 * mu) +
-    ((151 * e1 ** 3) / 96) * Math.sin(6 * mu) +
-    ((1097 * e1 ** 4) / 512) * Math.sin(8 * mu);
-  const sinP = Math.sin(phi1);
-  const cosP = Math.cos(phi1);
-  const tanP = Math.tan(phi1);
-  const N1 = a / Math.sqrt(1 - e2 * sinP ** 2);
-  const T1 = tanP ** 2;
-  const C1 = ep2 * cosP ** 2;
-  const R1 = (a * (1 - e2)) / (1 - e2 * sinP ** 2) ** 1.5;
-  const D = (E - E0) / (N1 * k0);
-  const lat = phi1 - (N1 * tanP / R1) * (D ** 2 / 2 - ((5 + 3 * T1 + 10 * C1 - 4 * C1 ** 2 - 9 * ep2) * D ** 4) / 24 + ((61 + 90 * T1 + 298 * C1 + 45 * T1 ** 2 - 252 * ep2 - 3 * C1 ** 2) * D ** 6) / 720);
-  const lon = lon0 + (D - ((1 + 2 * T1 + C1) * D ** 3) / 6 + ((5 - 2 * C1 + 28 * T1 - 3 * C1 ** 2 + 8 * ep2 + 24 * T1 ** 2) * D ** 5) / 120) / cosP;
-  return { lat: lat * R2D, lon: lon * R2D };
+  return tmToGeodetic(E, N, {
+    a: 6378137,
+    f: 1 / 298.257223563,
+    lon0: zone * 6 - 183,
+    lat0: 0,
+    k0: 0.9996,
+    FE: 500000,
+    FN: hemi === 'S' ? 10000000 : 0,
+  });
 }
 
 /** 7-parameter Helmert: geodetic on a source datum → WGS84 lat/lon (degrees).
@@ -291,6 +272,70 @@ function unitOf(proj?: Projection): number {
   return Number.isFinite(u) && (u as number) > 0 ? (u as number) : 1;
 }
 
+/** Prime-meridian offset from Greenwich in degrees (0 for a Greenwich grid). */
+function pmOf(proj?: Projection): number {
+  const pm = proj?.pmOffset;
+  return typeof pm === 'number' && Number.isFinite(pm) ? pm : 0;
+}
+
+/**
+ * Whether a Helmert tie is worth applying at all.
+ *
+ * NOT a translation-only test. Screening on |dx|+|dy|+|dz| alone skipped a
+ * rotation- or scale-only transform (KSA-GRF17, EPSG:9356-9360, is
+ * 0,0,0,-8.393,0.749,-10.276,0), and it did so in the FORWARD direction only,
+ * so the pair stopped being inverses of each other. Both directions now use
+ * this same predicate.
+ */
+function hasHelmert(h?: HelmertParams): boolean {
+  if (!h) return false;
+  return Math.abs(h.dx) + Math.abs(h.dy) + Math.abs(h.dz) + Math.abs(h.rx) + Math.abs(h.ry) + Math.abs(h.rz) + Math.abs(h.ds) > 1e-9;
+}
+
+/** WGS 84 flattening - the implied ellipsoid of a bare `{subtype:'UTM'}` descriptor. */
+const F_WGS84 = 1 / 298.257223563;
+/** GRS80 flattening - the historical default of the generic Transverse Mercator path. */
+const F_GRS80 = 1 / 298.257222101;
+
+/** Ellipsoid semi-major axis / flattening a descriptor stands for. */
+function ellipsoidOf(sub: string, proj?: Projection): { a: number; f: number } {
+  return {
+    a: (proj && proj.a) || 6378137,
+    f: tmParam(proj?.invF ? 1 / proj.invF : undefined, proj?.f, sub === 'UTM' ? F_WGS84 : F_GRS80),
+  };
+}
+
+/**
+ * Resolve the Transverse Mercator parameters a UTM/TM descriptor stands for.
+ *
+ * UTM used to bypass this and call {@link latLonToUTM}/{@link utmToLatLon},
+ * which HARDCODE the WGS 84 ellipsoid. Every UTM grid on another datum was
+ * therefore projected on the wrong spheroid - ED50 / UTM zone 36N came out
+ * ~54 m from PROJ - and the inverse additionally returned before the Helmert
+ * tie was applied, so forward and inverse disagreed by 120 m. Routing both
+ * through one resolver fixes the ellipsoid, the datum tie, the prime meridian
+ * and the linear unit in one place, for both directions at once.
+ */
+function tmParamsOf(sub: string, proj: Projection | undefined, a: number, f: number): TMParams {
+  if (sub === 'UTM') {
+    const zone = (proj && proj.zone) || 36;
+    // A UTM zone's central meridian is Greenwich-based by definition, so no
+    // prime-meridian offset applies here.
+    return { a, f, lon0: zone * 6 - 183, lat0: 0, k0: 0.9996, FE: 500000, FN: (proj && proj.hemi) === 'S' ? 10000000 : 0 };
+  }
+  return {
+    a,
+    f,
+    // The central meridian of a non-Greenwich grid (NGO 1948 (Oslo), Lisbon)
+    // is stated FROM its own prime meridian; add the offset to reach Greenwich.
+    lon0: tmParam(proj?.centralMeridian, proj?.lon0, 0) + pmOf(proj),
+    lat0: tmParam(proj?.latOrigin, proj?.lat0, 0),
+    k0: tmParam(proj?.scaleFactor, proj?.k0, 1),
+    FE: tmParam(proj?.falseEasting, proj?.FE, 0),
+    FN: tmParam(proj?.falseNorthing, proj?.FN, 0),
+  };
+}
+
 /**
  * First finite value among a projection's two spellings of the same parameter,
  * else the default.
@@ -318,10 +363,21 @@ export function projToLatLon(E: number, N: number, proj?: Projection, elevM?: nu
   }
 
   const sub = (proj && proj.subtype) || 'UTM';
-  if (sub === 'UTM') {
-    return utmToLatLon(E, N, proj ? proj.zone || 36 : 36, proj ? proj.hemi || 'N' : 'N');
+  const { a, f } = ellipsoidOf(sub, proj);
+  // Geographic CRS (EPSG:4326 and friends): E/N already ARE lon/lat in degrees.
+  // Without this branch every GEO source fell through to the Transverse Mercator
+  // inverse, which read degrees as metres and put the survey at Null Island.
+  // Mirrors the forward direction in latLonToProj and reprojectSPS's GEO fast path.
+  if (sub === 'GEO') {
+    // A geographic CRS on its own prime meridian (Bern 1898 (Bern), Bogota) states
+    // longitude FROM that meridian; add the offset to reach Greenwich. No linear
+    // unit applies - these are degrees, not metres.
+    const geo = { lat: N, lon: E + pmOf(proj) };
+    if (hasHelmert(proj?.helmert)) {
+      return helmert7ToWGS84(geo.lat, geo.lon, h, a, f, proj!.helmert!);
+    }
+    return geo;
   }
-  const a = (proj && proj.a) || 6378137;
   // A Projection reaches here under EITHER naming convention: the SPS parser fills
   // centralMeridian/latOrigin/scaleFactor/falseEasting/falseNorthing/invF, while an
   // EPSG registry entry fills lon0/lat0/k0/FE/FN/f. Reading only the first set made
@@ -329,15 +385,13 @@ export function projToLatLon(E: number, N: number, proj?: Projection, elevM?: nu
   // for every EPSG-derived Transverse Mercator grid - ITM, British National Grid,
   // RD New - putting an Israeli survey in the Gulf of Guinea. UTM escaped it only
   // because that branch keys off `zone`. Accept both, in both directions.
-  const f = tmParam(proj?.invF ? 1 / proj.invF : undefined, proj?.f, 1 / 298.257222101);
-  const lon0 = tmParam(proj?.centralMeridian, proj?.lon0, 0);
-  const lat0 = tmParam(proj?.latOrigin, proj?.lat0, 0);
-  const k0 = tmParam(proj?.scaleFactor, proj?.k0, 1);
-  const FE = tmParam(proj?.falseEasting, proj?.FE, 0);
-  const FN = tmParam(proj?.falseNorthing, proj?.FN, 0);
-  const geodetic = tmToGeodetic(E, N, { a, f, lon0, lat0, k0, FE, FN });
-  if (proj && proj.helmert) {
-    return helmert7ToWGS84(geodetic.lat, geodetic.lon, h, a, f, proj.helmert);
+  const u = unitOf(proj);
+  // The grid's own linear unit (feet grids) scaled up to the metric maths. The
+  // false easting/northing in `tmParamsOf` are metric, so the scaling happens
+  // here, before they are subtracted.
+  const geodetic = tmToGeodetic(E * u, N * u, tmParamsOf(sub, proj, a, f));
+  if (hasHelmert(proj?.helmert)) {
+    return helmert7ToWGS84(geodetic.lat, geodetic.lon, h, a, f, proj!.helmert!);
   }
   return geodetic;
 }
@@ -349,32 +403,31 @@ export function latLonToProj(lat_deg: number, lon_deg: number, tgt: Projection, 
 
   const xp = extraParams(tgt);
   if (xp) {
-    if (tgt.helmert && Math.abs(tgt.helmert.dx) + Math.abs(tgt.helmert.dy) + Math.abs(tgt.helmert.dz) > 0.01) {
+    if (hasHelmert(tgt.helmert)) {
       const f = xp.e2 ? 1 - Math.sqrt(1 - xp.e2) : 0;
-      ll = wgs84ToLocal(lat_deg, lon_deg, h, xp.a, f, tgt.helmert);
+      ll = wgs84ToLocal(lat_deg, lon_deg, h, xp.a, f, tgt.helmert!);
     }
     const en = projectForward(tgt.method as string, ll.lat, ll.lon, xp);
     const u = unitOf(tgt);
     return { E: en.E / u, N: en.N / u };
   }
 
-  if (tgt.helmert && Math.abs(tgt.helmert.dx) + Math.abs(tgt.helmert.dy) + Math.abs(tgt.helmert.dz) > 0.01) {
-    ll = wgs84ToLocal(lat_deg, lon_deg, h, tgt.a || 6378137, tgt.f || 1 / 298.257222101, tgt.helmert);
+  const sub = tgt.subtype || 'UTM';
+  const { a, f } = ellipsoidOf(sub, tgt);
+  if (hasHelmert(tgt.helmert)) {
+    ll = wgs84ToLocal(lat_deg, lon_deg, h, a, f, tgt.helmert!);
   }
-  if (tgt.subtype === 'UTM') {
-    return latLonToUTM(ll.lat, ll.lon, tgt.zone || 36, tgt.hemi || 'N');
+  if (sub === 'GEO') {
+    // Mirror of the inverse: report longitude FROM the grid's own prime meridian.
+    return { E: ll.lon - pmOf(tgt), N: ll.lat };
   }
   // Symmetric with projToLatLon: accept an SPS-parser projection
-  // (centralMeridian/latOrigin/...) as readily as an EPSG entry (lon0/lat0/...).
-  return geodeticToTM(ll.lat, ll.lon, {
-    a: tgt.a || 6378137,
-    f: tmParam(tgt.f, tgt.invF ? 1 / tgt.invF : undefined, 1 / 298.257222101),
-    lon0: tmParam(tgt.lon0, tgt.centralMeridian, 0),
-    lat0: tmParam(tgt.lat0, tgt.latOrigin, 0),
-    k0: tmParam(tgt.k0, tgt.scaleFactor, 1),
-    FE: tmParam(tgt.FE, tgt.falseEasting, 0),
-    FN: tmParam(tgt.FN, tgt.falseNorthing, 0),
-  });
+  // (centralMeridian/latOrigin/...) as readily as an EPSG entry (lon0/lat0/...),
+  // and share the one resolver so the ellipsoid, prime meridian and linear unit
+  // cannot drift apart between the two directions.
+  const en = geodeticToTM(ll.lat, ll.lon, tmParamsOf(sub, tgt, a, f));
+  const u = unitOf(tgt);
+  return { E: en.E / u, N: en.N / u };
 }
 
 // ------------------- ITM (Israeli TM, EPSG:2039) convenience -------------------

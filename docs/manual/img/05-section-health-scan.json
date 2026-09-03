@@ -1,0 +1,54 @@
+{
+  "image": "img/05-section-health-scan.png",
+  "name": "05-section-health-scan",
+  "caption": "Trace health scan: every trace judged against its local neighbours",
+  "callouts": [
+    {
+      "n": 1,
+      "label": "Run the health scan",
+      "selector": "#secHealthBtn",
+      "rect": {
+        "x": 90,
+        "y": 313,
+        "w": 92,
+        "h": 32
+      }
+    },
+    {
+      "n": 2,
+      "label": "Tune per-detector sensitivity; the flag count updates live",
+      "selector": "#secHealthSensBtn",
+      "rect": {
+        "x": 194,
+        "y": 313,
+        "w": 93,
+        "h": 32
+      }
+    },
+    {
+      "n": 3,
+      "label": "Export the flagged traces as CSV",
+      "selector": "#secHealthExportBtn",
+      "rect": {
+        "x": 395,
+        "y": 313,
+        "w": 112,
+        "h": 32
+      }
+    },
+    {
+      "n": 4,
+      "label": "Flagged traces are marked on the section",
+      "selector": "#secCanvas",
+      "rect": {
+        "x": 90,
+        "y": 418,
+        "w": 1478,
+        "h": 619
+      }
+    }
+  ],
+  "missingCallouts": [],
+  "frameLeaks": [],
+  "bytes": 373914
+}

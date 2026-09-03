@@ -1,0 +1,43 @@
+{
+  "image": "img/08-workbench-overlay.png",
+  "name": "08-workbench-overlay",
+  "caption": "Trace Workbench: two collected traces overlaid for comparison",
+  "callouts": [
+    {
+      "n": 1,
+      "label": "Overlay (selected) or side-by-side",
+      "selector": "#wbModeOverlay",
+      "rect": {
+        "x": 1500,
+        "y": 228,
+        "w": 65,
+        "h": 26
+      }
+    },
+    {
+      "n": 2,
+      "label": "The comparison plot",
+      "selector": "#wbCanvas",
+      "rect": {
+        "x": 90,
+        "y": 336,
+        "w": 1478,
+        "h": 619
+      }
+    },
+    {
+      "n": 3,
+      "label": "Add the current trace of the open file",
+      "selector": "#wbAddOpenBtn",
+      "rect": {
+        "x": 491,
+        "y": 225,
+        "w": 113,
+        "h": 32
+      }
+    }
+  ],
+  "missingCallouts": [],
+  "frameLeaks": [],
+  "bytes": 221494
+}

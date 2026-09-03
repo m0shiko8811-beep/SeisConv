@@ -1,0 +1,54 @@
+{
+  "image": "img/01c-converter-output-name.png",
+  "name": "01c-converter-output-name",
+  "caption": "The same panel scrolled to the output-name builder and Convert",
+  "callouts": [
+    {
+      "n": 1,
+      "label": "The name template, built from the ticks below it",
+      "selector": "#outNameTpl",
+      "rect": {
+        "x": 167,
+        "y": 483,
+        "w": 1363,
+        "h": 32
+      }
+    },
+    {
+      "n": 2,
+      "label": "Each tick adds a part to the name",
+      "selector": "#npDate",
+      "rect": {
+        "x": 597,
+        "y": 353,
+        "w": 13,
+        "h": 13
+      }
+    },
+    {
+      "n": 3,
+      "label": "Separator between the parts",
+      "selector": "#outNameSep",
+      "rect": {
+        "x": 167,
+        "y": 407,
+        "w": 109,
+        "h": 32
+      }
+    },
+    {
+      "n": 4,
+      "label": "Convert & Save…",
+      "selector": "#convertBtn",
+      "rect": {
+        "x": 109,
+        "y": 566,
+        "w": 176,
+        "h": 41
+      }
+    }
+  ],
+  "missingCallouts": [],
+  "frameLeaks": [],
+  "bytes": 137232
+}

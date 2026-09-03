@@ -395,12 +395,22 @@ export function writeSEGY(pd: ParsedFile, rev: number): Bytes {
     // large. elevScalar is written alongside for the same reason.
     if (hi(h, 'elevScalar')) w16(out, off + 68, hi(h, 'elevScalar'));
     if (hi(h, 'coordScalar')) w16(out, off + 70, hi(h, 'coordScalar'));
-    w16(out, off + 114, tr.nSamples);
+    // Write the PADDED sample count, not the trace's own: every record slot is
+    // sized from the longest trace, so a reader walking by the trace header (ours
+    // included) would land inside the padding of a short trace and desynchronise
+    // permanently. The binary header already declares spt for the whole file.
+    w16(out, off + 114, spt);
     w16(out, off + 116, si);
     if (hi(h, 'srcX')) w32(out, off + 72, hi(h, 'srcX'));
     if (hi(h, 'srcY')) w32(out, off + 76, hi(h, 'srcY'));
     if (hi(h, 'rcvX')) w32(out, off + 80, hi(h, 'rcvX'));
     if (hi(h, 'rcvY')) w32(out, off + 84, hi(h, 'rcvY'));
+    // Elevations: the parser reads these and elevScalar is already written above,
+    // so dropping them handed a processor a flat datum next to a scalar claiming
+    // to scale it. Mirrors the coordinate writes.
+    if (hi(h, 'rcvElev')) w32(out, off + 40, hi(h, 'rcvElev'));
+    if (hi(h, 'surfElev')) w32(out, off + 44, hi(h, 'surfElev'));
+    if (hi(h, 'srcDepth')) w32(out, off + 48, hi(h, 'srcDepth'));
     if (tr.samples) {
       const base = off + 240;
       // Clamp to the allocated slot (spt), never the raw per-trace nSamples - the

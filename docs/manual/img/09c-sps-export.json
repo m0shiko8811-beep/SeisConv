@@ -1,0 +1,54 @@
+{
+  "image": "img/09c-sps-export.png",
+  "name": "09c-sps-export",
+  "caption": "The SPS tab scrolled to the export row",
+  "callouts": [
+    {
+      "n": 1,
+      "label": "Write the survey out in any supported positioning format",
+      "selector": "#spsExpFormat",
+      "rect": {
+        "x": 151,
+        "y": 873,
+        "w": 141,
+        "h": 32
+      }
+    },
+    {
+      "n": 2,
+      "label": "Export…",
+      "selector": "#spsExpFormatBtn",
+      "rect": {
+        "x": 304,
+        "y": 873,
+        "w": 73,
+        "h": 32
+      }
+    },
+    {
+      "n": 3,
+      "label": "Georeferenced rasters as GeoTIFF",
+      "selector": "#spsExpGeotiffBtn",
+      "rect": {
+        "x": 672,
+        "y": 917,
+        "w": 81,
+        "h": 32
+      }
+    },
+    {
+      "n": 4,
+      "label": "ESRI shapefile layers, zipped, with a .prj",
+      "selector": "#spsExpShpBtn",
+      "rect": {
+        "x": 503,
+        "y": 917,
+        "w": 157,
+        "h": 32
+      }
+    }
+  ],
+  "missingCallouts": [],
+  "frameLeaks": [],
+  "bytes": 715522
+}

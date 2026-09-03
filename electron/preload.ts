@@ -729,6 +729,11 @@ export interface FieldSettings {
   sync_interval: string;
   throttle_enabled: boolean;
   throttle_kbps: string;
+  /** IPv4 peers the user explicitly approved (see field:trustPeer). Optional on
+   *  the way IN so the renderer never has to echo (and risk clearing) the list. */
+  trusted_peers?: string[];
+  /** Whether an approved peer's tombstones may delete local files. */
+  allow_remote_delete?: boolean;
 }
 /** Config to (re)start the engine. bindIp/broadcastAddr come from the picked adapter. */
 export interface FieldStartCfg {
@@ -741,7 +746,7 @@ export interface FieldStartCfg {
   broadcastAddr: string;
   manualIp: string;
 }
-export interface FieldPeerInfo { ip: string; port: number; role: FieldRole }
+export interface FieldPeerInfo { ip: string; port: number; role: FieldRole; trusted?: boolean }
 export interface FieldStatus {
   running: boolean;
   mode: FieldRole;
@@ -750,6 +755,9 @@ export interface FieldStatus {
   manual: boolean;
   folder: string;
   peers: FieldPeerInfo[];
+  /** Discovered hosts still awaiting the user's approval. */
+  pending?: FieldPeerInfo[];
+  allowRemoteDelete?: boolean;
 }
 export interface FieldNetworkAdapter { label: string; ip: string; broadcast: string }
 export interface FieldHistoryEntry {
@@ -765,10 +773,10 @@ export interface FieldWifiAdapter { label: string; name: string; status: string 
 /** One push on 'seisconv:fieldEvent'. */
 export type FieldEventMsg =
   | { type: 'log'; msg: string; ts: string }
-  | { type: 'peer'; action: 'found' | 'lost'; ip: string; port?: number; role?: FieldRole }
+  | { type: 'peer'; action: 'found' | 'lost' | 'pending'; ip: string; port?: number; role?: FieldRole; trusted?: boolean }
   | { type: 'sync'; ok: boolean; detail: string }
   | { type: 'file'; kind: 'pulled' | 'deleted'; relPath: string; peerIp: string; size: number }
-  | { type: 'status'; running: boolean; mode: FieldRole; serverOn: boolean; discoveryOn: boolean; manual: boolean; folder: string; peers: FieldPeerInfo[] }
+  | { type: 'status'; running: boolean; mode: FieldRole; serverOn: boolean; discoveryOn: boolean; manual: boolean; folder: string; peers: FieldPeerInfo[]; pending?: FieldPeerInfo[]; allowRemoteDelete?: boolean }
   | { type: 'negotiated'; role: FieldRole; peerRole: FieldRole }
   | { type: 'renegotiable' };
 
@@ -1049,6 +1057,15 @@ const api = {
     ipcRenderer.invoke('seisconv:field:setRole', role),
   /** Run one sync pass over the known peers now. */
   fieldSyncNow: (): Promise<{ ok: boolean; detail: string }> => ipcRenderer.invoke('seisconv:field:syncNow'),
+
+  /** Approve (or revoke) a peer. Only approved peers are synced with, in either
+   *  direction - the LAN beacon carries no secret, so trust is the user's call. */
+  fieldTrustPeer: (ip: string, trusted: boolean): Promise<{ ok: boolean; error?: string }> =>
+    ipcRenderer.invoke('seisconv:field:trustPeer', { ip, trusted }),
+
+  /** Allow/deny an approved peer's tombstones deleting local files. */
+  fieldSetAllowRemoteDelete: (on: boolean): Promise<{ ok: boolean }> =>
+    ipcRenderer.invoke('seisconv:field:setAllowRemoteDelete', on),
   /** Manually add a peer by IP (TCP-tested first). */
   fieldConnectPeer: (ip: string, port?: number): Promise<{ ok: boolean; error?: string }> =>
     ipcRenderer.invoke('seisconv:field:connectPeer', { ip, port }),

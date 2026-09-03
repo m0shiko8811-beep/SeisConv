@@ -11,7 +11,7 @@
 <p align="center">
   <img src="https://img.shields.io/github/v/release/m0shiko8811-beep/SeisConv" alt="Latest release"/>
   <img src="https://github.com/m0shiko8811-beep/SeisConv/actions/workflows/ci.yml/badge.svg" alt="CI status"/>
-  <img src="https://img.shields.io/badge/Electron-33-47848F?logo=electron&logoColor=white" alt="Electron 33"/>
+  <img src="https://img.shields.io/badge/Electron-44-47848F?logo=electron&logoColor=white" alt="Electron 44"/>
   <img src="https://img.shields.io/badge/TypeScript-5.6-3178C6?logo=typescript&logoColor=white" alt="TypeScript 5.6"/>
   <img src="https://img.shields.io/badge/Formats-SEG--Y_%C2%B7_SEG--D_%C2%B7_SEG--2_%C2%B7_SU-00C853" alt="Formats"/>
   <img src="https://img.shields.io/badge/Geometry-SPS_%C2%B7_P1%2F11_%C2%B7_P6%2F11-0E7490" alt="Survey geometry"/>
@@ -61,7 +61,7 @@ SeisConv is a free, **open source** (**AGPL v3**) desktop **SEG-Y viewer and con
 
 ## Download
 
-**Windows 10 / 11, 64-bit.** Download `SeisConv-Setup-0.7.10.exe` from the
+**Windows 10 / 11, 64-bit.** Download `SeisConv-Setup-0.7.12.exe` from the
 [latest release](https://github.com/m0shiko8811-beep/SeisConv/releases/latest)
 and run it. The installer lets you choose the installation directory (per-user
 by default, with an option to elevate and install for all users).
@@ -378,7 +378,7 @@ Requires Node.js 20+ and npm.
 
 ```bash
 npm ci                  # install Electron and toolchain from the committed lockfile
-npm run test:core       # run the 346 core unit tests (file-backed tests skip without sample data)
+npm run test:core       # run the 395 core unit tests (file-backed tests skip without sample data)
 npm run typecheck       # TypeScript check (core + renderer + electron)
 npm start               # build and launch the desktop app
 npm run dist            # package an installer with electron-builder

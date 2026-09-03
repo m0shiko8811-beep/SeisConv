@@ -1,0 +1,54 @@
+{
+  "image": "img/09d-sps-real-map.png",
+  "name": "09d-sps-real-map",
+  "caption": "The same survey on the real basemap: satellite imagery, with the layer picker and the bearing control",
+  "callouts": [
+    {
+      "n": 1,
+      "label": "Real map: the survey drawn on satellite imagery instead of the plain grid",
+      "selector": "#viewMap",
+      "rect": {
+        "x": 915,
+        "y": 188,
+        "w": 74,
+        "h": 26
+      }
+    },
+    {
+      "n": 2,
+      "label": "Survey grid: the same stations on a plain plot",
+      "selector": "#viewGrid",
+      "rect": {
+        "x": 829,
+        "y": 188,
+        "w": 86,
+        "h": 26
+      }
+    },
+    {
+      "n": 3,
+      "label": "The layer picker at the top right switches satellite, streets and the two grey regional canvases",
+      "selector": "#spsMap",
+      "rect": {
+        "x": 90,
+        "y": 263,
+        "w": 1478,
+        "h": 619
+      }
+    },
+    {
+      "n": 4,
+      "label": "Bearing: rotates the imagery and the stations together",
+      "selector": "#spsRotateCtl",
+      "rect": {
+        "x": 1005,
+        "y": 181,
+        "w": 289,
+        "h": 40
+      }
+    }
+  ],
+  "missingCallouts": [],
+  "frameLeaks": [],
+  "bytes": 1919101
+}

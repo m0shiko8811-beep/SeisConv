@@ -1,0 +1,43 @@
+{
+  "image": "img/20-help-modal.png",
+  "name": "20-help-modal",
+  "caption": "The in-app Help: the same source this manual's reference chapter is generated from",
+  "callouts": [
+    {
+      "n": 1,
+      "label": "One topic per tab",
+      "selector": "#manualNav",
+      "rect": {
+        "x": 421,
+        "y": 136,
+        "w": 178,
+        "h": 823
+      }
+    },
+    {
+      "n": 2,
+      "label": "What the tab is for, every control, and how to use it",
+      "selector": "#manualContent",
+      "rect": {
+        "x": 599,
+        "y": 136,
+        "w": 580,
+        "h": 823
+      }
+    },
+    {
+      "n": 3,
+      "label": "Close (Esc, or ? again)",
+      "selector": "#manualClose",
+      "rect": {
+        "x": 1129,
+        "y": 89,
+        "w": 30,
+        "h": 30
+      }
+    }
+  ],
+  "missingCallouts": [],
+  "frameLeaks": [],
+  "bytes": 269558
+}

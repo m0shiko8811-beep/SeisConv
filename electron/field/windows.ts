@@ -16,6 +16,7 @@ import { spawn } from 'node:child_process';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import * as fs from 'node:fs';
+import { randomBytes } from 'node:crypto';
 
 const CREATE_NO_WINDOW = 0x08000000;
 
@@ -230,9 +231,15 @@ export async function scanForWifiSync(selfIp: string, port = 47824, timeoutMs = 
 /** §8b elevated script runner: writes a transcript-wrapped .ps1 and self-elevates
  *  via Start-Process -Verb RunAs (UAC prompt), returning the transcript body. */
 export async function runScriptElevated(script: string): Promise<string> {
-  const tmpDir = os.tmpdir();
-  const psPath = path.join(tmpDir, 'wifisync_hs_elev.ps1');
-  const outPath = path.join(tmpDir, 'wifisync_hs_out.txt');
+  // The script below is executed ELEVATED, so its path must not be predictable:
+  // a fixed name in the shared temp dir lets any same-user process pre-create or
+  // swap the file and get its own content run as administrator. mkdtemp gives a
+  // fresh, randomly named directory (0700 on POSIX, owner-only ACL on Windows)
+  // and the file names inside it carry random bytes too.
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'wifisync-elev-'));
+  const nonce = randomBytes(8).toString('hex');
+  const psPath = path.join(tmpDir, `wifisync_hs_elev_${nonce}.ps1`);
+  const outPath = path.join(tmpDir, `wifisync_hs_out_${nonce}.txt`);
   const body =
     `Start-Transcript -Path "${outPath}" -Force | Out-Null\n` + script + `\nStop-Transcript | Out-Null\n`;
   // utf-8 with BOM.
@@ -247,11 +254,18 @@ export async function runScriptElevated(script: string): Promise<string> {
     `-Verb RunAs -Wait -WindowStyle Hidden`;
   await run('powershell', ['-NoProfile', '-Command', launcher], 120000);
   let transcript = '';
+  let readFailed = false;
   try {
     transcript = fs.readFileSync(outPath, 'latin1');
   } catch {
-    return '';
+    readFailed = true;
   }
+  try {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  } catch {
+    /* best effort */
+  }
+  if (readFailed) return '';
   const lines = transcript.split(/\r?\n/);
   const startIdx = lines.findIndex((l) => /\*{4}.*started.*\*{4}/i.test(l));
   const endIdx = lines.findIndex((l) => /\*{4}.*ended.*\*{4}/i.test(l));

@@ -1,0 +1,76 @@
+{
+  "image": "img/19-wifisync.png",
+  "name": "19-wifisync",
+  "caption": "WiFiSync: move files between two field machines with no network",
+  "callouts": [
+    {
+      "n": 1,
+      "label": "The folder kept mirror-identical with the peer",
+      "selector": "#fldPickFolder",
+      "rect": {
+        "x": 109,
+        "y": 335,
+        "w": 77,
+        "h": 32
+      }
+    },
+    {
+      "n": 2,
+      "label": "Start WiFiSync on this machine",
+      "selector": "#fldStartBtn",
+      "rect": {
+        "x": 109,
+        "y": 741,
+        "w": 117,
+        "h": 35
+      }
+    },
+    {
+      "n": 3,
+      "label": "Off by default: a peer deleting a file does NOT delete your copy",
+      "selector": "#fldAllowDelete",
+      "rect": {
+        "x": 109,
+        "y": 672,
+        "w": 13,
+        "h": 13
+      }
+    },
+    {
+      "n": 4,
+      "label": "Trust: an approved machine, and Revoke to stop syncing with it",
+      "selector": "#fldPeerBody tr:nth-child(1) td:nth-child(4)",
+      "rect": {
+        "x": 687,
+        "y": 305,
+        "w": 121,
+        "h": 61
+      }
+    },
+    {
+      "n": 5,
+      "label": "Nothing is shared with a machine until you press Approve",
+      "selector": "#fldPeerBody tr:nth-child(2) td:nth-child(4)",
+      "rect": {
+        "x": 687,
+        "y": 366,
+        "w": 121,
+        "h": 61
+      }
+    },
+    {
+      "n": 6,
+      "label": "The hotspot password - no default, you choose one (8+ characters)",
+      "selector": "#fldHsPass",
+      "rect": {
+        "x": 966,
+        "y": 396,
+        "w": 169,
+        "h": 29
+      }
+    }
+  ],
+  "missingCallouts": [],
+  "frameLeaks": [],
+  "bytes": 183630
+}
