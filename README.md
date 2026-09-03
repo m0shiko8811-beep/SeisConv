@@ -450,6 +450,31 @@ Shipped work is tracked in the [CHANGELOG](CHANGELOG.md).
 
 ---
 
+## Acknowledgements
+
+SeisConv exists because of problems met doing real work: field crews waiting on a
+converter that would not read a recorder's output, geometry that arrived in the wrong
+coordinate system the night before a survey, and observers keeping a log on paper because
+nothing on the laptop fitted how a production day actually runs.
+
+Most of those problems were encountered while working at the **Geophysical Institute of
+Israel**, and the people there shaped this software more than they realise. The observers
+and party chiefs who broke it in the field and said so plainly. The processors who noticed
+a datum was wrong before it reached a client. The colleagues who asked why a thing took
+five steps when it could take one, and then tested the answer on data that mattered.
+
+> SeisConv is the author's own work, released independently under the GNU Affero General
+> Public License v3. It is not a product of the Geophysical Institute of Israel, and its
+> publication here does not imply the Institute's endorsement or support.
+
+It also stands on work given away by others: the **IOGP** for the EPSG Geodetic Parameter
+Dataset that makes coordinate handling possible offline, **OpenStreetMap** contributors
+and **Esri** for the map imagery, and the maintainers of the open source libraries listed
+in `package.json`. Every one of them made this smaller and better than it would otherwise
+have been.
+
+If SeisConv is useful to you, the most valuable thing you can send back is what broke.
+
 ## License
 
 SeisConv is free software, licensed under the **GNU Affero General Public
