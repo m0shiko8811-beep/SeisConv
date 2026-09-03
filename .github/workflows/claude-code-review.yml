@@ -12,11 +12,14 @@ on:
 
 jobs:
   claude-review:
-    # Optional: Filter by PR author
-    # if: |
-    #   github.event.pull_request.user.login == 'external-contributor' ||
-    #   github.event.pull_request.user.login == 'new-developer' ||
-    #   github.event.pull_request.author_association == 'FIRST_TIME_CONTRIBUTOR'
+    # The repository is public, so any stranger could otherwise open a pull
+    # request and spend the owner's credits. Reviews are therefore limited to
+    # the owner, org members and invited collaborators. A pull request from a
+    # fork also receives no secrets, so an ungated run would fail red every
+    # time and train everyone to ignore CI. Outside contributions still get a
+    # review on demand: a maintainer comments @claude and claude.yml picks it up.
+    if: |
+      contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.pull_request.author_association)
 
     runs-on: ubuntu-latest
     permissions:
