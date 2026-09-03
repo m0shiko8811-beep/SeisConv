@@ -100,7 +100,7 @@ export const SPS_HEADER_LABELS: Record<string, string> = {
   H11: 'Geodetic datum / spheroid info',
   H12: 'Geodetic datum, -spheroid',
   H13: 'Geodetic datum (local)',
-  H14: 'Geodetic datum parameters (Helmert)',
+  H14: 'Geodetic datum parameters', // SPS rev 2.1: 7-parameter transformation to WGS84
   H15: 'Vertical datum',
   H16: 'Vertical datum description',
   H17: 'Offset between geodetic & vertical datum',

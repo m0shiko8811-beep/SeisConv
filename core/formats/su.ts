@@ -1,13 +1,16 @@
 // seisconv-core - SU (Seismic Unix) parser + writer
 //
-// Headerless SEG-Y: 240-byte trace headers, IEEE float32 samples, traces start
-// at byte 0. Ported from the SeisConv reference.
+// Headerless SEG-Y: 240-byte trace headers (the SEG-Y trace header with CWP's
+// own definitions in the trailing bytes), IEEE float32 samples, traces start at
+// byte 0. Ported from the SeisConv reference.
 //
 // BYTE ORDER: SU files carry NO byte-order marker - samples + headers are in the
 // writing machine's native order. Big-endian SU (classic Unix/SPARC) and
 // little-endian SU (PC-written, very common) are both in the wild, so the READER
 // auto-detects per file and threads a single `le` flag through every header /
-// sample read. The WRITER always emits big-endian (the SU/CWP canonical order),
+// sample read. There is NO canonical SU byte order: CWP/SU writes the host's
+// native order unless the package is built with -DSUXDR, which makes it big-
+// endian (hence the `suswapbytes` utility). The WRITER always emits big-endian,
 // keeping output bit-identical to the reference.
 
 import { dv, getF32, r16u, r32s, w16, w32 } from '../binary';

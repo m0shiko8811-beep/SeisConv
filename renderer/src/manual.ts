@@ -73,7 +73,7 @@ export const MANUAL: Record<string, HelpTopic> = {
       ] },
       { h: 'Supported file formats', items: [
         '<b>SEG-Y</b> (.segy / .sgy) - the standard exchange format; revisions 0, 1 and 2. Read and written.',
-        '<b>SEG-D</b> (.segd / .seg) - raw field-record format; revisions 1 and 3. Read and written.',
+        '<b>SEG-D</b> (.segd / .seg) - raw field-record format. Read: Rev 1 through Rev 3, validated on Rev 2.1 (January 2006) and Rev 3.0 files. Written: Rev 1.0 or Rev 3.0.',
         '<b>SEG-2</b> (.seg2 / .dat) - engineering / shallow-seismic format. Read and written.',
         '<b>SU</b> (.su) - Seismic Unix; trace stream with no reel/textual header. Read and written.',
         '<b>CSV</b> - samples as plain numbers, one trace per column. Export only (not re-readable as seismic).',
@@ -118,7 +118,7 @@ export const MANUAL: Record<string, HelpTopic> = {
       { h: 'Output formats', items: [
         '<b>SEG-Y Rev 0</b> - the original layout; broadest compatibility, no extended headers.',
         '<b>SEG-Y Rev 1</b> - adds the extended textual headers and standard trace-header positions. A safe default.',
-        '<b>SEG-Y Rev 2</b> - the latest revision; larger trace counts and microsecond timing.',
+        '<b>SEG-Y Rev 2</b> - the current revision family (2.0, 2017; 2.1, October 2023); larger trace counts, extra 240-byte trace headers and microsecond timing. SeisConv writes files stamped Rev 2.0.',
         '<b>SU</b> - Seismic Unix; SEG-Y trace headers with no reel/textual header. For SU/CWP workflows.',
         '<b>SEG-2</b> - engineering / shallow-seismic instruments.',
         '<b>SEG-D Rev 1 / Rev 3</b> - raw field-record format written by many acquisition systems.',
@@ -294,7 +294,7 @@ export const MANUAL: Record<string, HelpTopic> = {
     ],
     notes: [
       'The <b>SPS 2.1</b> export carries a matching ESRI <b>.prj</b> when the survey&rsquo;s CRS can be described, because that export is already a ZIP. The other three positioning formats are single files and stay single files - a .prj beside them would turn &ldquo;save a .csv&rdquo; into &ldquo;save a .zip&rdquo; - so they state their CRS inside the file instead: coordinate CSV a <span class="mono"># CRS:</span> tag, IOGP P1/11 an <span class="mono">H,CRS</span> record, SEG-P1 an <span class="mono">H GRID: … DATUM …</span> line. A survey whose CRS cannot be described honestly gets NO .prj rather than a guessed one.',
-      'Coordinate reference systems come from the <b>EPSG Geodetic Parameter Dataset</b>, &copy; IOGP (International Association of Oil &amp; Gas Producers), redistributed under its terms of use with attribution. IOGP is not responsible for any modification made to the data, and this use does not imply IOGP endorsement. The authoritative source is the EPSG Registry at epsg.org.',
+      'Coordinate reference systems come from the <b>EPSG Geodetic Parameter Dataset</b>. Ownership of the dataset by IOGP (International Association of Oil and Gas Producers) is acknowledged, as its Terms of Use require. SeisConv ships a subset: CRS and transformation descriptions are incomplete unless every element IOGP Guidance Note 7-1 Annex A lists as essential is included. IOGP does not warrant the accuracy of the data and excludes liability for its use. If you pass the data on you must inform the recipient of the Terms of Use at epsg.org/terms-of-use.html. The authoritative source is the EPSG Registry at epsg.org.',
       'SeisConv computes Transverse Mercator, UTM, geographic, Lambert Conformal Conic, Mercator, Cassini-Soldner, Albers, Lambert Azimuthal Equal Area and Polar/Oblique Stereographic - about 97% of the projected CRSs in the dataset. The rest stay listed but are refused with a reason, as are CRSs whose datum tie needs an NTv2/NADCON grid file (OSGB36, NAD27 and similar). Native export still works for those, and the .prj names the CRS correctly so your GIS can do the shift properly.',
     ],
   },

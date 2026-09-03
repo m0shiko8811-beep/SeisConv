@@ -29,12 +29,17 @@ unaffected by the relicensing of SeisConv and continue to apply to it:
 
 1. EPSG Geodetic Parameter Dataset (IOGP)
    SeisConv bundles a distilled offline copy of the EPSG Geodetic Parameter
-   Dataset in core/sps/epsg-registry.json. The EPSG Dataset is (C) IOGP
-   (International Association of Oil & Gas Producers) and is used here under
-   its terms of use, which permit redistribution with attribution. IOGP is not
-   responsible for any modification made to the data, and this application's
-   use of it does not imply IOGP endorsement. The authoritative source is the
-   EPSG Registry at <https://epsg.org>.
+   Dataset in core/sps/epsg-registry.json. Ownership of the EPSG Dataset by
+   IOGP (International Association of Oil and Gas Producers) is acknowledged,
+   as the EPSG Dataset Terms of Use require. What SeisConv bundles is a subset
+   of the dataset; users are advised that coordinate reference system and
+   coordinate transformation descriptions are incomplete unless every element
+   listed as essential in IOGP Guidance Note 7-1 Annex A is included. IOGP does
+   not warrant the accuracy of the data and excludes liability for its use, so
+   use is at your own risk. If you provide the EPSG data to anyone else you are
+   obliged to inform them of those Terms of Use, which are published at
+   <https://epsg.org/terms-of-use.html>. The authoritative source is the EPSG
+   Registry at <https://epsg.org>.
 
 2. Basemap tile services
    SeisConv can fetch map tiles from third-party online tile providers. Those

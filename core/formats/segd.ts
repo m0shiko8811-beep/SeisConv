@@ -8,22 +8,30 @@
 // additional-GH-block and external-header counts), 32-byte (rev ≤ 2) or 96-byte
 // (rev 3) channel-set descriptors, then per-trace 20-byte demux trace headers +
 // 32-byte trace-header extensions (per-trace ns and receiver line/point from
-// THE1). Field map verified against real iX1 NT SEG-D 2.1 and 3.0 shots whose
+// THE1). Field map taken from SEG-D Rev 2.1 (SEG Field Tape Standards, January 2006)
+// and Rev 3.1 (October 2015), and verified against real iX1 NT SEG-D 2.1 and 3.0 shots whose
 // samples are bit-identical to the vendor's paired SEG-Y (2026 field QC).
 //
 // Files written by SeisConv's own pre-spec writer (non-standard offsets) are
 // detected by their layout signature and routed through a frozen legacy decoder
 // so previously exported .segd files keep opening.
 //
-// Sample formats: 32-bit IEEE float (code 8058, plus the legacy SeisConv codes
-// 0032/8032), 24-bit int (8068/0068), 20-bit packed (2.5 bytes/sample, others).
+// Sample formats: 32-bit IEEE float (standard code 8058, plus the legacy
+// SeisConv-internal codes 0032/8032), 24-bit two's-complement int (standard code
+// 8036, plus the non-standard 8068/0068 seen from vendor files), 20-bit binary
+// (standard code 8015 - 2.5 bytes/sample; also the fallback for unknown codes).
+// The standard format-code table is SEG-D Rev 3.1 (Oct 2015) General Header #1
+// bytes 3-4; it lists 8015/8022/8024/8036/8038/8042/8044/8048/8058/8080 and the
+// little-endian 90xx variants. 8068 is NOT in it.
 
 import { bcd2, dv, r32u, rIEEE, w32 } from '../binary';
 import type { Bytes, ParsedFile, Trace, TraceHeader } from '../types';
 import { MAX_SAMPLE_TRACES, MAX_SAMPLES_PER_TRACE, MAX_TRACES } from '../types';
 
-// SEG-D Rev 1 base-scan-interval CODES → microseconds (legacy SeisConv files
-// only - the spec field is binary 1/16-ms units, handled inline below).
+// Legacy SeisConv-internal base-scan-interval CODES → microseconds. These are
+// NOT a SEG-D revision's encoding: in every published revision GH1 byte 23 is a
+// binary number with LSB = 1/16 ms (SEG-D Rev 3.1, Oct 2015, GH1 byte 23), which
+// is handled inline below. Kept only so previously written SeisConv files open.
 const BSI_TABLE: Record<number, number> = { 1: 4000, 2: 2000, 3: 1000, 4: 500, 5: 250, 6: 125, 7: 62.5, 8: 31.25, 9: 16, 10: 8 };
 
 // -- tiny big-endian helpers (SEG-D is big-endian throughout) --
@@ -34,11 +42,14 @@ const bcd4 = (b: Bytes, o: number): number => bcd2(b[o]) * 100 + bcd2(b[o + 1]);
 
 /** Bits per sample for a SEG-D format code (BCD bytes 2-3). */
 function fmtBits(fmtCode: number): number {
-  // 8058 = 32-bit IEEE float demux (the conformant code); 0032/8032 are legacy
+  // 8058 = 32-bit IEEE float demux (the standard code); 0032/8032 are legacy
   // SeisConv-internal IEEE codes kept for previously written files.
   if (fmtCode === 8058 || fmtCode === 32 || fmtCode === 8032) return 32;
-  if (fmtCode === 8068 || fmtCode === 68) return 24;
-  return 20; // 20-bit packed (e.g. 8015) and unknown codes
+  // 8036 = 24-bit two's-complement integer demux (the standard code, SEG-D Rev
+  // 2.1 §"Additional Valid Format Codes" / Rev 3.1 GH1 bytes 3-4); 8068/0068 are
+  // non-standard codes seen in the wild and decoded the same way.
+  if (fmtCode === 8036 || fmtCode === 36 || fmtCode === 8068 || fmtCode === 68) return 24;
+  return 20; // 20-bit binary (standard code 8015) and unknown codes
 }
 
 /** One channel-set descriptor, reduced to what the trace walk needs. */

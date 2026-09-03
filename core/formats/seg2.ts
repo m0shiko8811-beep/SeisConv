@@ -1,15 +1,26 @@
 // seisconv-core - SEG-2 parser (incl. Geometrics Geode ".dat")
 //
-// Little-endian throughout. Handles both classic SEG-2 (null/line-terminated
-// free-form headers) and Geode's length-prefixed free-form variant.
-// Ported verbatim from the SeisConv reference.
+// The standard is "SEG-2": Pullan, S. E., 1990, Recommended standard for seismic
+// (/radar) data files in the personal computer environment, Geophysics 55(9),
+// 1260-1271 (Subcommittee of the SEG Engineering and Groundwater Geophysics
+// Committee). A file is a File Descriptor Block, one Trace Descriptor Block per
+// trace and one Data Block per trace.
+//
+// BYTE ORDER: the standard fixes it per file - integers are read in the order
+// implied by the first two bytes of the File Descriptor Block (block ID 3A55h).
+// Every file seen in practice (and every Geode file) is little-endian, which is
+// what this reader assumes throughout; a big-endian SEG-2 file would not decode.
+// Handles both classic SEG-2 (null/line-terminated free-form headers) and
+// Geode's length-prefixed free-form variant. Ported from the SeisConv reference.
 
 import { dv, getF32, getF64 } from '../binary';
 import type { Bytes, ParsedFile, Trace, TraceHeader } from '../types';
 import { MAX_SAMPLES_PER_TRACE } from '../types';
 
-/** Bytes-per-sample for a SEG-2 per-trace data-format code. Format 3 is 20-bit
- * packed (2 samples / 5 bytes = 2.5 B/sample); the rest are whole-byte widths.
+/** Bytes-per-sample for a SEG-2 per-trace data-format code (Pullan 1990: 01h
+ * 16-bit fixed, 02h 32-bit fixed, 03h "20-bit floating point (SEG-D)", 04h 32-bit
+ * IEEE, 05h 64-bit IEEE). Format 3 packs 2 samples into 5 bytes (2.5 B/sample);
+ * the rest are whole-byte widths.
  * Used both to decode and to bound `nSamples` by the on-disk data-block size. */
 function seg2BytesPerSample(trDataFmt: number): number {
   return trDataFmt === 1 ? 2 : trDataFmt === 2 ? 4 : trDataFmt === 3 ? 2.5 : trDataFmt === 5 ? 8 : 4;
