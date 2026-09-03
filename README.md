@@ -51,7 +51,7 @@
 
 </details>
 
-SeisConv is a free, **open source** (**AGPL v3**) desktop **SEG-Y viewer and converter** and **SEG-D converter** for Windows, which also reads and writes SEG-2 and Seismic Unix and does **SPS survey geometry QC** on the same data. It **runs offline** - no account, no cloud, no licence server - and nothing you open is uploaded anywhere. The only feature that touches the internet is the optional real-map basemap on the SPS tabs, which fetches map tiles; everything else, the ~7,000-CRS EPSG registry included, works with no connection at all.
+SeisConv is a free, **open source** (**AGPL v3**) desktop **SEG-Y,SEG-D,SEG-2 etc... viewer and converter** for Windows, which also reads Seismic Unix and does **SPS survey geometry QC** on the same data. It **runs offline** - no account, no cloud, no licence server - and nothing you open is uploaded anywhere. The only feature that touches the internet is the optional real-map basemap on the SPS tabs, which fetches map tiles; everything else, the ~7,000-CRS EPSG registry included, works with no connection at all.
 
 **Who it is for:** field crews, party chiefs and observers who need to check and convert a record on the spot, and processing geophysicists who need geometry and headers to be right before the data reaches a processing system.
 
