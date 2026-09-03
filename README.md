@@ -474,6 +474,12 @@ in `package.json`. Every one of them made this smaller and better than it would 
 have been.
 
 If SeisConv is useful to you, the most valuable thing you can send back is what broke.
+After that: a feature you actually need, a file that will not open, a format nobody
+supports any more, or a job that takes five steps and should take one. Half of what is
+in here started as somebody saying "why does it do that?"
+
+And if we ever end up at the same survey, the same conference, or the same delayed
+flight home, a beer works too 🍺
 
 ## License
 
