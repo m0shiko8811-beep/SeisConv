@@ -71,7 +71,7 @@ by default, with an option to elevate and install for all users).
 
 ### The manual
 
-A **97 page user manual** is attached to every release, in
+A **99 page user manual** is attached to every release, in
 [A4](https://github.com/m0shiko8811-beep/SeisConv/releases/latest/download/SeisConv-Manual-A4.pdf)
 and
 [US Letter](https://github.com/m0shiko8811-beep/SeisConv/releases/latest/download/SeisConv-Manual-Letter.pdf).
@@ -192,7 +192,19 @@ Full seismic section rendered in four display modes:
 - Variable-area (filled wiggle)
 - VD + wiggle overlay
 
-Four colormaps: Seismic (blue-white-red), Gray, Amber, Viridis. Adjustable gain slider and automatic AGC. Section pan and zoom, a **magnifier box-zoom** popup with its own wheel-zoom / ± / reset / drag-pan, hover readout (trace, time, amplitude, FFID/CDP), Next/Prev file navigation, and **block paging** through multi-gigabyte files (streamed trace index - a 1.7 GB tape opens in seconds and pages smoothly).
+**Nine colormaps:** Seismic (blue-white-red), Gray, Amber, Viridis, Gray (perceptual), Berlin (dark centre), Vik (light centre), Gray (positive black) and Gray L\* (positive black). Viridis is now matplotlib's full 256-entry table; the earlier one interpolated in a straight line between the two ends of that table and so was not viridis at all. Berlin and Vik are Crameri's perceptually uniform diverging maps, where equal steps in amplitude look like equal steps in colour and zero sits at a single unambiguous centre. The two positive-black greys follow the paper-section convention, where a positive excursion prints black. A **Colour check** button renders the section exactly as it stands on screen as a viewer with a red, green or blue colour deficiency would see it, using the Machado, Oliveira and Fernandes (2009) simulation matrices; it is a snapshot you open and close, not a display mode.
+
+**Six display gain laws** (Seismic Unix `sugain` semantics, applied in SU's own order): None (true amplitude), Fixed gain, Time gain t^n, Exponential time gain, Amplitude compression, and Equalise traces (RMS). The distinction matters for spread QC. AGC and Equalise normalise every trace to the same level, which is exactly why a weak or dying geophone hides under them; the time laws apply a correction that depends only on time, identically on every trace, so late arrivals brighten while the relative amplitude between channels survives and a bad channel still reads as bad. The picker states, in one plain sentence under it, what the selected law does, and says outright that Equalise hides a weak geophone. Separately: a decibel display-gain slider with an exact multiplier box, AGC (RMS or Mean, with a window length), a display clip percentile, and four scale bases: Record max, Record pct, Per trace, and **None (raw)**, the only basis under which an absolute amplitude can be quoted, because full scale is then the sample value itself.
+
+Section pan and zoom, a **magnifier box-zoom** popup with its own wheel-zoom / ± / reset / drag-pan, hover readout (trace, time, amplitude, FFID/CDP), Next/Prev file navigation, and **block paging** through multi-gigabyte files (streamed trace index - a 1.7 GB tape opens in seconds and pages smoothly). Wheel zoom is anchored on the cursor, drag pans and double-click fits, on every data canvas in the app, with one shared zoom step and round-number time axes.
+
+**Near-trace (common-offset) gather** - every other viewer shows one record, so a source degrading slowly down the line is invisible. This takes one chosen channel (by channel number, by nearest signed offset, or by array position) out of **every** record in the open file's folder and draws them side by side, one column per record, so the picture reads shot to shot. It obeys the File Viewer's own display mode, colour map, gain law, scale basis, clip, excursion, polarity flip and AGC, so both pictures always describe the same settings. Records that contributed no column are listed with the reason, and a folder of mixed sample intervals says so and names the grid every column was put on. Driven across all 116 records of a real field folder.
+
+**Reduced time** (Seismic Unix `sureduce`) shifts every trace by its offset divided by a reducing velocity in km/s, flattening refracted first breaks into a straight horizontal line. Against a straight line a timing slip, a reversed geophone or a station planted at the wrong stake reads as an obvious step instead of a subtle kink in a hyperbola. **Trace spacing by a geometry header** (source-receiver offset, channel number, shotpoint or CDP) positions each trace at its own header value instead of at its array index, so a spread gap or a dropped station is drawn as a real gap rather than being silently closed up. Both are display only, both state on the section whether they could actually be applied to the record on screen, and neither ever changes the stored samples.
+
+**Per-trace attribute profile** - peak, RMS and a separate pre-first-break noise RMS, drawn as a line profile under the section on the section's own trace axis, and printed for the hovered trace in the read-out. These numbers do not depend on the display normalisation, which is the point: under per-trace scaling or AGC a weak geophone and a healthy one are painted at the same brightness, and this profile is where the difference stays visible. The values are the trace-health scan's own evidence read back, not a second computation.
+
+**Display-state strip** - every viewer carries a permanent strip stating the full transform chain standing between the stored samples and the pixels: display mode, whether polarity is flipped for display, reduced time and trace spacing, colour map, AGC, the gain law and its exponent, the scale basis and its numeric value, the display clip and the sample value at which the picture saturates, and how much of the record the display flattened. It also states the file's declared SEG-Y impulse-polarity convention in the standard's own words (byte 3257, and whether the file declares nothing), never as "normal" or "reverse", which mean opposite things in different parts of the world. The point is that a screenshot can then be used as a QC record, because nothing about how it was made is left implicit.
 
 **First Breaks mode** - a seeded, moveout-guided first-break picker on the same section: drop a few seed picks, hit *Assisted fill*, and the pick line follows the refraction moveout inside a guide window (no scatter into deep reflections); drag to edit, export picks as CSV.
 
@@ -394,7 +406,7 @@ Requires Node.js 20+ and npm.
 
 ```bash
 npm ci                  # install Electron and toolchain from the committed lockfile
-npm run test:core       # run the 395 core unit tests (file-backed tests skip without sample data)
+npm run test:core       # run the core unit tests (file-backed tests skip without sample data)
 npm run typecheck       # TypeScript check (core + renderer + electron)
 npm start               # build and launch the desktop app
 npm run dist            # package an installer with electron-builder

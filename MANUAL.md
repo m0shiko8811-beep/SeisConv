@@ -167,6 +167,8 @@ Inspect one trace at a time as a time-domain waveform or its amplitude spectrum,
 - **Magnifier** (the magnifying-glass icon button, no text label) - click it, then drag a box over the trace to open that time/amplitude region enlarged in a zoom viewer (`Esc` exits).
 - **Axis range** - type an exact time and/or amplitude window instead of auto-fit; blank or invalid reverts that axis to auto.
 - **Add to Workbench** - push the current trace to the Trace Workbench to compare later.
+- **Flip polarity (display)** - flip the displayed polarity. Display only: the stored samples are untouched and nothing written by Convert is affected. It is shared with the File Viewer and the box-zoom viewer, since all three show the same open file.
+- **State strip** - the strip in the plot states the display settings actually in force, so a screenshot of the trace carries its own settings.
 - **Hover read-out** - under the canvas, the time and amplitude under the cursor.
 - **Trace header** table - the live SEG-Y header for the current trace, grouped; it updates on every move.
 
@@ -180,6 +182,7 @@ Inspect one trace at a time as a time-domain waveform or its amplitude spectrum,
 ### Good to know
 
 - The amplitude axis is labelled “Amplitude (sample value)” - SEG-Y/SEG-D samples are raw counts with no physical unit.
+- Zooming no longer renormalises the trace. The Inspector carries the File Viewer’s **Scale** vocabulary - **Record max** and **Record pct**, both computed over the WHOLE trace so the basis does not move when the time window does, plus **Visible window**, which is the older behaviour of scaling to whatever is on screen.
 
 ---
 
@@ -192,9 +195,20 @@ Render the whole record as a section image - variable-density, wiggle or variabl
 - **Open file…** / **Clear** - open or forget the seismic file (shared with every tab).
 - **[** / **]** - step to the previous / next file in the same folder.
 - **Display mode** - Variable Density (colour by amplitude), Wiggle (traditional wiggle traces), Variable Area (filled wiggle), or VD + Wiggle (both overlaid).
-- **Colormap** - Seismic (blue-white-red), Gray, Amber or Viridis.
-- **Gain** slider - scale amplitude for display only (it does not change the data).
-- **AGC** - automatic gain control: equalises strong and weak traces so faint far-offset arrivals show. Display only.
+- **Colormap** - nine maps: Seismic (blue-white-red), Gray, Amber, Viridis, Gray (perceptual), Berlin (dark centre), Vik (light centre), Gray (positive black) and Gray L* (positive black). **Berlin** and **Vik** are perceptually uniform diverging maps: equal steps in amplitude look like equal steps in colour, and zero sits at one unambiguous centre, so a polarity judgement is not an artefact of the colour ramp. The two **positive black** greys follow the paper-section convention, where a positive excursion prints black. On Variable Density and VD + Wiggle the section carries a **colour bar** in its right margin, drawn with the map actually in use and ticked in stored sample values, so a colour can be turned back into a number. In **Per trace** scaling there is no single basis, so the bar shows only high and low and invents nothing.
+- **Display…** - opens the panel holding the gain, the gain law, AGC, the display clip, the wiggle excursion, the scale basis, trace spacing, reduced time and the colour check. It only needs to be open while you are changing something, because everything in it is reported permanently on the state strip inside the section.
+- **Clip** - the percentile of the visible sample magnitudes at which the display saturates; 100 means no clipping beyond the scale basis. Cosmetic only: it never changes the stored samples, and it is NOT the red *clipped* health flag, which means the recording itself was overdriven.
+- **Exc** (excursion) - how far a sample at the clip level deflects, measured in trace spacings. 1.0 is the usual default; above 1 the wiggles overlap their neighbours, so coherent events join into a continuous band.
+- **Colour check…** (in the **Display…** panel) - shows this exact section as a viewer with a red, green or blue colour deficiency would see it. About one man in twelve has one, so a display that only works in full colour is a real limitation. It is a spot check, not a mode: it opens a still picture and closes again.
+- **Gain law** (in the **Display…** panel) - how the display brightens the data before the scale basis and the dB gain, applied after AGC. Six laws, with Seismic Unix `sugain` semantics: **None (true amplitude)** - raw sample values, the only mode you can quote an amplitude from. **Fixed gain** - one multiplier for everything; brightness changes, comparisons do not. **Time gain (t^n)** - brightens later arrivals to offset spreading loss, with the same correction on every trace, so a weak channel still looks weak. **Exponential time gain** - a stronger late-time boost, for heavily attenuated data. **Amplitude compression** - squashes the loud and quiet range so weak events show without flattening them; polarity and the order of amplitudes are kept. **Equalise traces (RMS)** - every trace ends at the same level; like AGC this *hides* a weak or dying geophone, so do not use it for spread QC. The **n** box beside the picker is that law’s exponent, and each law remembers its own value.
+- **Flip polarity (display)** - flip the displayed polarity of every trace, to check a channel you suspect is wired in reverse. Display only: the stored samples are untouched and nothing written by Convert is affected. The state strip says FLIPPED while it is on.
+- **Trace spacing** (in the **Display…** panel) - where each trace is drawn across the plot. **Trace number (even)** is one even column per trace, the default. Any other choice - **Source-receiver offset**, **Channel number**, **Shotpoint** or **CDP / ensemble** - positions each trace at its own header value, so a spread gap, a dropped station or a channel missing from the file appears as a real gap instead of being silently closed up. If the chosen header is missing, all zero or all the same, the section falls back to even spacing and says so.
+- **Reduced time (flatten first breaks)** (in the **Display…** panel) - shift every trace by its offset divided by the **Reducing velocity (km/s)**, so refracted first breaks flatten into a straight horizontal line. A timing slip, a reversed geophone or a station planted at the wrong stake then reads as an obvious STEP in that line instead of a subtle kink in a hyperbola. The default 8.0 km/s is Seismic Unix’s own; set it near the refractor velocity you want flat, since too high leaves the breaks curving down and too low curves them up. Display only, and disabled with a stated reason on a record that carries no offset header.
+- **Gather…** - the **near-trace (common-offset) gather**: take ONE channel out of EVERY record in this folder and draw them side by side, one column per record, so the picture reads shot to shot instead of channel to channel. Choose the trace by **Channel** number, by nearest signed **Offset** (signed, so a split spread keeps its side), or by plain array **Position**, then **Run**. It uses the File Viewer’s own display mode, colour map, gain law, scale basis, clip, excursion, polarity flip and AGC, so both pictures always describe the same settings. Records that produced no column are listed with the reason, and a folder of mixed sample intervals says which grid every column was put onto. File Prev/Next is disabled while it runs, because the worker reads one file at a time and cannot be cancelled.
+- **Scale** - how sample values map onto the colour / wiggle scale. This is the single biggest control over whether a record looks readable, and it is display only. **Record max** normalises the whole record by its loudest trace, so nothing ever clips and what you see is faithful to absolute amplitude - use it when you need to judge relative strength between traces, or to reproduce the classic view. Its weakness is real: on raw field data the loudest trace can be some 600&times; the typical one, so a single hot geophone leaves the rest of the record flat grey. **Record pct** normalises by a percentile taken *across* traces instead of by the maximum, so the few hottest traces are allowed to clip and everything else rises to a usable level - this is the one to reach for when a record looks dead but you know there is signal in it. **Per trace** scales every trace to its own level, so each one fills the display regardless of its neighbours - use it to check that every channel is alive and to read faint far-offset arrivals, and remember it deliberately destroys any comparison of amplitude between traces. **None (raw)** normalises by nothing at all: full scale is the sample value 1, so this is the only basis under which you can quote an absolute amplitude.
+- **Pct** (shown for **Record pct**) - the across-trace percentile, default 95, i.e. ignore the hottest 5% of traces when setting the scale. Lower it to lift the record further, raise it towards 100 to approach **Record max**.
+- **Gain** - display gain, in decibels on the slider with the exact multiplier in the box beside it and the applied value shown as &times;N (N dB). The slider is logarithmic because the useful range on raw data spans roughly 600:1; a linear slider spent almost all of its travel in the bottom 1% of that range. Type an exact multiplier in the box, or press **Reset** to return to &times;1. Display only.
+- **AGC** - automatic gain control: a sliding time window inside each trace divides out the local signal level, so a weak late arrival is lifted to the same level as the strong early ones and faint far-offset events show. Unlike **Scale** it is time-variant - it changes the shape of the trace down the record, not just its overall level - so the two controls do different jobs and are used together. Display only. **Win** sets the window length in milliseconds (default 250): shorter equalises harder and flattens genuine amplitude character, longer preserves it but lifts less. The level inside each window is measured as **RMS** (default) or **Mean**.
 - **-** / **Fit** / **+** - zoom the data; wheel to zoom, drag to pan, double-click to fit. Zoom re-fetches real samples (not a pixel stretch).
 - **Magnifier** (the magnifying-glass icon button, no text label) - click it, then drag a box to open that trace/time region enlarged in a zoom viewer (`Esc` exits).
 - **Axis range** - type exact trace and/or time extents.
@@ -211,6 +225,14 @@ Render the whole record as a section image - variable-density, wiggle or variabl
 - **Coverage banner** - an honest statement of how much was scanned (e.g. “scanned 20k of 84k traces; polarity on contiguous blocks”). It never implies 100% coverage on very large files.
 - **Confirm / Dismiss** - review each finding; confirmed traces build a kill-list you can **Kill/zero**, **Mute** or **Reverse-polarity**.
 - **Export** - the kill-list (actionable) and a QC-report CSV (per-detector score, confidence, reason and the local baseline).
+- **Attributes** - draw each trace’s **peak**, its **RMS** and a separate **pre-first-break noise RMS** as a line profile under the section, on the section’s own trace axis, and print the three values for the hovered trace in the read-out. These numbers do NOT depend on the display normalisation, and that is the point: under **Per trace** or AGC a weak geophone and a healthy one are painted at the same brightness, and this profile is where the difference stays visible. It reads the health scan’s own measurements, so turning it on runs the scan first if this file has not been scanned yet. The axis is logarithmic, because a peak dwarfs a noise RMS by orders of magnitude.
+
+### The display-state strip - why a screenshot is defensible
+
+- **What it is** - a permanent strip inside the section (and on the Trace Inspector, Trace Workbench, Velocity, Spectrogram and F-K panels) stating everything standing between the stored samples and the pixels you are looking at.
+- **What it states** - the display mode; whether polarity is FLIPPED for display; reduced time and how the traces are spaced; the colour map; AGC; the gain law and its exponent; the scale basis and its numeric value; the display clip and the sample value at which the picture saturates; and how much of the record the display flattened.
+- **Polarity** - it also reports the file’s declared SEG-Y impulse polarity in the standard’s own words (binary header byte 3257), including when the file declares nothing. It never says “normal” or “reverse”: those terms mean opposite things in different parts of the world, and the SEG-Y value is a declaration in the header, not something SeisConv has verified against the data.
+- **Why** - the same record can be made to look healthy or dead by the display alone. With the strip in the picture, a screenshot carries its own settings and can be used as a QC record instead of being an unlabelled claim.
 
 ### Health flags - what each one means
 
@@ -234,19 +256,23 @@ Render the whole record as a section image - variable-density, wiggle or variabl
 ### How to use it
 
 1. Open a seismic file.
-2. Pick a **display mode** and **colormap**; tune **Gain** / **AGC** and zoom in on detail.
+2. Pick a **display mode** and **colormap**; set **Scale** (try **Record pct** if the record looks flat), tune **Gain** / **AGC**, and zoom in on detail.
 3. For QC, run a **Health scan**, review the findings table, then confirm what to act on.
 4. For statics, turn on **First breaks**, drop 2+ seeds, **Assisted fill**, edit, then **Export CSV**.
+5. To judge the spread shot to shot rather than channel to channel, open **Gather…** and run a near-trace gather over the whole folder.
 
 ### Tips
 
+- A record that looks flat grey is usually not a dead record - it is one hot trace holding the scale down. Switch **Scale** to **Record pct**, or push the dB slider up, before concluding anything about the data.
 - Empty Health scan? Run a scan first and nudge the sensitivity if it over- or under-flags.
 - Empty First breaks? Drop at least two seed picks, then **Assisted fill** - the guide needs seeds to anchor the moveout.
 
 ### Good to know
 
 - Both QC tools work on real adjacent traces, not the display-decimated view - flags and picks are computed on the true samples even when the section is zoomed out.
-- Gain and AGC change only how the section looks, never the underlying samples or what you export.
+- Scale, Gain, the gain law, AGC, the polarity flip, reduced time and trace spacing change only how the section looks, never the underlying samples or what you export.
+- AGC and **Equalise traces (RMS)** make every trace look equally healthy, which is exactly why a weak or dying geophone hides under them. For spread QC prefer **Time gain (t^n)**, whose correction depends only on time and is identical on every trace, or read the **Attributes** profile, which does not depend on the display at all.
+- Changing Scale, Pct or Gain only repaints, and changing AGC re-reads the same window - none of them resets your zoom, so you can toggle AGC on and off over one zone and compare it directly.
 
 ---
 
@@ -384,6 +410,7 @@ Compute an NMO semblance panel from the open gather and pick a stacking-velocity
 - **Panel** - click to add velocity picks along the time axis; the picked function is drawn through them.
 - **-** / **Fit** / **+** and **Axis range** - zoom the panel.
 - **Export picks CSV…** - save the picked time/velocity pairs.
+- **Panel navigation** - wheel to zoom on the cursor, drag to pan, double-click to fit. Panning never plants a pick, and a double-click fits instead of picking.
 
 ### How to use it
 
@@ -426,6 +453,7 @@ Frequency-domain QC of the open record: amplitude spectrum, spectrogram and freq
 ### Good to know
 
 - The amplitude axis carries no physical unit; use **dB** to compare relative levels across the band.
+- The Spectrogram and F-K panels carry the same display-state strip as the other viewers, so a screenshot states the settings it was made under.
 
 ---
 
@@ -455,6 +483,11 @@ Collect individual traces from any file(s) and compare them side-by-side or over
 ### Tips
 
 - Traces from different files keep their own labels and colours, so you can A/B a trace against the same channel from another shot.
+
+### Good to know
+
+- Collected traces are aligned by **time**, not by sample number, so a 1 ms trace and a 0.5 ms trace stay in register all the way down the record. When the collection mixes sample intervals the status line says so, names the intervals, and reports the window in milliseconds, because a sample count would only be true for the first trace.
+- The plot carries the same display-state strip as the other viewers, and it names the normalisation actually in use in the File Viewer’s own Scale words.
 
 ---
 

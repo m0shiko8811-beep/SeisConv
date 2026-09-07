@@ -46,9 +46,20 @@ import {
   resampleToInterval,
   applyAGC,
   getColor,
+  getColorWriter,
   colorSeismic,
+  colorViridis,
+  colorGray,
+  colorGrayL,
+  colorAmber,
+  colorGrayPosBlack,
+  colorGrayLPosBlack,
+  colorBerlin,
+  colorVik,
+  simulateCvd,
   maxAbs,
   normFactorPercentile,
+  normAcrossTraces,
   decimateMinMax,
   parseSPSText,
   spsExtractProjection,
@@ -159,6 +170,7 @@ import { bandStats, rasterGrid, rasterizeCounts, rasterizeIDW, rasterizeLayout }
 import { bytesToBase64, base64ToBytes } from '../base64';
 import JSZip from 'jszip';
 import type { ParsedFile, SPSData, SPSPoint, Trace, TraceGeom } from '../index';
+import type { RGB } from '../render/colormaps';
 import {
   // WiFiSync pure port (core/field)
   computeDiff,
@@ -198,6 +210,8 @@ import {
   dbfSafeName,
   crsToWkt,
   findEllipsoid,
+  assembleNearGather,
+  selectTrace,
   buildSPSShapefiles,
   crsFromSPSProjection,
   SHP_TYPE_POINTZ,
@@ -209,9 +223,13 @@ import {
 
 const DATA = process.env.SEISCONV_DATA || '';
 if (!DATA) { console.warn('SEISCONV_DATA not set - file-backed tests will be skipped (unit-only mode).'); }
-const SEGY = `${DATA}/00000186_SegY_Rev2.segy`;
-const GEODE = `${DATA}/1006.dat`;
-const BATCH_DIR = `${DATA}/Raw Original Data/GP_393_26_SegY`;
+// File-backed fixtures. Bring your own: set SEISCONV_DATA to a folder holding
+// files named as below, or override any one of them individually. Nothing here
+// names a real survey, site or job, and nothing that does may be committed.
+// Each suite skips cleanly, with the missing path stated, when its file is absent.
+const SEGY = process.env.SEISCONV_SEGY || `${DATA}/example.segy`;
+const GEODE = process.env.SEISCONV_GEODE || `${DATA}/example.dat`;
+const BATCH_DIR = process.env.SEISCONV_BATCH_DIR || `${DATA}/batch`;
 
 let passed = 0;
 let failed = 0;
@@ -266,7 +284,7 @@ if (existsSync(SEGY)) {
   const bytes = readBytes(SEGY);
 
   test('detect() identifies SEG-Y', () => {
-    assert.equal(detect(bytes, '00000186_SegY_Rev2.segy'), 'SEG-Y');
+    assert.equal(detect(bytes, 'example.segy'), 'SEG-Y');
   });
 
   const pf = parseSEGY(bytes);
@@ -319,7 +337,7 @@ console.log('\n[SEG-Y building blocks]');
   // Build a minimal big-endian IEEE-float32 (format 5) SEG-Y in memory: 3200-byte
   // textual + 400-byte binary header, then `count` traces of `ns` samples. Returns
   // the buffer + the exact samples written so the decode can be checked bit-for-bit.
-  const buildSegy = (opts: { ns: number; count: number; rev?: number; addHdr?: number; sampleInt?: number }) => {
+  const buildSegy = (opts: { ns: number; count: number; rev?: number; addHdr?: number; sampleInt?: number; impulsePolarity?: number; vibratoryPolarity?: number }) => {
     const { ns, count } = opts;
     const rev = opts.rev ?? 1;
     const addHdr = opts.addHdr ?? 0;
@@ -333,6 +351,8 @@ console.log('\n[SEG-Y building blocks]');
     view.setUint16(3200 + 16, sampleInt, false); // sample interval µs
     view.setUint16(3200 + 20, ns, false); // samples/trace
     view.setUint16(3200 + 24, 5, false); // data sample format = IEEE float32
+    if (opts.impulsePolarity !== undefined) view.setUint16(3200 + 56, opts.impulsePolarity, false); // impulse signal polarity, bytes 3257-3258
+    if (opts.vibratoryPolarity !== undefined) view.setUint16(3200 + 58, opts.vibratoryPolarity, false); // vibratory polarity code, bytes 3259-3260
     view.setUint16(3200 + 300, rev === 2 ? 0x0200 : rev === 1 ? 0x0100 : 0, false); // revision
     view.setInt16(3200 + 304, 0, false); // fixed extended-header count = 0
     view.setUint32(3200 + 306, rev >= 2 ? addHdr : 0, false); // max additional trace headers
@@ -368,6 +388,28 @@ console.log('\n[SEG-Y building blocks]');
     assert.equal(meta.revision, 1, 'rev1 major');
     assert.equal(meta.addHdrBytes, 0, 'no additional trace headers pre-rev2');
     assert.equal(meta.dataStart, 3600, 'first trace right after the 3600-byte header');
+  });
+
+  test('parseSegyMeta decodes valid impulse + vibratory polarity codes', () => {
+    const { buf } = buildSegy({ ns: 4, count: 1, impulsePolarity: 1, vibratoryPolarity: 5 });
+    const meta = parseSegyMeta(buf);
+    assert.equal(meta.bh.impulsePolarity, 1, 'impulse polarity 1 = pressure increase/upward case motion -> negative number');
+    assert.equal(meta.bh.vibratoryPolarity, 5, 'vibratory polarity code 5 (157.5-202.5 deg)');
+  });
+
+  test('parseSegyMeta reports polarity 0 (absent/unset) as unknown, not a fabricated convention', () => {
+    const { buf } = buildSegy({ ns: 4, count: 1 }); // impulsePolarity/vibratoryPolarity left at 0
+    const meta = parseSegyMeta(buf);
+    assert.equal(meta.bh.impulsePolarity, 0, 'unset impulse polarity stays 0 = unknown');
+    assert.equal(meta.bh.vibratoryPolarity, 0, 'unset vibratory polarity stays 0 = unknown');
+  });
+
+  test('parseSegyMeta clamps out-of-range polarity codes to unknown, never throws', () => {
+    const { buf } = buildSegy({ ns: 4, count: 1, impulsePolarity: 0xffff, vibratoryPolarity: 99 });
+    let meta: ReturnType<typeof parseSegyMeta> | undefined;
+    assert.doesNotThrow(() => { meta = parseSegyMeta(buf); }, 'malformed polarity codes must not throw');
+    assert.equal(meta!.bh.impulsePolarity, 0, 'impulse code outside {1,2} -> unknown (0)');
+    assert.equal(meta!.bh.vibratoryPolarity, 0, 'vibratory code outside 1..8 -> unknown (0)');
   });
 
   test('decodeSegyTrace decodes a known trace: samples + stride + header fields', () => {
@@ -438,10 +480,10 @@ if (existsSync(GEODE)) {
   const bytes = readBytes(GEODE);
 
   test('detect() identifies SEG-2 from .dat', () => {
-    assert.equal(detect(bytes, '1006.dat'), 'SEG-2');
+    assert.equal(detect(bytes, 'example.dat'), 'SEG-2');
   });
 
-  const pf = parseAny(bytes, '1006.dat');
+  const pf = parseAny(bytes, 'example.dat');
   console.log(
     `      golden: format=${pf.format} traceCount=${pf.traceCount} ` +
       `samplesTrace=${pf.bh.samplesTrace} sampleInt=${pf.bh.sampleInt}us dataFmt=${pf.bh.dataFmt}`,
@@ -621,7 +663,7 @@ test('registry lists writers and dispatches detect→parser', () => {
   const ids = listWriters().map((w) => w.id);
   assert.ok(ids.includes('segy1') && ids.includes('segy0') && ids.includes('su'), `writers: ${ids.join(',')}`);
   if (existsSync(SEGY)) {
-    const pf = parseWithRegistry(readBytes(SEGY), '00000186_SegY_Rev2.segy');
+    const pf = parseWithRegistry(readBytes(SEGY), 'example.segy');
     assert.equal(pf.format, 'SEG-Y');
     assert.ok(pf.traceCount > 0);
   }
@@ -827,7 +869,7 @@ test('trace-health: tunability - a borderline trace flips flagged↔clear with s
   const mkEv = (over: Record<string, number | boolean> = {}) => ({
     n: 500, std: 0.3, rms: 0.3, peak: 1, rmsGated: 0.3, zcr: 0.1, flatRatio: 0.3, deadRel: 1, deadBaseline: 0.3,
     rmsZ: 0, ampBaseline: 0.3, localN: 8, specScore: 0, domFreqHz: 30, hfFrac: 0.1, oneBinDom: 0.05,
-    clipRunFrac: 0, spikeScore: 1.5, polarityCoef: 0.9, polarityConf: 0.8, polarityRan: true, ...over,
+    clipRunFrac: 0, spikeScore: 1.5, polarityCoef: 0.9, polarityConf: 0.8, polarityRan: true, rmsPre: 0.05, ...over,
   });
   // A trace at z=+5σ AND 3.3× the local median (so the amplitude-ratio guard is met):
   // cleared at LOW amp sensitivity (hotZ=9), flagged at HIGH (hotZ=4).
@@ -847,7 +889,7 @@ test('trace-health: tunability - a borderline trace flips flagged↔clear with s
   assert.doesNotThrow(() => scanTraceHealth([null, undefined, new Float32Array(0), garbage], 2000));
 });
 test('trace-health: evidence round-trips through the flat transport buffer (incl. NaN polarity)', () => {
-  const ev = { n: 480, std: 1.5, rms: 1.6, peak: 4.2, rmsGated: 1.1, zcr: 0.12, flatRatio: 0.36, deadRel: 0.9, deadBaseline: 1.2, rmsZ: 2.3, ampBaseline: 1.4, localN: 7, specScore: 1.1, domFreqHz: 28, hfFrac: 0.2, oneBinDom: 0.08, clipRunFrac: 0.01, spikeScore: 4, polarityCoef: NaN, polarityConf: 0, polarityRan: false };
+  const ev = { n: 480, std: 1.5, rms: 1.6, peak: 4.2, rmsGated: 1.1, zcr: 0.12, flatRatio: 0.36, deadRel: 0.9, deadBaseline: 1.2, rmsZ: 2.3, ampBaseline: 1.4, localN: 7, specScore: 1.1, domFreqHz: 28, hfFrac: 0.2, oneBinDom: 0.08, clipRunFrac: 0.01, spikeScore: 4, polarityCoef: NaN, polarityConf: 0, polarityRan: false, rmsPre: 0.42 };
   const flat = new Float32Array(EVIDENCE_STRIDE * 2);
   writeEvidence(flat, 1, ev);
   const back = readEvidence(flat, 1);
@@ -856,6 +898,27 @@ test('trace-health: evidence round-trips through the flat transport buffer (incl
   assert.equal(back.polarityRan, false);
   assert.ok(Number.isNaN(back.polarityCoef), 'NaN polarity survives the Float32 transport');
   assert.ok(Math.abs(back.rmsZ - 2.3) < 1e-4 && Math.abs(back.peak - 4.2) < 1e-4);
+  assert.ok(Math.abs(back.rmsPre - 0.42) < 1e-4, 'the pre-first-break noise RMS round-trips');
+});
+test('trace-health: the pre-first-break noise RMS is the quiet head, and NaN with no pick', () => {
+  // A quiet head followed by a strong onset: rmsPre must measure the head only,
+  // so it lands well BELOW the whole-trace RMS. 2000 us sampling, 1000 samples.
+  const si = 2000;
+  const n = 1000;
+  const withBreak = new Float32Array(n);
+  for (let i = 0; i < n; i++) {
+    // Deterministic low-level noise before the onset, a loud decaying wavelet after.
+    const quiet = 0.01 * Math.sin(i * 0.7);
+    withBreak[i] = i < 400 ? quiet : quiet + 4 * Math.sin((i - 400) * 0.5) * Math.exp(-(i - 400) / 120);
+  }
+  // A pure flat line has no onset to pick, so there is no honest noise window.
+  const flat = new Float32Array(n);
+  const res = scanTraceHealth([withBreak, flat], si);
+  const a = res.evidence[0];
+  assert.ok(Number.isFinite(a.rmsPre), 'a trace with a clear onset gets a finite noise RMS');
+  assert.ok(a.rmsPre > 0, 'the quiet head is not silent, so its RMS is above zero');
+  assert.ok(a.rmsPre < a.rms, `noise RMS ${a.rmsPre} should be below the whole-trace RMS ${a.rms}`);
+  assert.ok(Number.isNaN(res.evidence[1].rmsPre), 'a flat line has no pick, so its noise RMS is NaN, not a made-up zero');
 });
 test('color maps hit known anchors', () => {
   assert.deepEqual(colorSeismic(0), [255, 255, 255]);
@@ -863,6 +926,244 @@ test('color maps hit known anchors', () => {
   assert.deepEqual(colorSeismic(-1), [0, 0, 255]);
   assert.deepEqual(getColor(0, 'gray'), [128, 128, 128]);
   assert.deepEqual(getColor(5, 'amber'), [255, 140, 0]);
+});
+test('viridis endpoints match matplotlib exactly, and the midpoint is genuinely green/teal', () => {
+  // Endpoints of matplotlib's viridis (_cm_listed.py _viridis_data[0] and [-1]).
+  assert.deepEqual(colorViridis(-1), [68, 1, 84]);
+  assert.deepEqual(colorViridis(1), [253, 231, 37]);
+  // Regression test for the mislabelled two-point-lerp bug: a straight lerp
+  // between the two endpoints above lands near (160, 116, 60), an orange/brown.
+  // Real viridis passes through green/teal at its midpoint instead, where
+  // green is the dominant channel and blue/red are both well below it.
+  const mid = colorViridis(0);
+  assert.ok(mid[1] > mid[0] && mid[1] > mid[2], `midpoint ${mid} should be green-dominant, not the linear-lerp orange`);
+  assert.ok(mid[0] < 100, `midpoint red channel ${mid[0]} should be low, not the ~160 a straight lerp gives`);
+});
+test('every color map returns finite 0-255 integer RGB across in-range and out-of-range v', () => {
+  const maps: Array<(v: number) => RGB> = [
+    colorSeismic,
+    colorGray,
+    colorGrayL,
+    colorGrayPosBlack,
+    colorGrayLPosBlack,
+    colorViridis,
+    colorAmber,
+    colorBerlin,
+    colorVik,
+  ];
+  const values = [-2, -1, -0.7, -0.001, 0, 0.001, 0.5, 0.999, 1, 2, NaN, Infinity, -Infinity];
+  for (const fn of maps) {
+    for (const v of values) {
+      const [r, g, b] = fn(v);
+      for (const c of [r, g, b]) {
+        assert.ok(Number.isFinite(c), `${fn.name}(${v}) produced a non-finite channel: ${c}`);
+        assert.ok(Number.isInteger(c) && c >= 0 && c <= 255, `${fn.name}(${v}) channel out of [0,255]: ${c}`);
+      }
+    }
+  }
+});
+test('viridis interior points match the published 256-entry table', () => {
+  // The LUT has 256 entries, so v = 2k/255 - 1 lands exactly on entry k and
+  // no interpolation happens. Values are matplotlib 3.10.9 _viridis_data
+  // rounded to 8-bit. Tolerance 1 covers only float rounding of the position.
+  const at = (k: number) => colorViridis((2 * k) / 255 - 1);
+  const near = (got: RGB, want: RGB, k: number) => {
+    for (let i = 0; i < 3; i++) {
+      assert.ok(Math.abs(got[i] - want[i]) <= 1, `viridis entry ${k} channel ${i}: got ${got[i]}, want ${want[i]}`);
+    }
+  };
+  near(at(64), [59, 82, 139], 64);
+  near(at(128), [33, 145, 140], 128);
+  near(at(192), [94, 201, 98], 192);
+});
+test('the diverging maps put blue at negative and red at positive', () => {
+  // Both published tables start at the blue end, and t = (v + 1) / 2 maps
+  // index 0 to v = -1. This guards against the table being loaded flipped.
+  for (const [name, fn] of [['berlin', colorBerlin], ['vik', colorVik]] as Array<[string, (v: number) => RGB]>) {
+    const pos = fn(1);
+    const neg = fn(-1);
+    assert.ok(pos[0] > pos[2], `${name}(+1) ${pos} should be red-dominant`);
+    assert.ok(neg[2] > neg[0], `${name}(-1) ${neg} should be blue-dominant`);
+  }
+});
+test('the diverging maps are lightness-symmetric and have a neutral midpoint', () => {
+  // What "symmetric" means for a Crameri diverging map is symmetry in
+  // perceived lightness, not a mirrored RGB triple. Two properties are
+  // checked. (1) CIE L* runs monotonically along each limb, so neither limb
+  // doubles back; the published tables wobble by at most 0.12 L* between
+  // adjacent 8-bit entries, so 0.5 is a generous but still meaningful bound.
+  // (2) L*(v) and L*(-v) agree to within about 11 L*, measured on the
+  // published tables themselves, which is what their designed near-symmetry
+  // actually delivers once quantised to 8-bit.
+  const lstar = (rgb: RGB) => {
+    const lin = rgb.map((c) => {
+      const s = c / 255;
+      return s <= 0.04045 ? s / 12.92 : Math.pow((s + 0.055) / 1.055, 2.4);
+    });
+    const y = 0.2126 * lin[0] + 0.7152 * lin[1] + 0.0722 * lin[2];
+    return y > 0.008856 ? 116 * Math.cbrt(y) - 16 : 903.3 * y;
+  };
+  const spread = (rgb: RGB) => Math.max(...rgb) - Math.min(...rgb);
+  for (const [name, fn] of [['berlin', colorBerlin], ['vik', colorVik]] as Array<[string, (v: number) => RGB]>) {
+    const L: number[] = [];
+    for (let k = 0; k < 256; k++) L.push(lstar(fn((2 * k) / 255 - 1)));
+    // berlin darkens toward the centre, vik lightens: take the direction from
+    // the map itself rather than hard-coding it.
+    const rising = L[127] > L[0];
+    for (let k = 1; k < 128; k++) {
+      const d = L[k] - L[k - 1];
+      assert.ok(rising ? d > -0.5 : d < 0.5, `${name} L* not monotonic on the negative limb at ${k}`);
+    }
+    for (let k = 129; k < 256; k++) {
+      const d = L[k] - L[k - 1];
+      assert.ok(rising ? d < 0.5 : d > -0.5, `${name} L* not monotonic on the positive limb at ${k}`);
+    }
+    for (let k = 0; k < 256; k++) {
+      assert.ok(Math.abs(L[k] - L[255 - k]) < 11, `${name} limbs differ in lightness at ${k}`);
+    }
+    // The midpoint is the neutral pivot: it carries far less colour than
+    // either end. berlin's neutral is a warm near-black, vik's an off-white,
+    // so "neutral" is tested as minimum chroma, not as a fixed RGB value.
+    const mid = spread(fn(0));
+    assert.ok(mid < 20, `${name} midpoint ${fn(0)} should be near-neutral, channel spread ${mid}`);
+    assert.ok(mid * 3 < spread(fn(-1)) && mid * 3 < spread(fn(1)), `${name} midpoint is not the least colourful point`);
+  }
+});
+test('the black-positive greys invert the originals, and grayL is left alone', () => {
+  assert.deepEqual(colorGrayPosBlack(1), [1, 1, 1]);
+  assert.deepEqual(colorGrayPosBlack(-1), [255, 255, 255]);
+  assert.deepEqual(colorGrayLPosBlack(1), [0, 0, 0]);
+  assert.deepEqual(colorGrayLPosBlack(-1), [255, 255, 255]);
+  // Regression guard: the originals must keep positive = white so the two
+  // conventions cannot be swapped by accident.
+  assert.deepEqual(colorGrayL(1), [255, 255, 255]);
+  assert.deepEqual(colorGrayL(-1), [0, 0, 0]);
+  assert.deepEqual(colorGray(1), [255, 255, 255]);
+  assert.deepEqual(colorGrayPosBlack(0), colorGray(0));
+});
+test('getColor dispatches every named map', () => {
+  // Without this a missing dispatch line silently falls through to seismic
+  // and every other test still passes.
+  const names = ['seismic', 'gray', 'grayL', 'grayPosBlack', 'grayLPosBlack', 'amber', 'viridis', 'berlin', 'vik'];
+  const fns: Array<(v: number) => RGB> = [
+    colorSeismic,
+    colorGray,
+    colorGrayL,
+    colorGrayPosBlack,
+    colorGrayLPosBlack,
+    colorAmber,
+    colorViridis,
+    colorBerlin,
+    colorVik,
+  ];
+  for (let i = 0; i < names.length; i++) {
+    assert.deepEqual(getColor(0.42, names[i]), fns[i](0.42), `getColor did not dispatch ${names[i]}`);
+  }
+  assert.deepEqual(getColor(0.42, 'no-such-map'), colorSeismic(0.42));
+  assert.notDeepEqual(getColor(1, 'berlin'), colorSeismic(1));
+  assert.notDeepEqual(getColor(1, 'vik'), colorSeismic(1));
+});
+test('the allocation-free writer path is byte-identical to getColor', () => {
+  // rasterizeToRGBA colours millions of cells per redraw, so it uses the
+  // writer form instead of the tuple-returning getColor. If the two ever
+  // disagree the section quietly renders different pixels, which is exactly
+  // what the golden hashes would then lock in. This is the equivalence proof.
+  const names = ['seismic', 'gray', 'grayL', 'grayPosBlack', 'grayLPosBlack', 'amber', 'viridis', 'berlin', 'vik', 'no-such-map'];
+  const values: number[] = [NaN, Infinity, -Infinity, -0, 0];
+  for (let k = 0; k <= 4000; k++) values.push(-2 + (4 * k) / 4000);
+  for (const name of names) {
+    const write = getColorWriter(name);
+    for (const v of values) {
+      const expect = getColor(v, name);
+      // Write at a NON-ZERO offset into an RGBA-shaped buffer, which is what
+      // the rasteriser actually does; an off-by-one index only shows up here.
+      const sink = new Uint8ClampedArray(8).fill(9);
+      write(v, sink, 4);
+      // `+ 0` normalises -0 to 0: colorAmber can return -0 for v = -0, and a
+      // byte buffer stores that as 0. The stored bytes are what matter.
+      assert.equal(sink[4], expect[0] + 0, `${name} r at v=${v}`);
+      assert.equal(sink[5], expect[1] + 0, `${name} g at v=${v}`);
+      assert.equal(sink[6], expect[2] + 0, `${name} b at v=${v}`);
+      // Neighbours untouched, so a stray write cannot pass unnoticed.
+      assert.equal(sink[3], 9, `${name} wrote before its offset at v=${v}`);
+      assert.equal(sink[7], 9, `${name} wrote past its offset at v=${v}`);
+    }
+  }
+});
+test('rasterizeToRGBA matches a reference getColor loop', () => {
+  // The hot path end to end: same bytes as the readable per-cell formulation,
+  // for both source layouts and with the vertical flip.
+  const w = 5, h = 4;
+  const data = new Float32Array(w * h);
+  for (let i = 0; i < data.length; i++) data[i] = (i % 7) - 3;
+  data[3] = NaN;
+  data[8] = Infinity;
+  const unit = (raw: number, _x: number, _y: number) => Math.max(-1, Math.min(1, raw / 3));
+  for (const map of ['seismic', 'viridis', 'berlin', 'vik', 'grayLPosBlack']) {
+    for (const layout of ['rowMajor', 'xMajor'] as const) {
+      for (const flipY of [false, true]) {
+        const got = rasterizeToRGBA(data, w, h, unit, map, undefined, flipY, layout);
+        const want = new Uint8ClampedArray(w * h * 4);
+        for (let y = 0; y < h; y++) {
+          for (let x = 0; x < w; x++) {
+            const src = layout === 'rowMajor' ? y * w + x : x * h + y;
+            const [r, g, b] = getColor(unit(data[src], x, y), map);
+            const idx = ((flipY ? h - 1 - y : y) * w + x) * 4;
+            want[idx] = r; want[idx + 1] = g; want[idx + 2] = b; want[idx + 3] = 255;
+          }
+        }
+        assert.deepEqual(Array.from(got), Array.from(want), `${map}/${layout}/flip=${flipY}`);
+      }
+    }
+  }
+});
+test('CVD simulation returns valid RGB and leaves greys essentially unchanged', () => {
+  const types = ['protanopia', 'deuteranopia', 'tritanopia'];
+  const samples: RGB[] = [[255, 0, 0], [0, 255, 0], [0, 0, 255], [253, 231, 37], [68, 1, 84], [0, 0, 0], [255, 255, 255]];
+  for (const t of types) {
+    for (const s of samples) {
+      const out = simulateCvd(s, t);
+      for (const c of out) {
+        assert.ok(Number.isInteger(c) && c >= 0 && c <= 255, `simulateCvd(${s}, ${t}) channel out of range: ${c}`);
+      }
+    }
+    // Each Machado matrix has rows summing to 1, so a grey has no chromatic
+    // content to lose and must come back as (near enough) itself. Tolerance 1
+    // covers the sRGB gamma decode/encode round trip only.
+    for (let g = 0; g <= 255; g += 17) {
+      const out = simulateCvd([g, g, g], t);
+      for (const c of out) {
+        assert.ok(Math.abs(c - g) <= 1, `simulateCvd grey ${g} under ${t} drifted to ${out}`);
+      }
+    }
+  }
+  // Non-finite channels and an unknown deficiency name must still yield a
+  // drawable colour, because a NaN must never reach a canvas.
+  assert.deepEqual(simulateCvd([255, 128, 0], 'not-a-type'), [255, 128, 0]);
+  for (const c of simulateCvd([NaN, Infinity, -Infinity], 'protanopia')) {
+    assert.ok(Number.isInteger(c) && c >= 0 && c <= 255);
+  }
+});
+test('normAcrossTraces picks the across-trace percentile and never returns 0/NaN', () => {
+  // 1..10: p100 = max, p1 = min, p50 lands mid-range.
+  const ten = Array.from({ length: 10 }, (_, i) => i + 1);
+  assert.equal(normAcrossTraces(ten, 100), 10);
+  assert.equal(normAcrossTraces(ten, 1), 1);
+  assert.ok(normAcrossTraces(ten, 50) > 1 && normAcrossTraces(ten, 50) < 10);
+  // The default is the 95th percentile across traces.
+  assert.equal(normAcrossTraces(ten), normAcrossTraces(ten, 95));
+  // Out-of-range / non-finite percentiles clamp instead of producing NaN.
+  assert.equal(normAcrossTraces(ten, 0), 1);
+  assert.equal(normAcrossTraces(ten, 1e9), 10);
+  assert.equal(normAcrossTraces(ten, NaN), normAcrossTraces(ten, 95));
+  // Degenerate inputs fall back to 1 so a caller can always divide safely.
+  assert.equal(normAcrossTraces([]), 1);
+  assert.equal(normAcrossTraces([0, 0, 0]), 1);
+  assert.equal(normAcrossTraces([NaN, Infinity, -1]), 1);
+  // Dead traces (0, the worker's marker) are ignored, not counted as the scale.
+  assert.equal(normAcrossTraces([0, 0, 4, 4], 100), 4);
+  // Works on the Float32Array the worker actually sends.
+  assert.equal(normAcrossTraces(Float32Array.from([2, 8]), 100), 8);
 });
 test('maxAbs / percentile / decimate behave', () => {
   const s = Float32Array.from([-3, 1, 2, -1]);
@@ -5961,3 +6262,992 @@ xlsxExportRegression().then(() => fieldHardeningTests()).then(() => {
   console.log(`passed: ${passed}   failed: ${failed}   skipped: ${skipped}\n`);
   process.exitCode = failed > 0 ? 1 : 0;
 });
+
+// ---------------------------------------------------------------------------
+// core/render maths (Phase 1.1 extraction from renderer/src/app.ts)
+//
+// These modules are NOT yet wired into any call site. The whole value of this
+// step is proving that each helper returns EXACTLY what the inline arithmetic in
+// app.ts returns, so a later step can switch a site and expect byte-identical
+// pixels. Each test therefore re-types the ORIGINAL expression as a local
+// oracle and compares strictly. If an oracle and a helper ever disagree, the
+// helper is wrong - the tree is the specification here, bugs included.
+// ---------------------------------------------------------------------------
+import {
+  SEC_MARGINS, TRC_MARGINS, WB_MARGINS, WB_MAIN_MARGINS, withStrip, SPEC_AVG_MARGINS, SPEC_HEAT_MARGINS, VEL_MARGINS,
+  SEC_STRIP_H, plotRect, plotWidth, plotHeight,
+} from '../render/frame';
+import {
+  valueToFrac, fracToValue, fracToPixel, pixelToFrac, fracToPixelUp, pixelToFracUp,
+  spectrumX, spectrumY, spanOrOne, sampleDenominator, pixelToFracClamped, pixelToFracOrNull,
+} from '../render/mapper';
+import { niceStep as niceStepCore, firstTick, tickValues, axisTicks, divisionFractions } from '../render/ticks';
+import {
+  anchorZoom, anchorZoomY, anchorZoomYFromHigh, clampToExtent, minSpanFor,
+  clampWindow, boxToWindow, boxDragToIndices,
+} from '../render/zoom';
+import { rasterizeToRGBA, sectionUnit, magnitudeUnit, logMagnitudeUnit } from '../render/raster';
+import {
+  isFiniteNum, finiteOr, validRange, plotUsable, clampFinite, clampUnit, clamp01,
+} from '../render/guards';
+
+function renderMathTests(): void {
+  console.log('\n== core/render maths (extraction parity) ==');
+
+  // -- frame.ts ------------------------------------------------------------
+  test('frame: margin sets match the literals in app.ts', () => {
+    // app.ts:2989-2990, :2994, :5646/:5850/:6111, :2692, :12181, :11867.
+    assert.equal(SEC_STRIP_H, 24);
+    assert.deepEqual(SEC_MARGINS, { ML: 58, MR: 12, MT: 10 + 24, MB: 24 });
+    // The Trace Inspector carries a display-state strip inside its canvas, so
+    // its top margin allows for it (the Workbench preview / difference cards do
+    // not, which is why WB_MARGINS stays bare and WB_MAIN_MARGINS is derived).
+    assert.deepEqual(TRC_MARGINS, { ML: 60, MR: 14, MT: 14 + SEC_STRIP_H, MB: 26 });
+    assert.deepEqual(WB_MARGINS, { ML: 60, MR: 14, MT: 14, MB: 26 });
+    assert.deepEqual(WB_MAIN_MARGINS, { ML: 60, MR: 14, MT: 14 + SEC_STRIP_H, MB: 26 });
+    assert.deepEqual(withStrip(VEL_MARGINS), { ML: 56, MR: 92, MT: 12 + SEC_STRIP_H, MB: 28 });
+    assert.deepEqual(SPEC_AVG_MARGINS, { ML: 56, MR: 16, MT: 18, MB: 28 });
+    assert.deepEqual(SPEC_HEAT_MARGINS, { ML: 56, MR: 92, MT: 14, MB: 30 });
+    assert.deepEqual(VEL_MARGINS, { ML: 56, MR: 92, MT: 12, MB: 28 });
+  });
+
+  test('frame: the Spectrum draw and hit-test sites still agree', () => {
+    // app.ts:2692 (drawSpectrum) and :12726 (specPlotFrac) retype the same four
+    // numbers independently. They DO agree today; this test is the thing that
+    // will keep them agreeing once both switch to SPEC_AVG_MARGINS.
+    const draw = { ML: 56, MR: 16, MT: 18, MB: 28 };   // :2692
+    const hit = { ML: 56, MR: 16, MT: 18, MB: 28 };    // :12726
+    assert.deepEqual(draw, hit);
+    assert.deepEqual(SPEC_AVG_MARGINS, draw);
+  });
+
+  test('frame: plotRect equals the inline pw/ph pair, degenerate sizes included', () => {
+    for (const [W, H] of [[900, 500], [1240, 860], [0, 0], [10, 10], [70, 58]] as const) {
+      const m = SEC_MARGINS;
+      const pw = W - m.ML - m.MR, ph = H - m.MT - m.MB; // app.ts:2991 form
+      const r = plotRect(W, H, m);
+      assert.equal(r.x, m.ML);
+      assert.equal(r.y, m.MT);
+      assert.equal(r.w, pw);
+      assert.equal(r.h, ph);
+      assert.equal(plotWidth(W, m), pw);
+      assert.equal(plotHeight(H, m), ph);
+    }
+    // Deliberately unguarded: a canvas smaller than its margins yields a
+    // negative rect, exactly as the inline code does, and the caller decides.
+    assert.ok(plotRect(0, 0, TRC_MARGINS).w < 0);
+    assert.ok(Number.isNaN(plotRect(NaN, 100, TRC_MARGINS).w));
+  });
+
+  // -- mapper.ts -----------------------------------------------------------
+  test('mapper: frac/value and frac/pixel round-trip, both directions', () => {
+    for (const f of [0, 0.25, 0.5, 1]) {
+      const v = fracToValue(f, 100, 300);
+      assert.equal(v, 100 + f * (300 - 100));       // app.ts:4498 form
+      assert.equal(valueToFrac(v, 100, 300), f);
+      const px = fracToPixel(f, 58, 400);
+      assert.equal(px, 58 + f * 400);
+      assert.equal(pixelToFrac(px, 58, 400), f);
+      const pxUp = fracToPixelUp(f, 34, 400);
+      assert.equal(pxUp, 34 + 400 - f * 400);
+      assert.equal(pixelToFracUp(pxUp, 34, 400), f);
+    }
+    // Equal min and max: the span is zero, so the fraction is +/-Infinity or
+    // NaN. Nothing is "fixed" here - guards.ts is where a site handles it.
+    assert.ok(Number.isNaN(valueToFrac(5, 5, 5)));
+    assert.equal(valueToFrac(6, 5, 5), Infinity);
+  });
+
+  test('mapper: spanOrOne reproduces the hi-minus-lo-or-1 falsy test', () => {
+    // app.ts:2707. Zero becomes 1; a NEGATIVE span is left alone (a > 0 guard
+    // would not be the same function). NaN is falsy, so it also becomes 1.
+    assert.equal(spanOrOne(0, 100), 100);
+    assert.equal(spanOrOne(5, 5), 1);
+    assert.equal(spanOrOne(100, 0), -100);
+    assert.equal(spanOrOne(0, NaN), 1);
+  });
+
+  test('mapper: spectrumX matches drawSpectrum Xf exactly', () => {
+    const ML = 56, pw = 900 - 56 - 16;
+    for (const [fLo, fHi] of [[0, 250], [30, 80], [0, 0]] as const) {
+      const fSpan = fHi - fLo || 1;                                   // app.ts:2707
+      const Xf = (f: number) => ML + ((f - fLo) / fSpan) * pw;         // app.ts:2717
+      for (const f of [fLo, (fLo + fHi) / 2, fHi, -10, 1e6, NaN]) {
+        assert.ok(Object.is(spectrumX(f, fLo, fSpan, ML, pw), Xf(f)), 'f=' + f);
+      }
+    }
+  });
+
+  test('mapper: spectrumY matches drawSpectrum Yf, clamp and NaN behaviour', () => {
+    const MT = 18, ph = 500 - 18 - 28;
+    const cases: Array<[number, number]> = [[-60, 0], [0, 1], [0, 0]];
+    for (const [vmin, vmax] of cases) {
+      const Yf = (v: number) => {                                     // app.ts:2718
+        const y = MT + ph - ((v - vmin) / (vmax - vmin)) * ph;
+        return y < MT ? MT : y > MT + ph ? MT + ph : y;
+      };
+      for (const v of [vmin, vmax, (vmin + vmax) / 2, -1e9, 1e9, NaN]) {
+        assert.ok(Object.is(spectrumY(v, vmin, vmax, MT, ph), Yf(v)), 'v=' + v);
+      }
+    }
+    // The ternary chain (not Math.max/min) means a NaN survives the clamp.
+    assert.ok(Number.isNaN(spectrumY(NaN, 0, 1, 18, 454)));
+  });
+
+  test('mapper: sampleDenominator guards the single-sample 0/0', () => {
+    assert.equal(sampleDenominator(1), 1);   // app.ts:3494 - would be NaN inline
+    assert.equal(sampleDenominator(0), 1);
+    assert.equal(sampleDenominator(2), 1);
+    assert.equal(sampleDenominator(1000), 999);
+  });
+
+  test('mapper: the two hit-test variants keep their different out-of-range rules', () => {
+    const origin = 58, size = 400;
+    for (const px of [origin - 50, origin, origin + 200, origin + size, origin + size + 50]) {
+      const raw = (px - origin) / size;
+      assert.equal(pixelToFracClamped(px, origin, size), Math.max(0, Math.min(1, raw))); // :4492
+      assert.equal(pixelToFracOrNull(px, origin, size), (raw < 0 || raw > 1) ? null : raw); // :12735
+    }
+    // Zero-width plot: the clamped form yields a clamped +/-Infinity, the
+    // nullable form yields null. Both match their call sites.
+    assert.equal(pixelToFracClamped(100, 58, 0), 1);
+    assert.equal(pixelToFracOrNull(100, 58, 0), null);
+  });
+
+  // -- ticks.ts ------------------------------------------------------------
+  test('ticks: niceStep is byte-identical to app.ts:6919', () => {
+    const inlineNiceStep = (range: number, target: number): number => {
+      const raw = range / Math.max(1, target);
+      if (!isFinite(raw) || raw <= 0) return 1;
+      const mag = Math.pow(10, Math.floor(Math.log10(raw)));
+      const n = raw / mag;
+      return (n < 1.5 ? 1 : n < 3 ? 2 : n < 7 ? 5 : 10) * mag;
+    };
+    const ranges = [0, 1, 3, 7, 12, 100, 137, 250, 1000, 1e6, 1e-6, 0.037, -50, NaN, Infinity];
+    const targets = [1, 4, 5, 6, 8, 10, 0, -3, NaN];
+    for (const r of ranges) for (const t of targets) {
+      assert.ok(Object.is(niceStepCore(r, t), inlineNiceStep(r, t)), 'niceStep(' + r + ',' + t + ')');
+    }
+  });
+
+  test('ticks: firstTick / tickValues reproduce both loop shapes in the tree', () => {
+    // Shape A (app.ts:2721-2722, :12609-12610): v <= hi + 1e-6.
+    // Shape B (app.ts:6966, :6973): v <= hi, NO epsilon. They are NOT the same
+    // loop, so the epsilon is a parameter rather than a unification.
+    const lo = 0, hi = 250, step = niceStepCore(hi - lo, 8);
+    assert.equal(firstTick(lo, step), Math.ceil(lo / step) * step);
+    const a: number[] = [];
+    for (let v = Math.ceil(lo / step) * step; v <= hi + 1e-6; v += step) a.push(v);
+    assert.deepEqual(tickValues(lo, hi, step, 1e-6), a);
+    const b: number[] = [];
+    for (let v = Math.ceil(lo / step) * step; v <= hi; v += step) b.push(v);
+    assert.deepEqual(tickValues(lo, hi, step, 0), b);
+    // A case where the epsilon actually changes the tick count.
+    assert.equal(tickValues(0, 0.3, 0.1, 1e-6).length, 4);
+    assert.equal(tickValues(0, 0.3, 0.1, 0).length, 3); // 0.1+0.1+0.1 > 0.3 in FP
+    // Degenerate inputs never spin.
+    assert.deepEqual(tickValues(0, 100, 0), []);
+    assert.deepEqual(tickValues(NaN, 100, 5), []);
+    assert.deepEqual(tickValues(0, Infinity, 1, 0, 10), []); // a non-finite bound is refused outright
+    assert.equal(tickValues(0, 1e9, 1, 0, 10).length, 10); // maxTicks caps a runaway axis
+    assert.deepEqual(axisTicks(0, 250, 8, 1e-6), a);
+  });
+
+  test('ticks: divisionFractions matches the g/n gridline loops', () => {
+    for (const n of [4, 5, 6]) {                       // app.ts:2729, :3564, :11960
+      const want: number[] = [];
+      for (let g = 0; g <= n; g++) want.push(g / n);
+      assert.deepEqual(divisionFractions(n), want);
+    }
+    assert.deepEqual(divisionFractions(0), []);
+    assert.deepEqual(divisionFractions(-1), []);
+  });
+
+  // -- zoom.ts -------------------------------------------------------------
+  test('zoom: anchorZoom matches secZoomAt / traceZoomAt / wbZoomAt exactly', () => {
+    for (const [lo, hi] of [[0, 1000], [120, 121], [5, 5]] as const) {
+      for (const f of [0, 0.25, 0.5, 1]) {
+        for (const factor of [0.5, 1, 2]) {
+          const at = lo + f * (hi - lo);              // app.ts:4498 / :5354 / :5520
+          const w = (hi - lo) * factor;
+          const want = { lo: at - f * w, hi: at + (1 - f) * w };
+          assert.deepEqual(anchorZoom(lo, hi, f, factor), want);
+          if (factor === 1) {
+            // A zoom of 1 must be the identity on the window edges.
+            assert.ok(Math.abs(anchorZoom(lo, hi, f, 1).lo - lo) < 1e-9);
+          }
+        }
+      }
+    }
+  });
+
+  test('zoom: anchorZoomY matches heatZoomAt, both yUp senses', () => {
+    for (const yUp of [false, true]) {
+      for (const fy of [0, 0.3, 1]) {
+        const y0 = 10, y1 = 250, factor = 0.5;
+        const fyTop = yUp ? (1 - fy) : fy;            // app.ts:12349
+        const ay = y0 + fyTop * (y1 - y0), wy = (y1 - y0) * factor;
+        assert.deepEqual(anchorZoomY(y0, y1, fy, factor, yUp), { lo: ay - fyTop * wy, hi: ay + (1 - fyTop) * wy });
+      }
+    }
+  });
+
+  test('zoom: specAvg Y anchoring is a SEPARATE expression from heatZoomAt', () => {
+    // Real finding, preserved not unified. specAvgZoomAt (app.ts:12296) anchors
+    // off the HIGH edge; heatZoomAt with yUp (:12349) anchors off the LOW edge
+    // with a flipped fraction. Algebraically identical, not bit-identical.
+    const y0 = 0.1, y1 = 0.7, fy = 0.3, factor = 0.5;
+    const ay = y1 - fy * (y1 - y0), wy = (y1 - y0) * factor;   // :12296-12297
+    const want = { lo: ay - (1 - fy) * wy, hi: ay + fy * wy };
+    assert.deepEqual(anchorZoomYFromHigh(y0, y1, fy, factor), want);
+    const other = anchorZoomY(y0, y1, fy, factor, true);
+    assert.ok(Math.abs(other.lo - want.lo) < 1e-12, 'the two forms agree to within FP noise');
+  });
+
+  test('zoom: clampToExtent + minSpanFor match the in-extent clamp', () => {
+    const eLo = 0, eHi = 250;
+    // Floors differ between sites: specAvgZoomAt X uses 1e-6 (:12299), heat and
+    // specAvg Y use 1e-9 (:12300, :12352). Both are reproduced.
+    assert.equal(minSpanFor(eLo, eHi, 1e-6), Math.max(1e-6, (eHi - eLo) * 1e-3));
+    assert.equal(minSpanFor(0, 0, 1e-9), 1e-9);
+    for (const [lo, hi] of [[-50, 500], [10, 20], [120, 120], [300, 400]] as const) {
+      const minW = minSpanFor(eLo, eHi, 1e-9);
+      let a = Math.max(eLo, lo), b = Math.min(eHi, hi);        // app.ts:12352-12353
+      if (b - a < minW) { b = Math.min(eHi, a + minW); a = b - minW; }
+      assert.deepEqual(clampToExtent(lo, hi, eLo, eHi, minW), { lo: a, hi: b });
+    }
+  });
+
+  test('zoom: clampWindow matches traceClamp / wbClamp verbatim', () => {
+    const inlineClamp = (s0: number, s1: number, fS: number, minS: number) => {
+      if (s1 - s0 < minS) s1 = s0 + minS;                      // app.ts:5333-5337
+      if (s1 - s0 > fS) { s0 = 0; s1 = fS; }
+      if (s0 < 0) { s1 -= s0; s0 = 0; }
+      if (s1 > fS) { s0 -= s1 - fS; s1 = fS; }
+      return { lo: Math.max(0, Math.round(s0)), hi: Math.min(fS, Math.round(s1)) };
+    };
+    const wins: Array<[number, number]> = [[0, 1000], [-20, 40], [900, 1200], [10, 10], [500.5, 501.5], [0, 3]];
+    for (const fS of [1000, 4, 1, 0]) {
+      const minS = Math.min(fS, 4);                            // app.ts:5331
+      for (const [s0, s1] of wins) {
+        assert.deepEqual(clampWindow(s0, s1, fS, minS), inlineClamp(s0, s1, fS, minS), 'fS=' + fS);
+      }
+    }
+    // secClamp's trace axis uses a floor of 2, not 4 (app.ts:3203).
+    assert.deepEqual(clampWindow(0, 0, 100, Math.min(100, 2)), { lo: 0, hi: 2 });
+    // A single-sample file must not be inflated past its own length.
+    assert.deepEqual(clampWindow(0, 0, 1, Math.min(1, 4)), { lo: 0, hi: 1 });
+  });
+
+  test('zoom: boxToWindow matches heatAxisWindow, degenerate extents included', () => {
+    const inlineHeatAxisWindow = (mLo: number | null, mHi: number | null, dLo: number, dHi: number) => {
+      const span = dHi - dLo;                                  // app.ts:12537-12547
+      if (!(span > 0)) return { lo: dLo, hi: dLo + 1 };
+      let lo = (typeof mLo === 'number' && Number.isFinite(mLo)) ? mLo : dLo;
+      let hi = (typeof mHi === 'number' && Number.isFinite(mHi)) ? mHi : dHi;
+      if (!(hi > lo)) { lo = dLo; hi = dHi; }
+      const minW = span * 1e-3;
+      lo = Math.max(dLo, Math.min(lo, dHi - minW));
+      hi = Math.min(dHi, Math.max(hi, lo + minW));
+      return { lo, hi };
+    };
+    const boxes: Array<[number | null, number | null]> = [
+      [null, null], [10, 80], [80, 10], [null, 80], [10, null], [NaN, 80], [10, NaN], [-100, 1e9], [40, 40],
+    ];
+    const extents: Array<[number, number]> = [[0, 250], [-0.5, 0.5], [0, 0], [5, 5], [10, 0]];
+    for (const [dLo, dHi] of extents) for (const [mLo, mHi] of boxes) {
+      assert.deepEqual(boxToWindow(mLo, mHi, dLo, dHi), inlineHeatAxisWindow(mLo, mHi, dLo, dHi));
+    }
+  });
+
+  test('zoom: boxDragToIndices matches the sweep-box rounding', () => {
+    // app.ts:4959-4960 (finishSecBoxDrag) and :4999 (finishTraceBoxDrag) share
+    // this half; their differing clamps stay at the call site.
+    for (const [f0, f1] of [[0, 1], [0.25, 0.75], [0.5, 0.5]] as const) {
+      const v0 = 100, v1 = 900;
+      assert.deepEqual(boxDragToIndices(f0, f1, v0, v1), {
+        lo: Math.round(v0 + f0 * (v1 - v0)), hi: Math.round(v0 + f1 * (v1 - v0)),
+      });
+    }
+  });
+
+  // -- raster.ts -----------------------------------------------------------
+  test('raster: x-major layout matches paintSection app.ts:3468-3479', () => {
+    const numTraces = 5, colLen = 7;
+    const data = new Float32Array(numTraces * colLen);
+    for (let i = 0; i < data.length; i++) data[i] = Math.sin(i) * 3;
+    const gf = [0.5, 1, 2, 1.5, 0.25];
+    const cInv = 1.25;
+    const cmap = 'seismic';
+    // The inline loop, retyped.
+    const want = new Uint8ClampedArray(numTraces * colLen * 4);
+    for (let t = 0; t < numTraces; t++) {
+      const base = t * colLen;
+      const g = gf[t];
+      for (let s = 0; s < colLen; s++) {
+        const v = Math.max(-1, Math.min(1, data[base + s] * g * cInv));
+        const [r, gg, b] = getColor(v, cmap);
+        const idx = (s * numTraces + t) * 4;
+        want[idx] = r; want[idx + 1] = gg; want[idx + 2] = b; want[idx + 3] = 255;
+      }
+    }
+    const got = rasterizeToRGBA(data, numTraces, colLen, sectionUnit((x) => gf[x], cInv), cmap, undefined, false, 'xMajor');
+    assert.deepEqual(Array.from(got), Array.from(want));
+  });
+
+  test('raster: x-major also matches drawVelocity app.ts:11912-11920', () => {
+    const nV = 6, nT = 4;
+    const semb = new Float32Array(nV * nT);
+    for (let i = 0; i < semb.length; i++) semb[i] = (i % 11) / 10;
+    const want = new Uint8ClampedArray(nV * nT * 4);
+    for (let vi = 0; vi < nV; vi++) {
+      for (let ti = 0; ti < nT; ti++) {
+        const [r, g, b] = getColor(Math.max(0, Math.min(1, semb[vi * nT + ti])) * 2 - 1, 'viridis');
+        const idx = (ti * nV + vi) * 4;
+        want[idx] = r; want[idx + 1] = g; want[idx + 2] = b; want[idx + 3] = 255;
+      }
+    }
+    const got = rasterizeToRGBA(semb, nV, nT, magnitudeUnit(1), 'viridis', undefined, false, 'xMajor');
+    assert.deepEqual(Array.from(got), Array.from(want));
+  });
+
+  test('raster: row-major matches drawSpecGram app.ts:12421-12428', () => {
+    const nBins = 5, nFrames = 3;
+    const mag = new Float32Array(nBins * nFrames);
+    for (let i = 0; i < mag.length; i++) mag[i] = i * 0.7;
+    const maxMag = 9;
+    const inv = maxMag > 0 ? 1 / maxMag : 1;
+    const want = new Uint8ClampedArray(nBins * nFrames * 4);
+    for (let f = 0; f < nFrames; f++) {
+      const base = f * nBins;
+      for (let k = 0; k < nBins; k++) {
+        const [r, g, b] = getColor(Math.max(0, Math.min(1, mag[base + k] * inv)) * 2 - 1, 'viridis');
+        const idx = (f * nBins + k) * 4;
+        want[idx] = r; want[idx + 1] = g; want[idx + 2] = b; want[idx + 3] = 255;
+      }
+    }
+    const got = rasterizeToRGBA(mag, nBins, nFrames, magnitudeUnit(inv), 'viridis', undefined, false, 'rowMajor');
+    assert.deepEqual(Array.from(got), Array.from(want));
+  });
+
+  test('raster: F-K row flip matches drawSpecFk app.ts:12480-12490', () => {
+    const nKx = 4, nF = 5;
+    const mag = new Float32Array(nKx * nF);
+    for (let i = 0; i < mag.length; i++) mag[i] = i * i;
+    const maxMag = 200;
+    const logMax = Math.log1p(maxMag > 0 ? maxMag : 1);
+    const want = new Uint8ClampedArray(nKx * nF * 4);
+    for (let f = 0; f < nF; f++) {
+      const base = f * nKx;
+      for (let c = 0; c < nKx; c++) {
+        const v = logMax > 0 ? Math.log1p(mag[base + c]) / logMax : 0;
+        const [r, g, b] = getColor(Math.max(0, Math.min(1, v)) * 2 - 1, 'viridis');
+        const idx = ((nF - 1 - f) * nKx + c) * 4;
+        want[idx] = r; want[idx + 1] = g; want[idx + 2] = b; want[idx + 3] = 255;
+      }
+    }
+    const got = rasterizeToRGBA(mag, nKx, nF, logMagnitudeUnit(logMax), 'viridis', undefined, true, 'rowMajor');
+    assert.deepEqual(Array.from(got), Array.from(want));
+    // The flip must not be a no-op on this data, or the test proves nothing.
+    const unflipped = rasterizeToRGBA(mag, nKx, nF, logMagnitudeUnit(logMax), 'viridis', undefined, false, 'rowMajor');
+    assert.notDeepEqual(Array.from(unflipped), Array.from(got));
+  });
+
+  test('raster: layout is not interchangeable on a non-square grid', () => {
+    // Getting the layout flag backwards transposes the panel while still
+    // "working", which is exactly the mistake this parameter exists to catch.
+    const w = 3, h = 5;
+    const d = new Float32Array(w * h);
+    for (let i = 0; i < d.length; i++) d[i] = i / (d.length - 1);
+    const a = rasterizeToRGBA(d, w, h, magnitudeUnit(1), 'viridis', undefined, false, 'xMajor');
+    const b = rasterizeToRGBA(d, w, h, magnitudeUnit(1), 'viridis', undefined, false, 'rowMajor');
+    assert.notDeepEqual(Array.from(a), Array.from(b));
+  });
+
+  test('raster: degenerate grids, an out buffer, and non-finite values', () => {
+    assert.equal(rasterizeToRGBA(new Float32Array(0), 0, 0, magnitudeUnit(1), 'viridis').length, 0);
+    assert.equal(rasterizeToRGBA(new Float32Array(0), 5, 0, magnitudeUnit(1), 'viridis').length, 0);
+    assert.equal(rasterizeToRGBA(new Float32Array(0), -3, 4, magnitudeUnit(1), 'viridis').length, 0);
+    // Single cell.
+    const one = rasterizeToRGBA(new Float32Array([1]), 1, 1, magnitudeUnit(1), 'viridis');
+    assert.equal(one.length, 4);
+    assert.deepEqual(Array.from(one).slice(0, 3), getColor(1, 'viridis'));
+    assert.equal(one[3], 255);
+    // Writing into a caller-supplied buffer (the ImageData.data path) returns
+    // that same buffer and leaves any tail bytes alone.
+    const out = new Uint8ClampedArray(4 * 2 + 3);
+    out[8] = 77;
+    const got = rasterizeToRGBA(new Float32Array([0, 1]), 2, 1, magnitudeUnit(1), 'viridis', out);
+    assert.ok(got === out);
+    assert.equal(out[8], 77);
+    assert.throws(() => rasterizeToRGBA(new Float32Array([0]), 1, 1, magnitudeUnit(1), 'viridis', new Uint8ClampedArray(3)));
+    // A non-finite sample is handed to the colour map untouched; the map's own
+    // finite check decides. Never a throw, never a NaN byte.
+    const bad = rasterizeToRGBA(new Float32Array([NaN, Infinity]), 2, 1, magnitudeUnit(1), 'viridis');
+    for (const byte of bad) assert.ok(Number.isFinite(byte));
+    assert.equal(bad[3], 255);
+  });
+
+  // -- guards.ts -----------------------------------------------------------
+  test('guards: finite / range / clamp helpers match their inline forms', () => {
+    const probes: unknown[] = [0, -1, 1e9, NaN, Infinity, -Infinity, null, undefined, '3', {}];
+    for (const v of probes) {
+      assert.equal(isFiniteNum(v), typeof v === 'number' && Number.isFinite(v));
+    }
+    assert.equal(finiteOr(5, 9), 5);
+    assert.equal(finiteOr(NaN, 9), 9);
+    assert.equal(finiteOr('5', 9), 9);
+    assert.equal(finiteOr(0, 9), 0);        // 0 is finite; no falsy trap
+    // validRange uses hi > lo, so a NaN edge is rejected (app.ts:2706 sense).
+    assert.equal(validRange(0, 1), true);
+    assert.equal(validRange(1, 1), false);
+    assert.equal(validRange(1, 0), false);
+    assert.equal(validRange(NaN, 1), false);
+    assert.equal(validRange(0, NaN), false);
+    assert.equal(plotUsable(800, 400), true);
+    assert.equal(plotUsable(0, 400), false);
+    assert.equal(plotUsable(3, 400, 4), false);   // app.ts:5648 threshold
+    assert.equal(plotUsable(NaN, 400), false);
+    // clampFinite is the Number.isFinite(v) ? v : 0 plus clamp pair at :11934.
+    for (const v of [-1, 0, 0.5, 1, 2, NaN]) {
+      assert.equal(clampFinite(v, 0, 1), Math.max(0, Math.min(1, Number.isFinite(v) ? v : 0)));
+    }
+    // clampUnit / clamp01 pass NaN THROUGH, matching :3471 and :11914.
+    assert.equal(clampUnit(-5), -1);
+    assert.equal(clampUnit(5), 1);
+    assert.equal(clampUnit(0.25), 0.25);
+    assert.ok(Number.isNaN(clampUnit(NaN)));
+    assert.equal(clamp01(-5), 0);
+    assert.equal(clamp01(5), 1);
+    assert.ok(Number.isNaN(clamp01(NaN)));
+  });
+}
+
+renderMathTests();
+
+// ---------------------------------------------------------------------------
+// core/dsp/gain.ts - Seismic Unix `sugain` display gain family.
+// ---------------------------------------------------------------------------
+import { applyGain, gainNone, gainFixed, gainTpow, gainEpow, gainGpow, gainPbal, signedPow, traceRms, timeFactors } from '../dsp/gain';
+import { normFactorPercentile as nfPct } from '../render/model';
+
+function gainTests(): void {
+  console.log('\n== core/dsp/gain (sugain semantics) ==');
+  const F = (a: number[]) => new Float32Array(a);
+  const near = (a: ArrayLike<number>, b: number[], eps = 1e-5) => {
+    assert.equal(a.length, b.length);
+    for (let i = 0; i < b.length; i++) assert.ok(Math.abs(a[i] - b[i]) <= eps, `[${i}] ${a[i]} != ${b[i]}`);
+  };
+
+  test('gain: none/raw is the identity', () => {
+    near(gainNone(F([0, 1, -2.5, 1e6])), [0, 1, -2.5, 1e6]);
+    // Defaults alone must not touch anything, even at t = 0 (SU only runs
+    // do_tpow when tpow != 0, so the t=0 zeroing rule must not fire here).
+    near(applyGain(F([3, 4, 5]), 0.002, 0, {}), [3, 4, 5]);
+  });
+
+  test('gain: fixed is a constant multiplier and keeps trace-to-trace ratios', () => {
+    near(gainFixed(F([1, -2, 0]), 3), [3, -6, 0]);
+    const strong = gainFixed(F([10]), 2.5)[0], weak = gainFixed(F([1]), 2.5)[0];
+    assert.equal(strong / weak, 10);   // a bad channel still reads as bad
+  });
+
+  test('gain: tpow multiplies by t^tpow using REAL time, not sample index', () => {
+    // dt = 0.5 s, t0 = 0.5 s -> t = 0.5, 1.0, 1.5, 2.0; tpow = 2.
+    near(gainTpow(F([1, 1, 1, 1]), 0.5, 0.5, 2), [0.25, 1, 2.25, 4]);
+    // Same samples, HALF the sample interval -> different times, different gain.
+    near(gainTpow(F([1, 1]), 0.25, 0.25, 2), [0.0625, 0.25]);
+  });
+
+  test('gain: tpow at t = 0 gives 0, matching SU tpowfac[0] = (tmin==0) ? 0', () => {
+    near(gainTpow(F([5, 5, 5]), 1, 0, 2), [0, 5, 20]);
+    // Negative tpow at t = 0 would be pow(0,-k) = Inf in C; SU's guard and ours
+    // both yield 0. Never Infinity.
+    const g = gainTpow(F([5, 5]), 1, 0, -2);
+    assert.equal(g[0], 0);
+    assert.equal(g[1], 5);
+    // Negative time (negative delay recording) is our documented extension.
+    assert.equal(gainTpow(F([5]), 1, -1, 0.5)[0], 0);
+  });
+
+  test('gain: epow at t = 0 leaves the sample unchanged (exp(0) = 1)', () => {
+    near(gainEpow(F([2, 2, 2]), 1, 0, 1), [2, 2 * Math.E, 2 * Math.E * Math.E]);
+    // etpow bends the exponent: exp(3 * t^2) at t = 2 -> exp(12).
+    near(gainEpow(F([1]), 1, 2, 3, 2), [Math.exp(12)], 1e-2);
+  });
+
+  test('gain: single-sample and empty traces are safe', () => {
+    assert.equal(gainTpow(F([7]), 0.004, 0, 2).length, 1);
+    assert.equal(gainTpow(F([7]), 0.004, 0, 2)[0], 0);       // t0 = 0
+    near(gainTpow(F([7]), 0.004, 2, 1), [14]);
+    assert.equal(applyGain(F([]), 0.004, 0, { tpow: 2 }).length, 0);
+    assert.equal(timeFactors(0, 0.004, 0, 2, 0, 1), null);
+  });
+
+  test('gain: gpow preserves sign for positive, negative and zero samples', () => {
+    near(gainGpow(F([4, -4, 0, 9, -9]), 0.5), [2, -2, 0, 3, -3]);
+    near(gainGpow(F([3, -3, 0]), 2), [9, -9, 0]);
+    near(gainGpow(F([8, -8]), 1 / 3), [2, -2]);
+    for (const x of [1e-9, -1e-9, 5, -5, 1e6, -1e6]) {
+      assert.equal(Math.sign(signedPow(x, 0.25)), Math.sign(x));
+      assert.equal(Math.sign(signedPow(x, 3)), Math.sign(x));
+    }
+    assert.equal(signedPow(0, 0.5), 0);
+    // gpow <= 0 or non-finite falls back to identity, never Inf at x = 0.
+    assert.equal(signedPow(0, -1), 0);
+    assert.equal(signedPow(7, 0), 7);
+    assert.equal(signedPow(7, NaN), 7);
+  });
+
+  test('gain: non-finite input samples never produce NaN output', () => {
+    const bad = F([NaN, Infinity, -Infinity, 1]);
+    for (const g of [gainNone(bad), gainFixed(bad, 3), gainGpow(bad, 0.5), gainTpow(bad, 1, 1, 2), gainPbal(bad)]) {
+      for (const v of g) assert.ok(Number.isFinite(v), `non-finite ${v}`);
+    }
+    assert.equal(traceRms(F([NaN, Infinity, 3, 3])), Math.sqrt(18 / 4));
+  });
+
+  test('gain: extreme exponents saturate instead of reaching Infinity', () => {
+    const e = gainEpow(F([1, -1]), 1, 1, 1000);
+    for (const v of e) assert.ok(Number.isFinite(v));
+    assert.ok(e[0] > 0 && e[1] < 0);                 // sign survives saturation
+    const t = gainTpow(F([1e30, -1e30]), 1, 1e30, 4);
+    for (const v of t) assert.ok(Number.isFinite(v));
+    assert.ok(t[0] > 0 && t[1] < 0);
+    for (const v of gainFixed(F([1e38, -1e38]), 1e10)) assert.ok(Number.isFinite(v));
+    for (const v of gainGpow(F([1e30]), 40)) assert.ok(Number.isFinite(v));
+  });
+
+  test('gain: composition follows SU order tpow -> epow -> gpow -> pbal -> scale', () => {
+    // dt = 0 so every sample sits at t = t0 = 4 s. tpow=2 -> x*16, then gpow=0.5.
+    // SU order gives sqrt(16) = 4; the wrong order (gpow first) would give 16.
+    near(applyGain(F([1]), 0, 4, { tpow: 2, gpow: 0.5 }), [4]);
+    assert.notEqual(applyGain(F([1]), 0, 4, { tpow: 2, gpow: 0.5 })[0], 16);
+    // gpow BEFORE pbal: [1,4] -> [1,2] -> /rms(1,2)=sqrt(2.5).
+    const r = Math.sqrt((1 + 4) / 2);
+    near(applyGain(F([1, 4]), 0, 0, { gpow: 0.5, pbal: true }), [1 / r, 2 / r]);
+    // pbal BEFORE gpow would be sqrt([1,4]/rms(1,4)) - a different picture.
+    const rWrong = Math.sqrt((1 + 16) / 2);
+    assert.ok(Math.abs(1 / r - Math.sqrt(1 / rWrong)) > 1e-3);
+    // scale is LAST, so it multiplies the pbal result rather than being balanced away.
+    near(applyGain(F([1, 4]), 0, 0, { gpow: 0.5, pbal: true, scale: 10 }), [10 / r, 20 / r]);
+  });
+
+  test('gain: pbal divides by the trace RMS and is NOT the percentile basis', () => {
+    const x = F([3, 4]);                       // rms = sqrt(25/2) = 3.5355339
+    const rms = Math.sqrt(12.5);
+    assert.ok(Math.abs(traceRms(x) - rms) < 1e-9);
+    near(gainPbal(x), [3 / rms, 4 / rms]);
+    assert.equal(traceRms(F([0, 0, 0])), 0);
+    near(gainPbal(F([0, 0])), [0, 0]);         // SU's `if (rmsq)` guard: untouched
+    // pbal is RMS, the existing "Per trace" section basis is the 95th percentile
+    // of |x| (core/render/model.ts:20). They disagree, hence no reuse.
+    const y = F([1, 1, 1, 1, 100]);
+    assert.ok(Math.abs(traceRms(y) - nfPct(y, 0.95)) > 1);
+  });
+
+  test('gain: reuses the caller buffer and the per-record factor table', () => {
+    const buf = new Float32Array(3);
+    const got = applyGain(F([1, 1, 1]), 1, 1, { tpow: 2 }, buf);
+    assert.equal(got, buf);                    // same object: no per-trace alloc
+    near(got, [1, 4, 9]);
+    const a = timeFactors(4, 0.002, 0, 2, 0, 1);
+    assert.equal(timeFactors(4, 0.002, 0, 2, 0, 1), a);   // memoised across traces
+    assert.notEqual(timeFactors(4, 0.004, 0, 2, 0, 1), a);
+  });
+
+  test('gain: a bad sample interval degrades to no time dependence, not NaN', () => {
+    near(applyGain(F([2, 2]), NaN, 1, { tpow: 2 }), [2, 2]);       // t = t0 = 1
+    for (const v of applyGain(F([2, 2]), -1, NaN, { tpow: 2, epow: 1 })) assert.ok(Number.isFinite(v));
+  });
+}
+
+gainTests();
+
+// -- Near-trace (common-offset) gather across records -------------------------
+//
+// The field instrument's "Gather Window": one chosen channel from every shot
+// record, side by side. These tests use hand-built records so selection and time
+// alignment are checked without any file on disk.
+function nearGatherTests(): void {
+  console.log('\nNear-trace gather');
+  const mkTrace = (ch: number, off: number, vals: number[]) =>
+    ({ hdr: { trcField: ch, offset: off }, samples: new Float32Array(vals), nSamples: vals.length });
+  const mkRec = (name: string, si: number, n = 3) => ({
+    name, sampleInt: si, ffid: 100,
+    traces: [mkTrace(1, -100, [1, 0, 0, 0]), mkTrace(2, 200, [n, n, n, n]), mkTrace(3, 400, [0, 0, 1, 0])],
+  });
+
+  test('nearGather: assembles one column per record, channel selected by header', () => {
+    const g = assembleNearGather([mkRec('a', 1000, 3), mkRec('b', 1000, 6), mkRec('c', 1000, 9)], { mode: 'channel', channel: 2 });
+    assert.equal(g.numTraces, 3);
+    assert.equal(g.colLen, 4);
+    assert.equal(g.sampleInt, 1000);
+    assert.equal(g.mixedSampleInt, false);
+    // Row-major: row c, sample 1 carries each record's marker amplitude.
+    assert.equal(g.data[0 * g.colLen + 1], 3);
+    assert.equal(g.data[1 * g.colLen + 1], 6);
+    assert.equal(g.data[2 * g.colLen + 1], 9);
+    assert.ok(g.records.every((r) => r.ok && r.traceIndex === 1 && r.channel === 2));
+    assert.equal(g.norm, 9);
+  });
+
+  test('nearGather: nearest SIGNED offset picks the right side of a split spread', () => {
+    const g = assembleNearGather([mkRec('a', 1000)], { mode: 'offset', offset: -90 });
+    assert.equal(g.records[0].traceIndex, 0);
+    assert.equal(g.records[0].offset, -100);
+    // +90 must NOT reach the -100 trace (that is the |offset| bug).
+    const h = assembleNearGather([mkRec('a', 1000)], { mode: 'offset', offset: 190 });
+    assert.equal(h.records[0].traceIndex, 1);
+    assert.equal(h.records[0].offset, 200);
+  });
+
+  test('nearGather: a record missing the requested channel is reported, not faked', () => {
+    const g = assembleNearGather([mkRec('a', 1000), mkRec('b', 1000)], { mode: 'channel', channel: 42 });
+    assert.equal(g.numTraces, 0);
+    assert.equal(g.records[0].ok, false);
+    assert.equal(g.records[0].reason, 'channelNotFound');
+    assert.equal(g.skipped.length, 2);
+    assert.equal(g.norm, 1);           // never 0: nothing divides by it
+  });
+
+  test('nearGather: an all-zero / absent header reads as ABSENT, not channel 0', () => {
+    const blank = { name: 'z', sampleInt: 1000, traces: [{ hdr: { trcField: 0, offset: 0 }, samples: new Float32Array([1, 2]) }] };
+    assert.equal(selectTrace(blank, { mode: 'channel', channel: 0 }), 'noChannelHeader');
+    assert.equal(selectTrace(blank, { mode: 'offset', offset: 0 }), 'noOffsetHeader');
+    const noHdr = { name: 'z', sampleInt: 1000, traces: [{ samples: new Float32Array([1, 2]) }] };
+    assert.equal(selectTrace(noHdr, { mode: 'channel', channel: 1 }), 'noChannelHeader');
+    // index mode still works with no headers at all - it is the explicit escape hatch.
+    const pick = selectTrace(noHdr, { mode: 'index', index: 0 });
+    assert.equal(typeof pick === 'string' ? pick : pick.traceIndex, 0);
+  });
+
+  test('nearGather: a different sample interval is aligned BY TIME and flagged', () => {
+    // Record b is sampled twice as fast: 4 samples of 500 µs = 2 ms, which on the
+    // 1000 µs reference grid must become 2 samples, not stay 4.
+    const g = assembleNearGather([mkRec('a', 1000), mkRec('b', 500)], { mode: 'channel', channel: 2 });
+    assert.equal(g.numTraces, 2);
+    assert.equal(g.sampleInt, 1000);
+    assert.equal(g.mixedSampleInt, true);
+    assert.deepEqual(g.sampleInts, [500, 1000]);
+    assert.equal(g.records[1].resampled, true);
+    assert.equal(g.records[1].nSamples, 2);
+    assert.equal(g.records[0].resampled, false);
+    assert.equal(g.colLen, 4);          // padded to the longest column
+  });
+
+  test('nearGather: malformed / unparseable records are skipped, never thrown', () => {
+    const g = assembleNearGather(
+      [{ name: 'bad', sampleInt: 0, error: 'garbage' }, { name: 'empty', sampleInt: 1000, traces: [] },
+       { name: 'nosi', sampleInt: 0, traces: [mkTrace(2, 0, [1, 2])] },
+       { name: 'nosamp', sampleInt: 1000, traces: [{ hdr: { trcField: 2 } }] }, mkRec('good', 1000)],
+      { mode: 'channel', channel: 2 },
+    );
+    assert.equal(g.numTraces, 1);
+    assert.deepEqual(g.records.map((r) => r.reason ?? 'ok'), ['parseError', 'noTraces', 'noSampleInt', 'noSamples', 'ok']);
+    assert.equal(g.records[4].column, 0);
+  });
+
+  test('nearGather: the record cap truncates honestly', () => {
+    const many = Array.from({ length: 8 }, (_, i) => mkRec('r' + i, 1000));
+    const g = assembleNearGather(many, { mode: 'channel', channel: 2 }, { maxRecords: 3 });
+    assert.equal(g.numTraces, 3);
+    assert.equal(g.truncated, true);
+    assert.equal(g.droppedByCap, 5);
+    assert.equal(g.records.length, 8);      // every offered record is reported
+    assert.equal(g.records[7].column, -1);
+    assert.equal(g.records[7].reason, 'beyondCap');   // never read, so NOT 'parseError'
+    // The hard ceiling cannot be raised by the caller.
+    assert.equal(assembleNearGather([mkRec('a', 1000)], { mode: 'channel', channel: 2 }, { maxRecords: 1e9 }).numTraces, 1);
+  });
+
+  test('nearGather: header-only shells assemble (the worker keeps ONE trace of samples)', () => {
+    // The worker drops every non-picked trace's samples to bound the working set,
+    // keeping the HEADERS so the selection lands on the same index here.
+    const slim = {
+      name: 's', sampleInt: 1000,
+      traces: [{ hdr: { trcField: 1, offset: 0 } }, { hdr: { trcField: 2, offset: 0 }, samples: new Float32Array([4, 4]) }],
+    };
+    const g = assembleNearGather([slim], { mode: 'channel', channel: 2 });
+    assert.equal(g.numTraces, 1);
+    assert.equal(g.records[0].traceIndex, 1);
+    assert.equal(g.data[0], 4);
+    // A shell WITHOUT the picked trace's samples is an honest skip, not a throw.
+    const empty = { name: 'e', sampleInt: 1000, traces: [{ hdr: { trcField: 2 } }] };
+    assert.equal(assembleNearGather([empty], { mode: 'channel', channel: 2 }).records[0].reason, 'noSamples');
+  });
+
+  test('nearGather: a duplicate channel number is flagged, first match used', () => {
+    const dup = { name: 'd', sampleInt: 1000, traces: [mkTrace(7, 0, [1, 1]), mkTrace(7, 0, [2, 2])] };
+    const g = assembleNearGather([dup], { mode: 'channel', channel: 7 });
+    assert.equal(g.records[0].traceIndex, 0);
+    assert.equal(g.records[0].ambiguous, true);
+  });
+
+  test('nearGather: a column longer than the sample cap is decimated, no NaN reaches it', () => {
+    const long = { name: 'L', sampleInt: 1000, traces: [{ hdr: { trcField: 1 }, samples: new Float32Array(5000).fill(2) }] };
+    const g = assembleNearGather([long], { mode: 'channel', channel: 1 }, { maxSamples: 100 });
+    assert.equal(g.colLen, 100);
+    for (const v of g.data) assert.ok(Number.isFinite(v));
+    assert.ok(g.norms[0] > 0);
+    // A flat/dead column falls back to 1 (normFactorPercentile's documented
+    // guard) so nothing ever divides by zero and no NaN reaches a canvas.
+    const dead = { name: 'D', sampleInt: 1000, traces: [{ hdr: { trcField: 1 }, samples: new Float32Array(4) }] };
+    const dg = assembleNearGather([dead], { mode: 'channel', channel: 1 });
+    assert.equal(dg.norms[0], 1);
+    assert.ok(dg.norm > 0);
+  });
+}
+
+nearGatherTests();
+
+// ---------------------------------------------------------------------------
+// core/dsp/reduce.ts   - reduced time (Seismic Unix `sureduce` semantics)
+// core/render/tracex.ts - trace X from a header value (`suxwigb key=`)
+// ---------------------------------------------------------------------------
+import { reduceTrace, reducedTimeShiftSeconds, canReduce, METRES_PER_KM } from '../dsp/reduce';
+import { buildTraceAxis, traceX, traceFrac, nearestTraceAtX, xToValue, traceGaps } from '../render/tracex';
+
+const nearArr = (a: ArrayLike<number>, b: number[], eps = 1e-5): void => {
+  assert.equal(a.length, b.length);
+  for (let i = 0; i < b.length; i++) assert.ok(Math.abs(a[i] - b[i]) <= eps, `[${i}] ${a[i]} != ${b[i]}`);
+};
+
+function reduceTests(): void {
+  console.log('\n== core/dsp/reduce (sureduce semantics) ==');
+  const F = (a: number[]) => new Float32Array(a);
+
+  test('reduce: shift = |offset| / (rv * 1000) seconds, rv in SU km/s', () => {
+    assert.equal(METRES_PER_KM, 1000);
+    // 1000 m at 2 km/s = 2000 m/s -> 0.5 s. Hand computed.
+    assert.equal(reducedTimeShiftSeconds(1000, 2), 0.5);
+    // SU uses fabs(offset): a negative offset flattens the same way.
+    assert.equal(reducedTimeShiftSeconds(-1000, 2), 0.5);
+    // signedOffset opt-in gives the hand-computed NEGATIVE shift.
+    assert.equal(reducedTimeShiftSeconds(-1000, 2, true), -0.5);
+    // A zero offset is a real, legitimate zero shift, not a failure.
+    assert.equal(reducedTimeShiftSeconds(0, 8), 0);
+    // rv is km/s: 8000 m at 8 km/s is 1 s, not 1000 s.
+    assert.equal(reducedTimeShiftSeconds(8000, 8), 1);
+  });
+
+  test('reduce: a positive shift moves data EARLIER, zero-filled at the tail', () => {
+    // dt = 0.5 s, offset 1000 m, rv 2 km/s -> 0.5 s = exactly one sample.
+    const r = reduceTrace(F([1, 2, 3, 4]), 1000, 0.5, { reducingVelocityKmPerSec: 2 });
+    assert.ok(r.ok);
+    if (!r.ok) return;
+    assert.equal(r.shiftSeconds, 0.5);
+    nearArr(r.samples, [2, 3, 4, 0]);
+  });
+
+  test('reduce: a negative (signed) shift moves data LATER, zero-filled at the head', () => {
+    const r = reduceTrace(F([1, 2, 3, 4]), -1000, 0.5,
+      { reducingVelocityKmPerSec: 2, signedOffset: true });
+    assert.ok(r.ok);
+    if (!r.ok) return;
+    assert.equal(r.shiftSeconds, -0.5);
+    nearArr(r.samples, [0, 1, 2, 3]);
+  });
+
+  test('reduce: a zero offset shifts by zero and leaves the samples alone', () => {
+    const r = reduceTrace(F([1, 2, 3]), 0, 0.002, { reducingVelocityKmPerSec: 8 });
+    assert.ok(r.ok);
+    if (!r.ok) return;
+    assert.equal(r.shiftSeconds, 0);
+    nearArr(r.samples, [1, 2, 3]);
+  });
+
+  test('reduce: a fractional shift interpolates in TIME, not by sample number', () => {
+    // dt = 1 s, 500 m at 2 km/s -> 0.25 s = a quarter of a sample.
+    const r = reduceTrace(F([0, 4, 8, 12]), 500, 1, { reducingVelocityKmPerSec: 2 });
+    assert.ok(r.ok);
+    if (!r.ok) return;
+    assert.equal(r.shiftSeconds, 0.25);
+    nearArr(r.samples, [1, 5, 9, 9]);   // last: 0.75*12 + 0.25*0 past the end
+    // Halving dt must double the sample shift: the maths is time based.
+    const half = reduceTrace(F([0, 4, 8, 12]), 500, 0.5, { reducingVelocityKmPerSec: 2 });
+    assert.ok(half.ok);
+    if (half.ok) nearArr(half.samples, [2, 6, 10, 6]);
+  });
+
+  test('reduce: "could not shift" is a different SHAPE from "shifted by zero"', () => {
+    const bad = reduceTrace(F([1, 2]), null, 0.002, { reducingVelocityKmPerSec: 8 });
+    assert.equal(bad.ok, false);
+    if (!bad.ok) assert.equal(bad.reason, 'no-offset');
+    assert.ok(!('samples' in bad));            // no buffer exists to misread
+    assert.equal(reducedTimeShiftSeconds(undefined, 8), null);
+    assert.equal(reducedTimeShiftSeconds(NaN, 8), null);
+    assert.equal(reducedTimeShiftSeconds(100, 0), null);
+  });
+
+  test('reduce: every degenerate input names its reason, none produce NaN', () => {
+    const p = { reducingVelocityKmPerSec: 8 };
+    const cases: Array<[{ ok: boolean; reason?: string }, string]> = [
+      [reduceTrace(null, 100, 0.002, p), 'bad-trace'],
+      [reduceTrace(F([]), 100, 0.002, p), 'bad-trace'],
+      [reduceTrace(F([1]), 100, 0.002, { reducingVelocityKmPerSec: 0 }), 'bad-velocity'],
+      [reduceTrace(F([1]), 100, 0.002, { reducingVelocityKmPerSec: -8 }), 'bad-velocity'],
+      [reduceTrace(F([1]), 100, 0.002, { reducingVelocityKmPerSec: NaN }), 'bad-velocity'],
+      [reduceTrace(F([1]), 100, 0, p), 'bad-timing'],
+      [reduceTrace(F([1]), 100, NaN, p), 'bad-timing'],
+      [reduceTrace(F([1]), Infinity, 0.002, p), 'no-offset'],
+    ];
+    for (const [r, why] of cases) {
+      assert.equal(r.ok, false);
+      assert.equal(r.reason, why);
+    }
+    // A tiny velocity gives a huge but finite shift: all output stays finite.
+    const big = reduceTrace(F([1, 2, 3]), 1e6, 0.002, { reducingVelocityKmPerSec: 1e-9 });
+    assert.ok(big.ok);
+    if (big.ok) for (const v of big.samples) assert.ok(Number.isFinite(v));
+  });
+
+  test('reduce: canReduce reports the feature unavailable with no offset header', () => {
+    assert.equal(canReduce([0, 0, 0]), false);          // header never populated
+    assert.equal(canReduce([null, undefined, NaN]), false);
+    assert.equal(canReduce([]), false);
+    assert.equal(canReduce([0, 0, 25]), true);
+  });
+
+  test('reduce: reuses the caller scratch buffer, no per-trace allocation', () => {
+    const buf = new Float32Array(8);
+    const r = reduceTrace(F([1, 2, 3, 4]), 1000, 0.5, { reducingVelocityKmPerSec: 2 }, buf);
+    assert.ok(r.ok);
+    if (!r.ok) return;
+    assert.equal(r.samples.buffer, buf.buffer);         // same memory
+    assert.equal(r.samples.length, 4);                  // bounded to the trace
+  });
+}
+
+function traceAxisTests(): void {
+  console.log('\n== core/render/tracex (suxwigb key= positioning) ==');
+  const ML = 60, PW = 400;
+
+  test('tracex: positions follow the header value, so a spread gap stays a gap', () => {
+    // 100 m station spacing with the 300 m station dropped.
+    const ax = buildTraceAxis([0, 100, 200, 400], 4);
+    assert.equal(ax.kind, 'header');
+    assert.equal(ax.lo, 0); assert.equal(ax.hi, 400);
+    nearArr(ax.fracs, [0, 0.25, 0.5, 1]);
+    // The gap draws twice as wide as the normal trace spacing.
+    assert.equal(traceX(ax, 3, ML, PW) - traceX(ax, 2, ML, PW), 200);
+    assert.equal(traceX(ax, 1, ML, PW) - traceX(ax, 0, ML, PW), 100);
+  });
+
+  test('tracex: unsorted header values place and hit-test correctly', () => {
+    const ax = buildTraceAxis([400, 0, 200, 100], 4);
+    nearArr(ax.fracs, [1, 0, 0.5, 0.25]);
+    for (let i = 0; i < 4; i++) {
+      assert.equal(nearestTraceAtX(ax, traceX(ax, i, ML, PW), ML, PW), i);
+    }
+  });
+
+  test('tracex: round trip draw -> hit-test -> draw lands on the SAME pixel', () => {
+    for (const vals of [[0, 100, 200, 400], [400, 0, 200, 100], [-300, -100, 0, 50, 900]]) {
+      const ax = buildTraceAxis(vals, vals.length);
+      for (let i = 0; i < vals.length; i++) {
+        const x = traceX(ax, i, ML, PW);
+        const hit = nearestTraceAtX(ax, x, ML, PW);
+        assert.ok(hit >= 0);
+        assert.equal(traceX(ax, hit, ML, PW), x);   // draw and hit-test agree
+        assert.equal(hit, i);                        // distinct values: exact
+      }
+    }
+  });
+
+  test('tracex: duplicate values resolve to the lowest trace index, deterministically', () => {
+    const ax = buildTraceAxis([0, 100, 100, 300], 4);
+    assert.equal(ax.fracs[1], ax.fracs[2]);
+    const x = traceX(ax, 2, ML, PW);
+    assert.equal(nearestTraceAtX(ax, x, ML, PW), 1);
+    // The position identity still holds, which is what stops the drift.
+    assert.equal(traceX(ax, nearestTraceAtX(ax, x, ML, PW), ML, PW), x);
+  });
+
+  test('tracex: a single trace is centred and hit-tests back to itself', () => {
+    const ax = buildTraceAxis([1234], 1);
+    assert.equal(ax.kind, 'header');
+    assert.equal(traceFrac(ax, 0), 0.5);
+    assert.equal(nearestTraceAtX(ax, traceX(ax, 0, ML, PW), ML, PW), 0);
+    assert.equal(nearestTraceAtX(ax, ML, ML, PW), 0);       // any pixel hits it
+  });
+
+  test('tracex: all-equal, all-zero and absent headers fall back with a reason', () => {
+    const eq = buildTraceAxis([50, 50, 50], 3);
+    assert.equal(eq.kind, 'index'); assert.equal(eq.reason, 'zero-range');
+    nearArr(eq.fracs, [0, 0.5, 1]);                         // still spread out
+    assert.equal(buildTraceAxis([0, 0, 0], 3).reason, 'all-zero');
+    assert.equal(buildTraceAxis(null, 3).reason, 'no-header');
+    assert.equal(buildTraceAxis([1, 2], 3).reason, 'no-header');   // short array
+    assert.equal(buildTraceAxis([], 0).reason, 'empty');
+    assert.equal(nearestTraceAtX(buildTraceAxis([], 0), 100, ML, PW), -1);
+  });
+
+  test('tracex: non-finite header values poison the axis rather than mis-place', () => {
+    for (const vals of [[0, NaN, 200], [0, Infinity, 200], [0, null, 200], [0, undefined, 200]]) {
+      const ax = buildTraceAxis(vals as Array<number | null | undefined>, 3);
+      assert.equal(ax.kind, 'index');
+      assert.equal(ax.reason, 'non-finite');
+      for (const f of ax.fracs) assert.ok(Number.isFinite(f));
+    }
+  });
+
+  test('tracex: no NaN reaches a pixel for any degenerate geometry', () => {
+    const ax = buildTraceAxis([0, 100, 200], 3);
+    for (const [o, w] of [[NaN, PW], [ML, NaN], [ML, 0], [ML, -50]] as Array<[number, number]>) {
+      assert.equal(nearestTraceAtX(ax, 100, o, w), -1);
+    }
+    assert.ok(Number.isFinite(xToValue(ax, 100, ML, 0)));   // zero width -> lo
+    assert.ok(Number.isFinite(traceFrac(ax, -1)));
+    assert.ok(Number.isFinite(traceFrac(ax, 99)));
+    assert.ok(Number.isFinite(traceX(ax, 99, ML, PW)));
+    assert.equal(nearestTraceAtX(ax, NaN, ML, PW), -1);
+    for (const f of buildTraceAxis([0, 0, 0], 3).fracs) assert.ok(Number.isFinite(f));
+  });
+
+  test('tracex: local gaps follow the NEAREST neighbour, not the average', () => {
+    // Three clustered, then one far away: the cluster must get the small gap and
+    // the outlier the large one, where an average would give all four the same.
+    const ax = buildTraceAxis([0, 10, 20, 500], 4);
+    const g = traceGaps(ax);
+    nearArr([g[0], g[1], g[2], g[3]], [10 / 500, 10 / 500, 10 / 500, 480 / 500]);
+    for (const v of g) assert.ok(Number.isFinite(v) && v > 0);
+  });
+
+  test('tracex: evenly spaced traces all get the same gap', () => {
+    const g = traceGaps(buildTraceAxis([100, 200, 300, 400, 500], 5));
+    for (const v of g) nearArr([v], [0.25]);
+  });
+
+  test('tracex: duplicate offsets take the spacing to the next DISTINCT trace', () => {
+    // Traces 1 and 2 sit at the same offset. Their gap must not collapse to 0.
+    const g = traceGaps(buildTraceAxis([0, 100, 100, 300], 4));
+    nearArr([g[1], g[2]], [100 / 300, 100 / 300]);
+    assert.equal(g[1], g[2]);
+    for (const v of g) assert.ok(v > 0);
+  });
+
+  test('tracex: gaps stay finite and positive for every degenerate axis', () => {
+    assert.equal(traceGaps(buildTraceAxis(null, 0)).length, 0);
+    nearArr([traceGaps(buildTraceAxis([42], 1))[0]], [1]);   // one trace owns the plot
+    for (const ax of [buildTraceAxis(null, 6), buildTraceAxis([0, 0, 0], 3), buildTraceAxis([5, 5, 5], 3)]) {
+      for (const v of traceGaps(ax)) assert.ok(Number.isFinite(v) && v > 0);
+    }
+  });
+
+  test('tracex: an explicit window (X zoom) rescales and still round-trips', () => {
+    const ax = buildTraceAxis([0, 100, 200, 400], 4, { lo: 100, hi: 300 });
+    assert.equal(ax.lo, 100); assert.equal(ax.hi, 300);
+    assert.equal(traceFrac(ax, 1), 0);
+    assert.equal(traceFrac(ax, 2), 0.5);
+    assert.equal(traceFrac(ax, 3), 1.5);                    // off-plot, finite
+    for (let i = 0; i < 4; i++) {
+      const x = traceX(ax, i, ML, PW);
+      assert.equal(traceX(ax, nearestTraceAtX(ax, x, ML, PW), ML, PW), x);
+    }
+    nearArr([xToValue(ax, ML + PW / 2, ML, PW)], [200]);     // cursor reads units
+  });
+}
+
+reduceTests();
+traceAxisTests();

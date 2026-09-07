@@ -18,6 +18,7 @@
 import { readFileSync, existsSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { parseAny, detect, parseSPSText, parseSegP1, parsePositioning, parseBinGrid, MAX_SAMPLE_TRACES } from '../core/index';
+import { resolveValue, resolveList } from '../qa/local-paths.mjs';
 
 const argv = process.argv.slice(2);
 const arg = (n: string, d: string) => { const i = argv.indexOf(n); return i >= 0 && argv[i + 1] ? argv[i + 1] : d; };
@@ -31,12 +32,16 @@ function rnd(): number {
 }
 const ri = (n: number) => Math.floor(rnd() * n);
 
-// Local corpus root (developer machine). Override with SEISCONV_FUZZ_DATA, and
-// add extra sub-directories to scan with SEISCONV_FUZZ_DIRS (';'-separated,
-// relative to the root). Every directory is optional - missing ones are skipped.
-const DATA = process.env.SEISCONV_FUZZ_DATA || 'D:/Projects/SeisconvApp';
-const EXTRA_DIRS = (process.env.SEISCONV_FUZZ_DIRS || '').split(';').map((s) => s.trim()).filter(Boolean);
+// Local corpus root: env SEISCONV_FUZZ_DATA > the "fuzzData" key in the
+// git-ignored qa/local-paths.json > no default. The root itself is scanned,
+// and SEISCONV_FUZZ_DIRS (';'-separated, relative to the root; also settable
+// via the "fuzzDirs" local-paths.json key) adds sub-directories. Every
+// directory is optional - missing ones are skipped, and with none found the
+// script says so and exits 2 rather than reporting a false pass.
+const DATA = resolveValue('fuzzData', 'SEISCONV_FUZZ_DATA');
+const EXTRA_DIRS = resolveList('fuzzDirs', 'SEISCONV_FUZZ_DIRS');
 function pick(dir: string, ext: string, max = 3): string[] {
+  if (!DATA) return []; // no corpus configured - do not scan the repo itself
   const p = join(DATA, dir);
   if (!existsSync(p)) return [];
   try {
@@ -46,8 +51,8 @@ function pick(dir: string, ext: string, max = 3): string[] {
 
 const seeds: { name: string; bytes: Uint8Array }[] = [];
 for (const f of [
-  ...pick('Data_Games', '.segd', 2),
-  ...pick('Data_Games', '.segy', 1),
+  ...pick('.', '.segd', 2),
+  ...pick('.', '.segy', 1),
   ...EXTRA_DIRS.flatMap((d) => [...pick(d, '.sgy', 1), ...pick(d, '.segd', 1)]),
 ]) {
   try {
@@ -57,7 +62,10 @@ for (const f of [
     seeds.push({ name: f.split(/[\\/]/).pop() || f, bytes: b });
   } catch { /* unreadable file - skip */ }
 }
-if (!seeds.length) { console.error('No seed files found; cannot fuzz.'); process.exit(2); }
+if (!seeds.length) {
+  console.error('No seed files found; cannot fuzz. Set SEISCONV_FUZZ_DATA to a folder of SEG-D / SEG-Y files (and SEISCONV_FUZZ_DIRS for sub-directories), or add a "fuzzData" (and optional "fuzzDirs") key to the git-ignored qa/local-paths.json.');
+  process.exit(2);
+}
 
 /** Synthetic hostile headers: the values a parser is most likely to trust. */
 function hostile(): { name: string; bytes: Uint8Array }[] {

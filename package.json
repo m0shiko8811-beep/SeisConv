@@ -1,6 +1,6 @@
 {
   "name": "seisconv",
-  "version": "0.7.12",
+  "version": "0.8.0",
   "description": "SeisConv - desktop seismic data converter & toolkit for SEG-Y, SEG-D, SEG-2, SU and SPS survey geometry",
   "author": {
     "name": "Moshe Fridin",
@@ -33,6 +33,7 @@
     "qc:positioning": "tsx scripts/positioning-qc.ts",
     "qa": "node qa/drive.mjs",
     "verify": "node qa/verify.mjs",
+    "qa:render-golden": "node qa/render-golden.mjs",
     "typecheck": "tsc --noEmit",
     "dist": "npm run build && electron-builder",
     "gen:epsg": "tsx scripts/gen-epsg.ts",
@@ -65,6 +66,9 @@
     "appId": "com.smartseismic.seisconv",
     "productName": "SeisConv",
     "icon": "build/icon.ico",
+    "electronLanguages": [
+      "en-US"
+    ],
     "files": [
       "dist/**",
       "!dist/win-unpacked/**",

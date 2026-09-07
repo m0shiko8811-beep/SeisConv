@@ -11,7 +11,7 @@ import { parentPort } from 'node:worker_threads';
 import { closeSync, openSync, readFileSync, readSync, statSync } from 'node:fs';
 import { basename } from 'node:path';
 import { findEpsgByParams } from '../core/sps/epsgdb';
-import { applyAGC, assistFirstBreaks, averageSpectrum, buildPositioningExport, buildPositioningPrj, buildSPSRasters, buildSPSShapefiles, buildRenumberMaps, buildSPS, checkGeometry, compareSPS, computeSemblance, CREATE_DEFAULTS, crsFromSpec, decodeSegyTrace, detect, detectPositioningFormat, detectSPSType, EPSG_DB, fkSpectrum, generateProjHeaders, generatePreplotSPS, generateSPS, getWriter, groupByLine, hRecCode, isIX1SegdTape, loadGeometry, lonLatToProj, MAX_SAMPLE_TRACES, MAX_SAMPLES_PER_TRACE, MAX_TRACES, mergeSPSData, nextPow2, normFactorPercentile, parseAny, parsePositioning, parseSEGY, parseSegyMeta, parseSPSText, projToLatLon, PROJ_HEADER_CODES, r16u, renumberSPSText, reprojectSPS, resampleLinear, runSPSQC, scanTraceHealth, EVIDENCE_STRIDE, writeEvidence, spectrogram, spsHeaderDesc, writeTapeRecord, type AGCType, type BinGrid, type CRS, type CreateParams, type CRSSpec, type DetectorId, type FBPolarity, type FBSeed, type GeomLoadResult, type HealthThresholds, type ParsedFile, type PreplotLine, type PreplotStation, type QCParams, type RenumberSpec, type SegyMeta, type Sensitivity, type SPSData, type SPSDeltaResult, type SPSHeader, type SPSPoint, type SPSProjection, type SurveyLine, type Trace, type TraceGeom } from '../core';
+import { assembleNearGather, selectTrace, MAX_GATHER_RECORDS, type GatherRecord, type GatherSelector, type GatherTrace, applyAGC, assistFirstBreaks, averageSpectrum, buildPositioningExport, buildPositioningPrj, buildSPSRasters, buildSPSShapefiles, buildRenumberMaps, buildSPS, checkGeometry, compareSPS, computeSemblance, CREATE_DEFAULTS, crsFromSpec, decodeSegyTrace, detect, detectPositioningFormat, detectSPSType, EPSG_DB, fkSpectrum, generateProjHeaders, generatePreplotSPS, generateSPS, getWriter, groupByLine, hRecCode, isIX1SegdTape, loadGeometry, lonLatToProj, MAX_SAMPLE_TRACES, MAX_SAMPLES_PER_TRACE, MAX_TRACES, mergeSPSData, nextPow2, normFactorPercentile, AGC_DEFAULT_WINDOW_MS, AGC_DEFAULT_TYPE, parseAny, parsePositioning, parseSEGY, parseSegyMeta, parseSPSText, projToLatLon, PROJ_HEADER_CODES, r16u, renumberSPSText, reprojectSPS, resampleLinear, runSPSQC, scanTraceHealth, EVIDENCE_STRIDE, writeEvidence, spectrogram, spsHeaderDesc, writeTapeRecord, type AGCType, type BinGrid, type CRS, type CreateParams, type CRSSpec, type DetectorId, type FBPolarity, type FBSeed, type GeomLoadResult, type HealthThresholds, type ParsedFile, type PreplotLine, type PreplotStation, type QCParams, type RenumberSpec, type SegyMeta, type Sensitivity, type SPSData, type SPSDeltaResult, type SPSHeader, type SPSPoint, type SPSProjection, type SurveyLine, type Trace, type TraceGeom } from '../core';
 
 if (!parentPort) throw new Error('parse.worker must run as a worker thread');
 const port = parentPort;
@@ -475,15 +475,71 @@ function summarizeStream(s: StreamedFile) {
     samplesTrace: s.repNs || s.meta.defaultNs || null,
     sampleInt: s.meta.sampleInt || null,
     byteOrder: s.meta.le ? 'little-endian' : 'big-endian',
+    // Same polarity fields summarize() forwards - `meta.bh` has the same shape as
+    // ParsedFile.bh, so a streamed SEG-Y states its declared convention too.
+    impulsePolarity: typeof s.meta.bh.impulsePolarity === 'number' ? s.meta.bh.impulsePolarity : undefined,
+    vibratoryPolarity: typeof s.meta.bh.vibratoryPolarity === 'number' ? s.meta.bh.vibratoryPolarity : undefined,
     errors: [] as string[],
     streamed: true,
     textHeader: s.meta.textHeader,
   };
 }
 
+// -- Per-column header values for the section (trace spacing + reduced time) ----
+// The section handler already parses every plotted trace's header, so the four
+// geometry numbers the File Viewer can position or shift by ride along with the
+// matrix rather than costing a second pass over the file. NaN marks a trace whose
+// field is absent or unreadable; an array in which NOTHING was readable is sent
+// as null, so the renderer's trace axis reports "no header" instead of blaming a
+// non-finite value.
+const SEC_COL_HDR_KEYS = ['offset', 'trcField', 'srcPt', 'ensemble'] as const;
+type SecColHdrKey = typeof SEC_COL_HDR_KEYS[number];
+
+/** One header value as a finite number, or NaN. Never throws on a string field. */
+function secHdrNum(v: unknown): number {
+  const x = typeof v === 'number' ? v : parseFloat(String(v ?? ''));
+  return Number.isFinite(x) ? x : NaN;
+}
+
+/** Collector for the per-column header arrays; `push` is called once per plotted
+ *  column, in column order, so index c of every array IS column c. */
+function secColHdrCollector(capacity: number) {
+  const n = Math.max(0, capacity | 0);
+  const cols: Record<SecColHdrKey, Float32Array> = {
+    offset: new Float32Array(n).fill(NaN),
+    trcField: new Float32Array(n).fill(NaN),
+    srcPt: new Float32Array(n).fill(NaN),
+    ensemble: new Float32Array(n).fill(NaN),
+  };
+  let i = 0;
+  return {
+    push(hdr: Record<string, unknown> | undefined) {
+      if (i >= n) { i++; return; }
+      for (const k of SEC_COL_HDR_KEYS) cols[k][i] = secHdrNum(hdr?.[k]);
+      i++;
+    },
+    /** Trim to the columns actually produced and drop an all-NaN array. */
+    finish(numTraces: number) {
+      const out: Record<string, Float32Array | null> = {};
+      const bufs: ArrayBuffer[] = [];
+      for (const k of SEC_COL_HDR_KEYS) {
+        const a = cols[k].subarray(0, Math.max(0, Math.min(n, numTraces))).slice();
+        let any = false;
+        for (let j = 0; j < a.length; j++) if (Number.isFinite(a[j])) { any = true; break; }
+        out[k] = any ? a : null;
+        if (any) bufs.push(a.buffer as ArrayBuffer);
+      }
+      return {
+        colOffset: out.offset, colChannel: out.trcField, colSrcPt: out.srcPt, colCdp: out.ensemble,
+        buffers: bufs,
+      };
+    },
+  };
+}
+
 interface Req {
   id: number;
-  type: 'open' | 'quickMeta' | 'trace' | 'extractTrace' | 'section' | 'convert' | 'convertPath' | 'convertTapeRecord' | 'convertTraces' | 'reset' | 'openSPS' | 'spsClear' | 'binGrid' | 'spsGeometry' | 'spsXrefLines' | 'spsFold' | 'spsQC' | 'spsGeomCheck' | 'spsGeomLoad' | 'spsDelta' | 'spsPointDetail' | 'spsSourceList' | 'spsReproject' | 'spsCreate' | 'spsRenumber' | 'spsExport' | 'spsShapefile' | 'spsRaster' | 'spsHeaderList' | 'spsApplyHeaders' | 'spsSaveCorrected' | 'semblance' | 'avgSpectrum' | 'spectrogram' | 'fk' | 'traceHealth' | 'firstBreaks';
+  type: 'open' | 'quickMeta' | 'trace' | 'extractTrace' | 'section' | 'convert' | 'convertPath' | 'convertTapeRecord' | 'convertTraces' | 'reset' | 'openSPS' | 'spsClear' | 'binGrid' | 'spsGeometry' | 'spsXrefLines' | 'spsFold' | 'spsQC' | 'spsGeomCheck' | 'spsGeomLoad' | 'spsDelta' | 'spsPointDetail' | 'spsSourceList' | 'spsReproject' | 'spsCreate' | 'spsRenumber' | 'spsExport' | 'spsShapefile' | 'spsRaster' | 'spsHeaderList' | 'spsApplyHeaders' | 'spsSaveCorrected' | 'semblance' | 'avgSpectrum' | 'spectrogram' | 'fk' | 'traceHealth' | 'firstBreaks' | 'nearGather';
   path?: string;
   // spsApplyHeaders: scope ('shared' = all loaded files, else a file name) + the
   // edit/add/remove batch and an optional CRS rewrite. Mirrors the IPC contract.
@@ -602,6 +658,15 @@ interface Req {
   fbStaMs?: number;
   fbLtaMs?: number;
   fbThreshold?: number;
+  // nearGather (near-trace / common-offset gather across records): how the ONE
+  // trace per record is chosen. 'channel' matches the channel-number header,
+  // 'offset' takes the trace whose SIGNED offset header is nearest `offsetTarget`
+  // (signed, so a split spread's -300 m is not matched by +300 m), 'index' is the
+  // plain array position. `paths` above carries the record list.
+  selectBy?: 'channel' | 'offset' | 'index';
+  channel?: number;
+  offsetTarget?: number;
+  maxRecords?: number;
   // spsFold: CMP bin dimensions (projected units, e.g. metres).
   binX?: number;
   binY?: number;
@@ -646,6 +711,11 @@ function summarize(pf: ParsedFile) {
     samplesTrace: pf.bh.samplesTrace ?? pf.traces[0]?.nSamples ?? null,
     sampleInt: pf.bh.sampleInt ?? null,
     byteOrder,
+    // SEG-Y binary header bytes 3257-3258 / 3259-3260. Forwarded so the viewer can
+    // state the file's OWN declared polarity convention. Absent for formats that
+    // carry no such field; 0 means the file declares nothing.
+    impulsePolarity: typeof pf.bh.impulsePolarity === 'number' ? pf.bh.impulsePolarity : undefined,
+    vibratoryPolarity: typeof pf.bh.vibratoryPolarity === 'number' ? pf.bh.vibratoryPolarity : undefined,
     errors: pf.errors,
   };
 }
@@ -1243,6 +1313,90 @@ port.on('message', (req: Req) => {
     // populated by openSPS when a positioning file resolves to kind:'bingrid'.
     if (type === 'binGrid') {
       port.postMessage({ id, ok: true, grid: currentBinGrid });
+      return;
+    }
+
+    // -- Near-trace (common-offset) gather across RECORDS -------------------
+    //
+    // One chosen channel out of every shot record in the folder, assembled into a
+    // single panel (the field instrument's "Gather Window"). Every other viewer
+    // shows ONE record, so this is the only window on shot-to-shot behaviour.
+    //
+    // Each file is parsed into a LOCAL - `current` / `currentStream` are never
+    // touched, so the open file survives a gather. Bounded three ways: the record
+    // count is capped BEFORE the loop, each file is size-capped before it is read,
+    // and each column is sample-capped. A record that cannot contribute is
+    // collected as a skip, never thrown.
+    if (type === 'nearGather') {
+      const all = Array.isArray(req.paths) ? req.paths.filter((p): p is string => typeof p === 'string' && !!p) : [];
+      if (!all.length) { port.postMessage({ id, ok: false, error: 'nearGather: no records supplied' }); return; }
+      const cap = Math.max(1, Math.min(MAX_GATHER_RECORDS, (req.maxRecords ?? MAX_GATHER_RECORDS) | 0 || MAX_GATHER_RECORDS));
+      const paths = all.slice(0, cap);
+      const sel: GatherSelector =
+        req.selectBy === 'offset' ? { mode: 'offset', offset: Number(req.offsetTarget) || 0 }
+          : req.selectBy === 'index' ? { mode: 'index', index: (req.index ?? 0) | 0 }
+            : { mode: 'channel', channel: (req.channel ?? 1) | 0 };
+
+      const recs: GatherRecord[] = [];
+      for (let i = 0; i < paths.length; i++) {
+        const p = paths[i];
+        const nm = basename(p);
+        // Progress per record (the count is already capped, so no throttle is
+        // needed). Emitted from inside this synchronous loop: libuv delivers it to
+        // main while the worker is still busy, exactly like the open indexer.
+        emitProgress('nearGather', i, paths.length, `Gathering ${nm} - ${i + 1} / ${paths.length}`);
+        let size: number;
+        try { size = statSync(p).size; }
+        catch (e) { recs.push({ name: nm, sampleInt: 0, error: (e as Error).message }); continue; }
+        if (size <= 0) { recs.push({ name: nm, sampleInt: 0, error: 'empty file' }); continue; }
+        // One record is read whole to parse it; the in-memory cap keeps a single
+        // pathological giant from blowing the worker.
+        if (size > IN_MEMORY_MAX) { recs.push({ name: nm, sampleInt: 0, error: `too large (${(size / 1e9).toFixed(2)} GB)` }); continue; }
+        let pf: ParsedFile;
+        try { pf = parseInMemory(readFileSync(p), nm); }
+        catch (e) { recs.push({ name: nm, sampleInt: 0, error: (e as Error).message }); continue; }
+        if (!pf || pf.traceCount <= 0) { recs.push({ name: nm, sampleInt: 0, error: pf?.errors?.[0] || 'no traces / unsupported' }); continue; }
+        // FFID for labelling: SEG-Y/SU trace header, else the SEG-D general header.
+        const fr = pf.traces[0]?.hdr?.['fieldRec'];
+        const fn = pf.gh1?.['fileNum'];
+        const ffid = typeof fr === 'number' && fr > 0 ? fr : typeof fn === 'number' && fn > 0 ? fn : null;
+        // Keep ONLY the picked trace's samples. Holding every record's full
+        // trace array until the assemble step would retain ~1.9 GB at the record
+        // cap (1000 x 240 traces x 2000 samples); the per-file and per-column caps
+        // bound one input and the output, not the working set between them. The
+        // headers are kept so assembleNearGather re-selects the SAME trace and
+        // still reports channel/offset honestly; the samples are COPIED in case a
+        // parser handed back a view over the file buffer.
+        const si = typeof pf.bh.sampleInt === 'number' ? pf.bh.sampleInt : 0;
+        const pick = selectTrace({ name: nm, sampleInt: si, traces: pf.traces }, sel);
+        const keep = typeof pick === 'string' ? -1 : pick.traceIndex;
+        const slim: GatherTrace[] = pf.traces.map((t, ti) => (
+          ti === keep && t.samples
+            ? { hdr: t.hdr, samples: t.samples.slice(), nSamples: t.nSamples }
+            : { hdr: t.hdr, nSamples: t.nSamples }
+        ));
+        recs.push({ name: nm, sampleInt: si, ffid, traces: slim });
+      }
+      emitProgress('nearGather', paths.length, paths.length, 'Assembling gather');
+
+      const g = assembleNearGather(recs, sel, {
+        maxRecords: cap,
+        maxSamples: req.maxSamples ?? 2000,
+        transform: req.agc
+          ? (samp, si) => applyAGC(samp, req.agcWindowMs ?? AGC_DEFAULT_WINDOW_MS, si, req.agcType ?? AGC_DEFAULT_TYPE)
+          : undefined,
+      });
+      port.postMessage(
+        {
+          id, ok: true, numTraces: g.numTraces, colLen: g.colLen, norm: g.norm, norms: g.norms,
+          sampleInt: g.sampleInt, data: g.data, records: g.records,
+          truncated: g.truncated || all.length > paths.length,
+          droppedByCap: g.droppedByCap + (all.length - paths.length),
+          offered: all.length, mixedSampleInt: g.mixedSampleInt, sampleInts: g.sampleInts,
+          skipped: g.skipped, selectBy: sel.mode,
+        },
+        [g.data.buffer as ArrayBuffer, g.norms.buffer as ArrayBuffer],
+      );
       return;
     }
 
@@ -2422,15 +2576,24 @@ port.on('message', (req: Req) => {
         // Decimated columns: read ONLY the traces we actually plot (≤ maxTraces),
         // on demand - never the whole file. Mirrors the in-memory normalize/AGC.
         const columns: Float32Array[] = [];
+        // Per-plotted-trace p95, one per column: the renderer derives EVERY
+        // scaling mode (max / across-trace percentile / per trace) from this, so
+        // changing scaling mode is a pure redraw and never refetches.
+        const colNorms: number[] = [];
+        // Per-column header values (offset / channel / shotpoint / CDP), collected
+        // from the SAME traces that become columns, in column order.
+        const colHdr = secColHdrCollector(Math.ceil((t1 - t0) / traceStep) + 1);
         let norm = 0;
         for (let t = t0; t < t1; t += traceStep) {
           const tr = readStreamedTrace(s.fd, traceMeta(s, t), s.offsets[t], streamNs(s, t), true);
           let samp = tr?.samples;
           if (!samp) continue;
-          if (req.agc) samp = applyAGC(samp, req.agcWindowMs ?? 200, si, req.agcType ?? 'rms');
+          colHdr.push(tr?.hdr as Record<string, unknown> | undefined);
+          if (req.agc) samp = applyAGC(samp, req.agcWindowMs ?? AGC_DEFAULT_WINDOW_MS, si, req.agcType ?? AGC_DEFAULT_TYPE);
           if (sampZoom) samp = samp.subarray(Math.min(s0, samp.length), Math.min(s1, samp.length));
           const nf = normFactorPercentile(samp, 0.95);
           if (nf > norm) norm = nf;
+          colNorms.push(nf);
           columns.push(samp.length > maxSamples ? resampleLinear(samp, maxSamples) : samp);
         }
         if (norm <= 0) norm = 1;
@@ -2445,9 +2608,20 @@ port.on('message', (req: Req) => {
           const n = Math.min(colLen, col.length);
           for (let k = 0; k < n; k++) data[cbase + k] = col[k];
         }
+        // One normalization factor per plotted column, transferred alongside the
+        // matrix. Non-finite / non-positive entries are clamped to 0 so the
+        // renderer's per-trace mode can flat-line a dead trace instead of
+        // dividing by it (0 * Infinity = NaN would reach the canvas).
+        const norms = new Float32Array(numTraces);
+        for (let c = 0; c < numTraces; c++) {
+          const v = colNorms[c];
+          norms[c] = Number.isFinite(v) && v > 0 ? v : 0;
+        }
+        const hdrCols = colHdr.finish(numTraces);
         port.postMessage(
-          { id, ok: true, numTraces, colLen, norm, sampleInt: si, traceStep, data, traceStart: t0, traceEnd: t1, sampStart: s0, sampEnd: s1, fullTraces: tc, fullSamples: fullSamps, winSamps: s1 - s0 },
-          [data.buffer],
+          { id, ok: true, numTraces, colLen, norm, norms, sampleInt: si, traceStep, data, traceStart: t0, traceEnd: t1, sampStart: s0, sampEnd: s1, fullTraces: tc, fullSamples: fullSamps, winSamps: s1 - s0,
+            colOffset: hdrCols.colOffset, colChannel: hdrCols.colChannel, colSrcPt: hdrCols.colSrcPt, colCdp: hdrCols.colCdp },
+          [data.buffer, norms.buffer, ...hdrCols.buffers],
         );
         return;
       }
@@ -2514,18 +2688,24 @@ port.on('message', (req: Req) => {
       // AGC is computed on the FULL trace (its window is time-based), then the
       // visible sample range is sliced out, then time-preserving downsampled.
       const columns: Float32Array[] = [];
+      // Per-plotted-trace p95 (see the streamed branch) - one entry per column.
+      const colNorms: number[] = [];
+      // Per-column header values - see the streamed branch.
+      const colHdr = secColHdrCollector(Math.ceil((t1 - t0) / traceStep) + 1);
       let norm = 0;
       for (let t = t0; t < t1; t += traceStep) {
         const tr = current.traces[t];
         if (!tr?.samples) continue;
+        colHdr.push(tr.hdr as Record<string, unknown> | undefined);
         let s = tr.samples;
-        if (req.agc) s = applyAGC(s, req.agcWindowMs ?? 200, si, req.agcType ?? 'rms');
+        if (req.agc) s = applyAGC(s, req.agcWindowMs ?? AGC_DEFAULT_WINDOW_MS, si, req.agcType ?? AGC_DEFAULT_TYPE);
         // Slice to the visible sample window only when the user actually zoomed
         // the sample axis; otherwise keep the full trace (its tail beyond
         // bh.samplesTrace must survive an un-zoomed render).
         if (sampZoom) s = s.subarray(Math.min(s0, s.length), Math.min(s1, s.length));
         const nf = normFactorPercentile(s, 0.95);
         if (nf > norm) norm = nf;
+        colNorms.push(nf);
         // Time-preserving downsample (clean vertical axis for VD; good enough for wiggle).
         columns.push(s.length > maxSamples ? resampleLinear(s, maxSamples) : s);
       }
@@ -2545,10 +2725,18 @@ port.on('message', (req: Req) => {
         const n = Math.min(colLen, col.length);
         for (let k = 0; k < n; k++) data[base + k] = col[k];
       }
+      // One normalization factor per plotted column (see the streamed branch).
+      const norms = new Float32Array(numTraces);
+      for (let c = 0; c < numTraces; c++) {
+        const v = colNorms[c];
+        norms[c] = Number.isFinite(v) && v > 0 ? v : 0;
+      }
       // Echo the window + full extents so the renderer can label axes and clamp.
+      const hdrCols = colHdr.finish(numTraces);
       port.postMessage(
-        { id, ok: true, numTraces, colLen, norm, sampleInt: si, traceStep, data, traceStart: t0, traceEnd: t1, sampStart: s0, sampEnd: s1, fullTraces: tc, fullSamples: fullSamps, winSamps },
-        [data.buffer],
+        { id, ok: true, numTraces, colLen, norm, norms, sampleInt: si, traceStep, data, traceStart: t0, traceEnd: t1, sampStart: s0, sampEnd: s1, fullTraces: tc, fullSamples: fullSamps, winSamps,
+          colOffset: hdrCols.colOffset, colChannel: hdrCols.colChannel, colSrcPt: hdrCols.colSrcPt, colCdp: hdrCols.colCdp },
+        [data.buffer, norms.buffer, ...hdrCols.buffers],
       );
       return;
     }

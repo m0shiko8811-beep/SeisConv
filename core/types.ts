@@ -47,6 +47,15 @@ export interface BinaryHeader {
    *  geometry-integrity check to recognise post-stack data (source/receiver
    *  geometry collapsed to CDP midpoints) instead of false-flagging it. */
   traceSorting?: number;
+  /** SEG-Y impulse signal polarity (binary-header bytes 3257-3258, uint16):
+   *  1 = pressure increase / upward geophone case movement gives a NEGATIVE
+   *  number on trace, 2 = the same gives a POSITIVE number, 0 = unknown
+   *  (unset). SEG-Y rev1 sec 3.4 / rev2.1 sec 5.2 Binary File Header table. */
+  impulsePolarity?: number;
+  /** SEG-Y vibratory polarity code (binary-header bytes 3259-3260, uint16):
+   *  1-8 = seismic signal lag vs pilot signal in 45-degree wedges, 0 = unknown
+   *  (unset or out of range). SEG-Y rev1 sec 3.4 / rev2.1 sec 5.2. */
+  vibratoryPolarity?: number;
   [key: string]: number | undefined;
 }
 

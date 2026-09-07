@@ -87,6 +87,7 @@ export interface TraceEvidence {
   rms: number;          // full-trace RMS (sample value)
   peak: number;         // peak |amplitude| (sample value)
   rmsGated: number;     // RMS within the early/first-break gate (sample value)
+  rmsPre: number;       // RMS of the PRE-first-break noise window (sample value); NaN = no confident pick
   zcr: number;          // zero-crossing rate (sign changes / sample)
   flatRatio: number;    // std / peak (≈0 ⇒ flat line)
   deadRel: number;      // rmsGated / deadBaseline (live-neighbour median, gated)
@@ -167,6 +168,15 @@ const SPEC_MAX_FFT = 4096;      // samples fed to the spectral FFT (zero-padded 
 const DEAD_GATE_PRE_MS = 25;
 const DEAD_GATE_POST_MS = 220;
 const DEAD_GATE_MS = 300;       // default early gate when a trace has no first-break pick
+/** Shortest pre-first-break window worth quoting as a noise level. Below this the
+ *  number is dominated by a handful of samples and would mislead more than it
+ *  informs, so `rmsPre` is reported as NaN instead. */
+const NOISE_MIN_SAMPLES = 8;
+/** How far AHEAD of the picked first break the pre-break noise window stops.
+ *  Exported because any panel that DRAWS `rmsPre` has to state the window it is
+ *  showing, and quoting a second hard-coded number there would be a second source
+ *  of truth for the same measurement. */
+export const NOISE_GUARD_MS = DEAD_GATE_PRE_MS;
 // REVERSED polarity window: a TIGHT window on the first-break wavelet only - wide
 // gates let adjacent-trace moveout decorrelate normal neighbours (so a flip can't be
 // told from poor coherence). Kept short so normal neighbours correlate strongly +
@@ -591,6 +601,7 @@ export function scanTraceHealth(
   const stats: BasicStats[] = new Array(count);
   const rms = new Float64Array(count);
   const rmsGated = new Float64Array(count);
+  const rmsPre = new Float64Array(count);
   const fbSamp = new Int32Array(count);
   const domFreq = new Float64Array(count);
   const hfFrac = new Float64Array(count);
@@ -612,8 +623,14 @@ export function scanTraceHealth(
       const g0 = fb >= 0 ? Math.max(0, fb - deadPre) : 0;
       const g1 = fb >= 0 ? Math.min(st.n, fb + deadPost) : Math.min(st.n, defGateSamp);
       rmsGated[i] = rmsWindow(s, g0, g1);
+      // PRE-first-break noise window: time zero up to the same guard distance
+      // ahead of the onset, so the onset's own leading edge is never counted as
+      // noise. This is a DIFFERENT measurement from rmsGated, which straddles the
+      // first break and is a SIGNAL level. NaN when there is no confident pick or
+      // the window is too short - a made-up noise level is worse than none.
+      rmsPre[i] = fb >= 0 && (fb - deadPre) >= NOISE_MIN_SAMPLES ? rmsWindow(s, 0, fb - deadPre) : NaN;
       if (doSpec && isLive) { const sp = specStats(s, siUs); domFreq[i] = sp.domFreqHz; hfFrac[i] = sp.hfFrac; oneBin[i] = sp.oneBinDom; }
-    } else { fbSamp[i] = -1; rmsGated[i] = 0; }
+    } else { fbSamp[i] = -1; rmsGated[i] = 0; rmsPre[i] = NaN; }
   }
 
   // Robust survey-wide RMS floor (for the live predicate + a fallback baseline scale).
@@ -665,6 +682,7 @@ export function scanTraceHealth(
       rms: st.rms,
       peak,
       rmsGated: rmsGated[i],
+      rmsPre: rmsPre[i],
       zcr: st.zcr,
       flatRatio: peak > 0 ? st.std / peak : (st.n === 0 ? 0 : 1),
       deadRel: Number.isFinite(deadRel) ? deadRel : NaN,
@@ -777,6 +795,9 @@ export const EVIDENCE_FIELDS = [
   'specScore', 'domFreqHz', 'hfFrac', 'oneBinDom',
   'clipRunFrac', 'spikeScore',
   'polarityCoef', 'polarityConf', 'polarityRan',
+  // APPENDED, never inserted: the indices above are hard-coded in writeEvidence /
+  // readEvidence, so a new field goes on the END and nothing else shifts.
+  'rmsPre',
 ] as const;
 export const EVIDENCE_STRIDE = EVIDENCE_FIELDS.length;
 
@@ -805,6 +826,7 @@ export function writeEvidence(flat: Float32Array, i: number, ev: TraceEvidence):
   flat[b + 18] = ev.polarityCoef;
   flat[b + 19] = ev.polarityConf;
   flat[b + 20] = ev.polarityRan ? 1 : 0;
+  flat[b + 21] = ev.rmsPre;
 }
 
 /** Read one trace's evidence back out of the flat buffer at row `i`. */
@@ -832,5 +854,6 @@ export function readEvidence(flat: Float32Array, i: number): TraceEvidence {
     polarityCoef: flat[b + 18],
     polarityConf: flat[b + 19],
     polarityRan: flat[b + 20] >= 0.5,
+    rmsPre: flat[b + 21],
   };
 }

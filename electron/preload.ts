@@ -71,6 +71,9 @@ export interface SectionData {
   numTraces: number;
   colLen: number;
   norm: number;
+  /** Per-plotted-trace normalization factor (p95 of |sample|), one per column.
+   *  Lets the renderer switch scaling mode without refetching. 0 = dead trace. */
+  norms?: Float32Array;
   sampleInt: number;
   traceStep: number;
   data: Float32Array; // numTraces × colLen, row-major (row = trace)
@@ -82,6 +85,74 @@ export interface SectionData {
   sampEnd: number;
   fullTraces: number;
   fullSamples: number;
+  /** Per-column geometry header values, one entry per plotted column (NaN where
+   *  the field was absent), or null when NO column carried the field at all - so
+   *  the trace axis can say "no header" rather than blaming a non-finite value.
+   *  Source-receiver offset is in the file's OWN distance unit (SEG-Y carries no
+   *  measurement-system field this app reads, so it is taken as metres). */
+  colOffset?: Float32Array | null;
+  colChannel?: Float32Array | null;
+  colSrcPt?: Float32Array | null;
+  colCdp?: Float32Array | null;
+}
+
+/** Near-trace gather request. Omit `paths` to gather the OPEN FILE'S FOLDER, i.e.
+ *  the same sibling list the file Prev/Next control steps through. */
+export interface NearGatherOpts {
+  /** Explicit record list; every path must already be authorized (a sibling or a
+   *  dialog pick). Omit to use the open file's siblings. */
+  paths?: string[];
+  /** How the one trace per record is chosen. Default 'channel'. */
+  selectBy?: 'channel' | 'offset' | 'index';
+  /** selectBy 'channel': the channel-number header value to match. */
+  channel?: number;
+  /** selectBy 'offset': the SIGNED offset to match nearest (split spreads). */
+  offsetTarget?: number;
+  /** selectBy 'index': plain array position within each record. */
+  index?: number;
+  maxRecords?: number;
+  maxSamples?: number;
+  agc?: boolean;
+  agcType?: 'rms' | 'median' | 'mean';
+  agcWindowMs?: number;
+}
+
+/** One record's report, in INPUT order (skipped records included, column = -1). */
+export interface NearGatherRecord {
+  name: string;
+  ffid: number | null;
+  column: number;
+  traceIndex: number;
+  channel: number | null;
+  offset: number | null;
+  sampleInt: number;
+  nSamples: number;
+  resampled: boolean;
+  ambiguous: boolean;
+  ok: boolean;
+  reason?: string;
+  detail?: string;
+}
+
+export interface NearGatherData {
+  numTraces: number;
+  colLen: number;
+  norm: number;
+  norms: Float32Array;
+  /** Reference sample interval (µs): the time grid every column sits on. */
+  sampleInt: number;
+  data: Float32Array; // numTraces x colLen, row-major (row = one record's trace)
+  records: NearGatherRecord[];
+  /** True when more records existed than the cap allowed. */
+  truncated: boolean;
+  droppedByCap: number;
+  offered: number;
+  /** True when contributing records did NOT share one sample interval. Those
+   *  columns were resampled onto the reference grid; the UI must say so. */
+  mixedSampleInt: boolean;
+  sampleInts: number[];
+  skipped: string[];
+  selectBy: string;
 }
 
 export interface ConvertResult {
@@ -797,6 +868,9 @@ const api = {
   extractTrace: (path: string, index: number): Promise<ExtractedTrace> => ipcRenderer.invoke('seisconv:extractTrace', path, index),
   /** Get a decimated section matrix (for variable-density / wiggle display). */
   getSection: (opts?: SectionOpts): Promise<SectionData> => ipcRenderer.invoke('seisconv:getSection', opts ?? {}),
+  /** Near-trace (common-offset) gather: ONE chosen channel from every record in
+   *  the open file's folder, assembled into a single panel. */
+  getNearGather: (opts?: NearGatherOpts): Promise<NearGatherData> => ipcRenderer.invoke('seisconv:getNearGather', opts ?? {}),
   /** Pick an input folder; returns its seismic files (sorted by name) or null. */
   pickInputFolder: (): Promise<InputFolder | null> => ipcRenderer.invoke('seisconv:pickInputFolder'),
   /** Pick an output folder; returns the chosen path or null. */

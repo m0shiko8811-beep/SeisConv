@@ -1,6 +1,6 @@
 // Cross-format equivalence sweep.
 //
-//   npx tsx scripts/test-crossformat.ts [--limit N] [--dir <SINGLE_IMAGE_1>]
+//   npx tsx scripts/test-crossformat.ts [--limit N] [--dir <corpus root>]
 //
 // The strongest correctness test available to this project: the acquisition
 // system wrote THE SAME SHOTS in four formats (SEG-D rev 2, SEG-D rev 3, SEG-Y
@@ -15,10 +15,13 @@
 import { readFileSync, existsSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { parseAny } from '../core/index';
+import { resolveValue } from '../qa/local-paths.mjs';
 
-// Local paired SEG-D/SEG-Y corpus (developer machine). Override with --dir or
-// SEISCONV_XFMT_DIR; the script reports "no corpus" when the directory is absent.
-const DEFAULT_DIR = process.env.SEISCONV_XFMT_DIR || 'D:/Projects/SeisconvApp/Data_Games';
+// Root of a local paired SEG-D/SEG-Y corpus: --dir > env SEISCONV_XFMT_DIR >
+// the "xfmtDir" key in the git-ignored qa/local-paths.json > no default. The
+// script reports "no corpus" and exits 2 when the directory is absent, so it
+// never fails as if the formats were wrong.
+const DEFAULT_DIR = resolveValue('xfmtDir', 'SEISCONV_XFMT_DIR');
 
 const argv = process.argv.slice(2);
 const arg = (name: string, dflt: string): string => {
@@ -100,7 +103,7 @@ const shots = existsSync(join(ROOT, VARIANTS[0].dir))
   ? readdirSync(join(ROOT, VARIANTS[0].dir)).filter((f) => f.toLowerCase().endsWith('.segd')).map((f) => f.replace(/\.[^.]+$/, '')).sort()
   : [];
 if (!shots.length) {
-  console.error(`No shots found under ${ROOT}. Pass --dir <SINGLE_IMAGE_1 folder>.`);
+  console.error(`No shots found under "${ROOT}". Pass --dir <corpus root>, set SEISCONV_XFMT_DIR, or add an "xfmtDir" key to the git-ignored qa/local-paths.json.`);
   process.exit(2);
 }
 const picked = shots.slice(0, Math.max(1, LIMIT));

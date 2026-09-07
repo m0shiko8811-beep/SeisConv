@@ -5,6 +5,328 @@ All notable changes to SeisConv are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.8.0] - 2026-09-07
+
+A viewer release. The theme running through it is that a picture of seismic data
+is a claim about that data, and the display was previously free to make claims
+nobody could check: it could hide a dying geophone, close a spread gap up, or be
+screenshotted with no record of the settings that produced it.
+
+### Added
+
+- **Six display gain laws, with Seismic Unix `sugain` semantics and in SU's own
+  order:** None (true amplitude), Fixed gain, Time gain t^n, Exponential time
+  gain, Amplitude compression, and Equalise traces (RMS). This exists because
+  the viewer previously offered only the two extremes, a flat multiplier and
+  AGC. AGC normalises every window of every trace to the same level, so a weak
+  or dying geophone is painted exactly as healthy as a good one, which is fatal
+  for spread QC. The time laws apply a correction that depends only on time and
+  is identical on every trace, so late arrivals brighten while the relative
+  amplitude between channels survives and a bad channel still reads as bad. The
+  picker states in plain words what the selected law does, and says outright
+  that Equalise hides a weak geophone.
+- **Nine colour maps, up from four.** Viridis is now matplotlib's full 256-entry
+  table; the previous one interpolated in a straight line between the two ends of
+  that table, so it was not viridis at all and had none of the perceptual
+  uniformity that is the whole reason to use it. Added Crameri's `berlin` and
+  `vik` perceptually uniform diverging maps, where equal steps in amplitude look
+  like equal steps in colour and zero sits at one unambiguous centre, and two
+  positive-black greys for the paper-section convention. Every table's source is
+  cited beside it, and matplotlib's `berlin` was compared entry by entry against
+  Crameri's own file as a provenance check.
+- **A colour-vision check**, using the Machado, Oliveira and Fernandes (2009)
+  simulation matrices. About one man in twelve has a colour deficiency, so a
+  section that only works in full colour is a real limitation. Offered as a
+  snapshot you open and close rather than a display mode, because it is a check
+  on the picture, not a way of reading data.
+- **Near-trace (common-offset) gather.** Every viewer in the app showed one
+  record, so a source degrading slowly down the line, or coupling that worsens
+  as the crew moves, was invisible. This takes one chosen channel out of every
+  record in the open file's folder and draws them side by side, one column per
+  record. It obeys the File Viewer's own display controls rather than
+  duplicating them, lists every record that contributed no column together with
+  the reason, and names the grid it resampled onto when a folder mixes sample
+  intervals. Driven across all 116 records of a real field folder.
+- **Reduced time**, following Seismic Unix's `sureduce`: shift every trace by
+  its offset divided by a reducing velocity, so refracted first breaks flatten
+  into a straight horizontal line. Against a straight line a timing slip or a
+  station planted at the wrong stake reads as an obvious step, where on the raw
+  hyperbola it is a kink that is easy to miss. The shift is interpolated rather
+  than rounded to the nearest sample, because rounding would inject up to half a
+  sample of fake step into the very line being read.
+- **Trace spacing by a geometry header** (offset, channel, shotpoint or CDP).
+  The section positioned trace i at even spacing by array index, so a spread
+  gap, a dropped station or a channel that never reached the file was silently
+  closed up and the record looked perfect. Positioned by its own header value,
+  the gap is drawn as a gap. There is deliberately no "Station" option: the
+  SEG-Y fixed trace header carries no receiver-station field, and relabelling
+  the channel number as a station would be a lie.
+- **Per-trace attribute profile:** peak, RMS and a separate pre-first-break
+  noise RMS, drawn under the section on its own trace axis and printed for the
+  hovered trace. These are numbers that do not depend on the display
+  normalisation, which is the point, since per-trace scaling and AGC are exactly
+  what hide a weak channel. They are the trace-health scan's own evidence read
+  back out, not a second computation that could disagree with it.
+- **A raw scale basis**, where full scale is the sample value itself. It is the
+  only basis under which an absolute amplitude claim is defensible.
+- **A display clip percentile and a wiggle excursion control**, and a colour bar
+  that follows the map actually in use. The bar previously hardcoded one map, so
+  on a Seismic or Gray panel it disagreed with the picture it was explaining, and
+  the primary Variable Density display carried no bar at all, so a colour there
+  could not be turned back into a number.
+- **A permanent display-state strip on every viewer**, stating the whole
+  transform chain between the stored samples and the pixels: mode, polarity
+  flip, reduced time, trace spacing, colour map, AGC, gain law, scale basis,
+  clip and the sample value at which the picture saturates, and how much of the
+  record the display flattened. It also reports the file's declared SEG-Y
+  impulse polarity in the standard's own words rather than as "normal" or
+  "reverse", terms that mean opposite things in different parts of the world.
+  With the strip in the frame, a screenshot is a QC record instead of an
+  unlabelled assertion.
+- **Display-only polarity flip** beyond the Trace Workbench, so a channel
+  suspected of being wired in reverse can be checked without touching the stored
+  samples or anything Convert writes.
+- **A Scale control on the Trace Inspector**, computed over the whole trace, so
+  zooming no longer renormalises the picture and two zoom levels can be
+  compared.
+- **Save the display on screen as a PNG**, on the File Viewer section, the Trace
+  Inspector, the Trace Workbench, the Velocity panel, the whole Spectrum family
+  and the near-trace gather. A screenshot of a seismic panel is only defensible
+  as evidence if it says what was done to the data, so the export is the panel's
+  own redraw rather than a crop of the window: the display-state strip, both
+  axes with their labels and units, and the colour bar all come out of the same
+  code that drew them on screen, at three times the screen resolution, with a
+  footer carrying the file name, the panel's name and the time of export. PNG
+  only, because the wiggle modes draw one-pixel lines and a lossy codec rings
+  around those edges in a way that reads as data.
+- **The SPS survey grid can be saved as an image too.** Every other data canvas
+  in the app could already do it, and a map that cannot say which survey or
+  which projection it shows is not evidence, so the grid's footer states the
+  survey's station and line counts, the layout, the coordinate system the
+  eastings and northings are in, the bearing the picture is turned to, which
+  layers are actually plotted, and any load flags. A fold heatmap and a station
+  plot of the same survey look nothing alike. Grid view only: the map view is a
+  web map, not a canvas.
+- **Reset display**, one button that puts every display setting back to the
+  state a freshly opened file shows and fits the view with them: mode, colour
+  map, gain law and its exponent, dB gain, AGC with its window and statistic,
+  clip, excursion, scale basis and its percentile, trace spacing, reduced time
+  and its velocity, and the display-only polarity flip. Display settings now
+  survive paging through a folder, which is what comparing records needs, but
+  that removed the accidental reset an open used to give for free; this is the
+  missing half. The defaults are read from each control's own default rather
+  than retyped elsewhere, so the button and the opening state cannot drift
+  apart. There is no confirmation question: the action is undoable from the
+  toast for a few seconds, which is cheaper than a question in front of every
+  press. Health flags, first-break picks and which record is on screen are
+  deliberately untouched, being annotation and navigation rather than display.
+- **Keyboard shortcuts for the File Viewer display controls.** The controls had
+  grown past what a trackpad in a truck is good for and none of them had a key.
+  PageUp and PageDown page the block of traces, `F` fits the record, bare `+`
+  and `-` zoom the data (Ctrl `+` and Ctrl `-` still zoom the whole interface,
+  unchanged), `A` toggles AGC, `M` steps the display mode, `C` steps the colour
+  map, `D` shows and hides the Display panel and `R` resets it. One table drives
+  the handler, the tooltips and the manual together, so each control's tooltip
+  names its own key and the in-app manual lists them all, and a rebind cannot
+  leave a stale hint anywhere. Every key works the existing control, so a key
+  and a mouse click do the same thing and a disabled control still does nothing.
+  Nothing fires while the focus is in a text box.
+- **The vibratory polarity the file declares is now stated**, not just the
+  impulse polarity. The SEG-Y field had been decoded, carried through the worker
+  and shown in the file summary, but it never reached the display-state strip,
+  so a reader looking at a vibrator record saw only half of how the recorded
+  numbers relate to the ground. It is now a clause on the same sentence as the
+  impulse polarity, because that is one fact, and it is written as the wedge in
+  plain English rather than as a raw code: code 3 reads that the seismic signal
+  lags the pilot sweep by 67.5 to 112.5 degrees. A file that never filled the
+  field in reads as unknown, exactly like the impulse code, and a format with no
+  vibratory field at all says nothing rather than being made to look silent
+  about a field it never had.
+
+### Fixed
+
+- **The first velocity pick landed about five pixels from the click.** Adding
+  the first row to the pick list made the panel need a scrollbar, the scrollbar
+  took ten pixels of width, and every canvas below it reflowed narrower, so the
+  semblance image moved sideways under the cursor. Later picks were fine,
+  because the scrollbar was already there. The stored velocity was always
+  correct; it was the picture that moved.
+- **A pan on the velocity panel planted a stray pick**, and a double-click
+  placed a pick and then asked to delete it instead of fitting the view. Picks
+  are the whole output of that panel, so a drag that silently created one was a
+  data-quality problem.
+- **The Trace Workbench aligned collected traces by sample number, not by
+  time.** The bench exists to compare traces from different files, so the
+  collection can mix sample intervals, and a 1 ms trace and a 0.5 ms trace
+  drifted apart by half the elapsed time, growing with depth, which is exactly
+  where first breaks are compared. A comment claimed the opposite.
+- **The saturation level was reported ten times too high at +20 dB.** The
+  colour bar and the state strip inverted the display mapping without dividing
+  by the display gain, so both quoted a sample value that did not saturate.
+- **The SEG-Y binary header's impulse-polarity bytes 3257-3260 were never
+  decoded**, so the one polarity statement the file itself makes was not
+  available to report.
+- **Each gain law now keeps its own exponent.** The shared exponent box decided
+  which law it belonged to by testing whether its value fell inside that law's
+  range, and the ranges overlap, so switching from Time gain to Exponential
+  silently gave exp(2t) where the picker promised exp(1t), and returning to Time
+  gain destroyed the exponent the user had set.
+- **The axis-range boxes reported an amplitude range of "0" to "0"** on data
+  that actually ran from 0 to about 2.8e-4. The edges were rounded to two
+  decimals, which erases any amplitude below 0.005 and tells a field engineer
+  the range is zero. They now follow the same convention the state strip and the
+  hover read-out already used: two decimals from 1 upward, three significant
+  digits below 1, exponent form below 1e-3.
+- **Click-to-add picked the trace next door.** The cursor was read back through
+  a second rounding step instead of through the inverse of the map the painter
+  actually uses, so the right half of every trace's column band resolved to the
+  next trace, and on a section zoomed out far enough to be drawn decimated it
+  could name a trace that was never on screen at all. The hover read-out, the
+  first-break seed and drag placement and the '+ Workbench' click now share one
+  answer with the pixels.
+- **Paging through a folder threw the view away.** The File Viewer re-fitted and
+  cleared the axis boxes on every refresh, so stepping Prev/Next through a
+  hundred records meant re-zooming a hundred times, which defeats the point of
+  comparing them. The window now survives navigation and is reset only where it
+  was asked for, on a fresh Open and on Clear. Because the next record can be
+  shorter, a kept window is never restored blind: it is clamped to the traces
+  and samples that record really has, and the label says what had to be done,
+  including when nothing usable survived and the view fell back to a fit.
+- **A typed axis range kept overriding the zoom that came after it.** Typing a
+  range, then wheel-zooming, then paging to the next record snapped back to the
+  typed numbers. A typed range now applies when it is typed and stops overriding
+  afterwards, and the boxes are refilled with the window actually painted, so
+  they can no longer show a range the display is ignoring.
+- **The Trace Inspector, Spectrum and Velocity panels threw their view away
+  too**, so the same comparison could not be made twice. The Inspector's time
+  window now survives stepping traces and stepping files, carried in
+  milliseconds so that it means the same time on a trace with a different sample
+  interval. Spectrum and Velocity keep their windows in physical units, which
+  mean the same thing on the next record, clamped to what the new data cover.
+  Amplitude still re-fits per trace on purpose: the Scale control is what makes
+  amplitude comparable, and a raw amplitude window pinned on one trace would
+  clip a stronger neighbour.
+- **On a header-spaced section the wiggles were scaled to the average trace
+  spacing**, not to the neighbour each trace actually has. Where offsets bunched
+  up the wiggles overlapped into a blob, and where the spread opened out they
+  shrank to threads, so the display was least readable exactly where the
+  geometry was most irregular. The excursion now follows the distance to the
+  nearest distinct neighbour, read off the same positions the forward map and
+  the hit test share. It stays symmetric about the trace, because a different
+  width to the left and to the right would draw a peak and a trough of equal
+  sample value at different widths and the waveform shape would depend on where
+  the neighbours sit. Nothing moves on an evenly spaced record.
+- **The display-state strip was cut off mid-word**, so it could read as a code
+  with its meaning severed, and on some records a whole clause vanished with no
+  sign it had ever existed. A half sentence looks like information and is not.
+  The strip now drops whole trailing clauses rather than trimming characters,
+  and says how many it dropped, so whatever is on screen is always a complete,
+  true statement. On a panel that can be saved as an image the count points at
+  the export, which reprints in full every line the screen had to cut; on a
+  panel with no image export it says instead that widening the window will show
+  them, which is the only recovery a reader there actually has. Long
+  single-sentence warnings were split into clauses that can stand alone for the
+  same reason, so the near-trace gather's resampling warning and the attribute
+  profile's caveat now survive on a narrow window instead of disappearing whole.
+- **A double-click on the SPS survey grid placed a pick.** The click handler
+  fired on both clicks of the double-click before the fit ran, so fitting the
+  view opened the station inspector on the way. This was the same defect the
+  Velocity panel had.
+- **Export file names now go through the same sanitiser as the conversion
+  paths.** The image and spreadsheet exports passed their name straight to the
+  save dialog, while the converter ran its output names through a sanitiser
+  first, so control characters and bidirectional override characters were not
+  stripped there. Not exploitable, since the destination directory comes from
+  the native dialog and the final name is shown before anything is written, but
+  it broke the naming discipline the rest of the app follows. The extension is
+  reattached verbatim, so the enforced suffix is untouched.
+
+### Changed
+
+- **One interaction model on every data canvas:** cursor-anchored wheel zoom,
+  drag to pan and double-click to fit, with one shared zoom step. Five separate
+  implementations had drifted apart, leaving the Spectrum with no pan and no
+  fit, the Velocity panel with no pan at all, and the Sweeps plots with no wheel
+  zoom. Each viewer keeps its own zoom arithmetic, clamp and fit; only the
+  plumbing is shared.
+- Time axes are labelled at round numbers on every panel, and timestamps are
+  written in one unambiguous format with the UTC offset.
+- The File Viewer toolbar was compacted so the section itself starts higher on
+  the page, and the display controls moved into a panel that only needs to be
+  open while they are being changed, because the state strip reports them
+  permanently.
+- The SPS survey grid was the last data canvas with its own pan and zoom
+  listeners, with its own wheel factor, its own drag guard and its own
+  double-click fit. It now goes through the same interaction plumbing as every
+  other canvas and inherits the shared zoom step and the shared
+  click-versus-drag guard. Only the plumbing is shared: the grid keeps its own
+  transform, and its zoom stays uniform in x and y on purpose, because it is a
+  map of ground positions.
+- **Colour mapping no longer allocates per pixel.** Every colour map returned a
+  fresh three-element array for each cell, and at the section's size cap that is
+  four million short-lived arrays per redraw, on a machine that is often a
+  laptop in a field vehicle. Each map is now written once as a function that
+  puts the colour straight into the destination buffer, with the readable
+  per-value API a thin wrapper around the same code so that the two cannot
+  drift. Measured at the 2000x2000 cap over three redraws: 234 ms per redraw
+  down to 43, and 409 garbage collections down to 6, five of which are module
+  load. The output is byte identical.
+- **The Trace Inspector no longer re-sorts the whole trace on every pan tick.**
+  Its default scale basis is computed over the whole trace, so it cannot change
+  while the time window moves, yet it was recomputed twice on every mouse move
+  of a drag. The whole-trace bases are now remembered against the samples they
+  were computed from, while the window-dependent basis stays live because it
+  genuinely does move with a pan. Measured over a 40-move drag on a real record:
+  80 recomputations before, 0 during the drag after.
+- **Real dataset names and local machine paths were removed from the repo.** The
+  QA harness, the core test runner and the developer scripts carried the owner's
+  own corpus in their fallback values, which is on this project's own forbidden
+  list. All of them now resolve their inputs through an environment variable,
+  then a git-ignored local configuration file, then a generic placeholder under
+  a data root that no longer defaults to anybody's disk.
+  `qa/local-paths.example.json` is the file a contributor copies, a missing
+  input names its own key and the three ways to point it at real data instead of
+  failing as though a format were broken, and an unconfigured machine states a
+  skip rather than reporting a false pass.
+- The documentation was brought back in line with the product. The README
+  claimed four colour maps and described the gain as a slider plus AGC, both of
+  which were false, and neither it nor the in-app manual mentioned any of the
+  work above.
+
+## [0.7.13] - 2026-09-03
+
+### Fixed
+
+- **A file recorded in the standard 24-bit SEG-D format was decoded as 20-bit.**
+  Format code 8036 is the code SEG-D defines for 24-bit two's-complement
+  demultiplexed samples, and it was falling through to the 20-bit branch. The
+  samples came out wrong, with no error and nothing to indicate anything had
+  happened. Non-standard vendor codes for the same thing were already handled;
+  the standard one was not.
+
+### Changed
+
+- Every claim this project makes about a standard has been checked against the
+  published document rather than from memory, and the source is now cited beside
+  the claim. Five statements were wrong: a SEG-D revision 2.1 writer was
+  advertised and does not exist, all SEG-Y revision 2 sample codes were claimed
+  where five are decoded, the base scan interval was described as revision 1
+  codes when every revision encodes it as a binary value, SEG-2 was called
+  little-endian throughout when the standard takes byte order from the file
+  descriptor block, and Seismic Unix big-endian was called canonical when the
+  reference implementation writes host-native order.
+- Two claims that could not be verified, because the documents are paywalled,
+  are now marked as unverified instead of asserted: a detail of the IOGP P1/11
+  version history, and the exact publication month of SEG-D revision 3.0.
+- **The EPSG attribution now meets the dataset's terms of use.** It acknowledges
+  IOGP ownership, states that a subset is incomplete without the elements
+  Guidance Note 7-1 Annex A lists as essential, and passes on the obligation to
+  inform anyone you give the data to. That is a licence condition, not a
+  courtesy.
+- The README credits the people whose real problems shaped this software, and
+  names where that work happened, with an explicit statement that SeisConv is
+  its author's own work and carries no institutional endorsement.
+
 ## [0.7.12] - 2026-09-03
 
 ### Fixed, and these produced wrong coordinates

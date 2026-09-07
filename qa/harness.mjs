@@ -4,7 +4,8 @@
 import { _electron as electron } from 'playwright';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { mkdirSync, readFileSync } from 'node:fs';
+import { existsSync, mkdirSync } from 'node:fs';
+import { loadLocalConfig } from './local-paths.mjs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 export const APP_DIR = resolve(__dirname, '..');           // repo root (package.json main=dist/main.js)
@@ -15,19 +16,44 @@ mkdirSync(SHOTS, { recursive: true });
 // in this order:
 //   1) its env var            (SEISCONV_QA_SEGY / SEISCONV_QA_LE / SEISCONV_QA_SPS)
 //   2) qa/local-paths.json    (git-ignored, per-machine: { "segy": "...", "le": "...", "sps": [...] })
-//   3) the neutral default below, under SEISCONV_QA_DATA_ROOT
-export const DATA_ROOT = process.env.SEISCONV_QA_DATA_ROOT || 'D:\\Projects\\SeisconvApp';
+//   3) the placeholder default below, under SEISCONV_QA_DATA_ROOT
+//
+// TO RUN THE QA SUITES ON YOUR OWN DATA, do either of:
+//   a) set SEISCONV_QA_DATA_ROOT to a folder holding files named as the
+//      defaults below (example.segy / example-le.sgy / example.s01|r01|x01), or
+//   b) copy qa/local-paths.example.json to qa/local-paths.json (git-ignored) and
+//      put the absolute path of each of your own files in it.
+// The defaults are placeholders, not real files: with neither set, the suites
+// report the missing input by name instead of silently testing nothing.
+export const DATA_ROOT = process.env.SEISCONV_QA_DATA_ROOT || '';
 
-let LOCAL = {};
-try { LOCAL = JSON.parse(readFileSync(join(__dirname, 'local-paths.json'), 'utf8')) || {}; } catch { /* optional per-machine file */ }
+const LOCAL = loadLocalConfig();
 
 const splitList = (v) => String(v).split(';').map((s) => s.trim()).filter(Boolean);
+
+/** A placeholder default under DATA_ROOT. Deliberately a generic file name: no
+ *  survey, site or job identifier belongs in a committed file. */
+export const sample = (name) => (DATA_ROOT ? join(DATA_ROOT, name) : name);
+
+/** Warn once, legibly, when a configured input is not on disk, naming both ways
+ *  of pointing it somewhere real. */
+function warnMissing(key, paths) {
+  const gone = paths.filter((p) => !existsSync(p));
+  if (!gone.length) return;
+  console.warn(
+    `[qa] input "${key}" not found: ${gone.join(', ')}\n` +
+    `     point it at your own data with SEISCONV_QA_${key.toUpperCase()} ` +
+    `(';'-separated for a list), with SEISCONV_QA_DATA_ROOT, ` +
+    `or with the "${key}" key in qa/local-paths.json (git-ignored).`,
+  );
+}
 
 /** One configured path for `key`: env > qa/local-paths.json > `fallback`. */
 export function qaPath(key, fallback) {
   const env = process.env['SEISCONV_QA_' + key.toUpperCase()];
   const loc = Object.prototype.hasOwnProperty.call(LOCAL, key) ? LOCAL[key] : undefined;
   const v = env || (Array.isArray(loc) ? loc[0] : loc) || fallback;
+  warnMissing(key, [String(v)]);
   return String(v);
 }
 
@@ -37,14 +63,16 @@ export function qaPaths(key, fallback) {
   if (env) return splitList(env);
   const loc = Object.prototype.hasOwnProperty.call(LOCAL, key) ? LOCAL[key] : undefined;
   const v = loc || fallback;
-  return Array.isArray(v) ? v.map((x) => String(x).trim()).filter(Boolean) : splitList(v);
+  const list = Array.isArray(v) ? v.map((x) => String(x).trim()).filter(Boolean) : splitList(v);
+  warnMissing(key, list);
+  return list;
 }
 
-export const SEGY = qaPath('segy', `${DATA_ROOT}\\Data_Games\\00000186_SegY_Rev2.segy`);
+export const SEGY = qaPath('segy', sample('example.segy'));
 export const SPS = qaPaths('sps', [
-  `${DATA_ROOT}\\SPS_Games\\NodesCheck20.s01`,
-  `${DATA_ROOT}\\SPS_Games\\NodesCheck20.r01`,
-  `${DATA_ROOT}\\SPS_Games\\NodesCheck20.x01`,
+  sample('example.s01'),
+  sample('example.r01'),
+  sample('example.x01'),
 ]);
 
 export const sleep = (ms) => new Promise((r) => setTimeout(r, ms));

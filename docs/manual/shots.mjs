@@ -2,6 +2,20 @@
 //
 //   npm run manual:shots            build the fixtures, drive the BUILT app, write every image
 //   npm run manual:shots -- --only sps,help    only the steps whose id contains one of these
+//   npm run manual:shots -- --no-callouts      take the SAME pictures without the numbered markers
+//   npm run manual:shots -- --out <dir>        write the images somewhere other than docs/manual/img
+//
+// --no-callouts / --out exist for the marketing set: outside the manual there is no legend under
+// the figure, so a numbered marker points at nothing and reads as unfinished. --no-callouts skips
+// only the PAINTING - every callout is still measured and a missing/off-screen one is still
+// reported and still fails the run, so the guard that catches a control that moved is unaffected.
+// Use --out together with it, so the manual's own images (which MUST keep their callouts) are
+// never overwritten. NOTE that a full (non --only) run WIPES the --out directory first, exactly
+// as it wipes docs/manual/img, and writes the WHOLE set - 34 PNGs plus a .json per shot plus
+// index.json. So point --out at a SCRATCH directory and copy the pictures you want out of it:
+//   node docs/manual/shots.mjs --no-callouts --out D:\some\scratch\dir
+// The steps share state (the GeoTIFF wizard needs the SPS the sps step loaded, and so on), so
+// take the whole set and pick from it rather than trying to shortcut with --only.
 //
 // COMMITTED TOOLING, NOT A SCRATCH DRIVER. Every picture in the manual is produced here, by
 // driving the real application through the real controls, so the whole set can be regenerated
@@ -21,14 +35,21 @@
 //
 // OUTPUT. docs/manual/img/<name>.png + <name>.json, plus img/index.json (the manifest).
 import { mkdirSync, writeFileSync, readFileSync, rmSync, existsSync, readdirSync, statSync } from 'node:fs';
-import { dirname, join, parse as parsePath } from 'node:path';
+import { dirname, join, resolve, parse as parsePath } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { tmpdir } from 'node:os';
 import { launch, mockDialogs, gotoTab, sleep, APP_DIR } from '../../qa/harness.mjs';
 import { buildFixtures } from './fixtures.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
-const IMG = join(HERE, 'img');
+const argAfter = (name) => {
+  const i = process.argv.indexOf(name);
+  return i >= 0 ? String(process.argv[i + 1] || '') : null;
+};
+const outArg = argAfter('--out');
+const IMG = outArg ? resolve(outArg) : join(HERE, 'img');
+/** Paint the markers? OFF only skips the drawing; measuring and the MISSING guard still run. */
+const PAINT_CALLOUTS = !process.argv.includes('--no-callouts');
 
 /** One window size for the whole set, so no two pictures in the manual disagree.
  *  The height is a REQUEST: Windows clamps the content box to the work area, so on a
@@ -71,8 +92,8 @@ async function scanFrame(win) {
  * reported as a MISSING callout rather than silently dropped: a marker that points at
  * nothing means the manual text is about to describe a control that moved.
  */
-async function paintCallouts(win, marks) {
-  return win.evaluate(({ marks }) => {
+async function paintCallouts(win, marks, paint) {
+  return win.evaluate(({ marks, paint }) => {
     const host = document.createElement('div');
     host.id = '__manual_callouts';
     host.style.cssText = 'position:fixed;inset:0;z-index:2147483647;pointer-events:none;font:700 15px/1 Segoe UI,system-ui,sans-serif';
@@ -87,6 +108,10 @@ async function paintCallouts(win, marks) {
       const off = !el || !r || r.width < 1 || r.height < 1
         || r.bottom < 4 || r.top > innerHeight - 4 || r.right < 4 || r.left > innerWidth - 4;
       if (off) { out.push({ n, sel: m.sel, label: m.label, missing: true }); return; }
+      if (!paint) {
+        out.push({ n, sel: m.sel, label: m.label, rect: { x: Math.round(r.left), y: Math.round(r.top), w: Math.round(r.width), h: Math.round(r.height) } });
+        return;
+      }
       const box = document.createElement('div');
       box.style.cssText = `position:fixed;left:${r.left - 3}px;top:${r.top - 3}px;width:${r.width + 6}px;height:${r.height + 6}px;`
         + 'border:2px solid #ff9f1c;border-radius:6px;box-shadow:0 0 0 2px rgba(0,0,0,.55)';
@@ -105,7 +130,7 @@ async function paintCallouts(win, marks) {
     });
     document.body.appendChild(host);
     return out;
-  }, { marks });
+  }, { marks, paint });
 }
 async function clearCallouts(win) {
   await win.evaluate(() => document.getElementById('__manual_callouts')?.remove());
@@ -128,7 +153,7 @@ async function capture(win, name, caption, marks = [], opts = {}) {
     await win.evaluate((s) => document.querySelector(s)?.scrollIntoView({ block: 'center', behavior: 'instant' }), opts.scrollTo);
     await sleep(400);
   }
-  const painted = marks.length ? await paintCallouts(win, marks) : [];
+  const painted = marks.length ? await paintCallouts(win, marks, PAINT_CALLOUTS) : [];
   await sleep(120);
   const png = join(IMG, name + '.png');
   await win.screenshot({ path: png });
@@ -145,7 +170,7 @@ async function capture(win, name, caption, marks = [], opts = {}) {
   shots.push(rec);
   const flag = leaks.length ? ` !! LEAK ${leaks.join('|')}` : '';
   const miss = rec.missingCallouts.length ? ` !! MISSING ${rec.missingCallouts.join('|')}` : '';
-  console.log(`  shot ${name}.png (${(rec.bytes / 1024).toFixed(0)} kB, ${painted.length} callouts)${flag}${miss}`);
+  console.log(`  shot ${name}.png (${(rec.bytes / 1024).toFixed(0)} kB, ${painted.length} callouts${PAINT_CALLOUTS ? '' : ', not painted'})${flag}${miss}`);
   return rec;
 }
 

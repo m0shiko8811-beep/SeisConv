@@ -12,15 +12,15 @@
 //         Point HOVER_SEGY / HOVER_SPS (';'-separated) at a paired SEG-Y + SPS
 //         set, or put { "le": ..., "hoverSps": [...] } in qa/local-paths.json.
 
-import { launch, mockDialogs, gotoTab, openFile, loadSps, shot, sleep, DATA_ROOT, qaPath, qaPaths } from './harness.mjs';
+import { launch, mockDialogs, gotoTab, openFile, loadSps, shot, sleep, sample, qaPath, qaPaths } from './harness.mjs';
 
-const SEGY = process.env.HOVER_SEGY || qaPath('le', `${DATA_ROOT}\\Data_Games\\little-endian.sgy`);
+const SEGY = process.env.HOVER_SEGY || qaPath('le', sample('example-le.sgy'));
 const SPS = process.env.HOVER_SPS
   ? process.env.HOVER_SPS.split(';').map((s) => s.trim()).filter(Boolean)
   : qaPaths('hoverSps', [
-      `${DATA_ROOT}\\SPS_Games\\NodesCheck20.s01`,
-      `${DATA_ROOT}\\SPS_Games\\NodesCheck20.r01`,
-      `${DATA_ROOT}\\SPS_Games\\NodesCheck20.x01`,
+      sample('example.s01'),
+      sample('example.r01'),
+      sample('example.x01'),
     ]);
 
 const rectOf = (win, id) => win.evaluate((i) => {

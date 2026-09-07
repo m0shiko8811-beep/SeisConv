@@ -25,18 +25,18 @@ import { tmpdir } from 'node:os';
 import { existsSync, readFileSync, rmSync } from 'node:fs';
 import {
   sleep, mockDialogs, gotoTab, openFile,
-  APP_DIR, SHOTS, SEGY, DATA_ROOT, qaPath, qaPaths,
+  APP_DIR, SHOTS, SEGY, sample, qaPath, qaPaths,
 } from './harness.mjs';
 
 // -- Test files (override via env) ------------------------------------------
 // SEGY comes from the shared harness. LE/SPS are exercised only by this full
 // driver, so their defaults stay here - same env > qa/local-paths.json > default
 // resolution (see harness qaPath/qaPaths).
-const LE   = qaPath('le', `${DATA_ROOT}\\Data_Games\\little-endian.sgy`);
+const LE   = qaPath('le', sample('example-le.sgy'));
 const SPS  = qaPaths('sps', [
-  `${DATA_ROOT}\\SPS_Games\\NodesCheck20.s01`,
-  `${DATA_ROOT}\\SPS_Games\\NodesCheck20.r01`,
-  `${DATA_ROOT}\\SPS_Games\\NodesCheck20.x01`,
+  sample('example.s01'),
+  sample('example.r01'),
+  sample('example.x01'),
 ]);
 
 // Dark scientific background painted under every plot canvas (see index.html .canvas).
@@ -257,7 +257,8 @@ const globalPageErrors = [];
 
   // -- 4c) SPS CREATION - seed a REAL coordinate CSV out of the survey loaded in
   // step 4, then import it back through the column-mapping wizard. Self-seeding
-  // because SPS_Games holds no CSV, and using the app's own coordcsv writer means
+  // because the configured SPS input is a triplet with no CSV beside it, and
+  // using the app's own coordcsv writer means
   // the fixture is real ITM/UTM survey data rather than a synthetic stub.
   //
   // The overlay assertion works with NO network: canvasBlank counts alpha < 8 as
@@ -341,10 +342,16 @@ const globalPageErrors = [];
   // -- 5) VELOCITY - compute NMO semblance + canvas --
   await step('tab-vel', 'panel-vel', '5-velocity.png', async (notes) => {
     await win.click('#velComputeBtn');
-    // semblance is heavy; wait for the velLabel to change or the canvas to fill
+    // Semblance is heavy. Wait for it to FINISH, not merely to start: the label passes
+    // through "Computing..." on the way, and treating that as done made this step report a
+    // blank canvas whenever semblance took longer than the settle sleep below. That is a
+    // flaky gate, which is worse than no gate, because it cannot tell a real regression
+    // from a slow machine.
     await win.waitForFunction(() => {
       const l = document.getElementById('velLabel');
-      return l && !/Open a file, then compute/.test(l.textContent);
+      if (!l) return false;
+      const t = l.textContent || '';
+      return !/Open a file, then compute/.test(t) && !/Computing/i.test(t);
     }, null, { timeout: 40000 }).catch(() => notes.push('WARN: semblance did not finish in 40s'));
     await sleep(600);
     const vel = await canvasBlank(win, 'velCanvas', CANVAS_BG);

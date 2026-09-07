@@ -61,15 +61,44 @@ under `SEISCONV_QA_DATA_ROOT`** (no default; set it to wherever your sample data
 
 | Env var | local-paths.json key | Default | Used by |
 |---------|----------------------|---------|---------|
-| `SEISCONV_QA_SEGY` | `segy` | `<DATA_ROOT>\Data_Games\00000186_SegY_Rev2.segy` | Converter / Trace / Section / Velocity |
-| `SEISCONV_QA_LE`   | `le`   | `<DATA_ROOT>\Data_Games\little-endian.sgy` | Workbench + LE re-open (251 traces) |
-| `SEISCONV_QA_SPS`  | `sps`  | `<DATA_ROOT>\SPS_Games\NodesCheck20.{s01,r01,x01}` (`;`-separated) | SPS tab (multiSelections) |
+| `SEISCONV_QA_SEGY` | `segy` | `<DATA_ROOT>/example.segy` | Converter / Trace / Section / Velocity |
+| `SEISCONV_QA_LE`   | `le`   | `<DATA_ROOT>/example-le.sgy` (a little-endian SEG-Y) | Workbench + LE re-open |
+| `SEISCONV_QA_SPS`  | `sps`  | `<DATA_ROOT>/example.{s01,r01,x01}` (`;`-separated) | SPS tab (multiSelections) |
 
-`qa/local-paths.json` (optional, never committed):
+The defaults are placeholder names, not files that ship with the repo: bring your
+own SEG-Y and SPS triplet. Nothing here names a real survey, site or job, and
+nothing that does may ever be committed. If an input is missing the harness
+prints which key it was and the three ways to point it somewhere real.
+
+`qa/local-paths.json` (optional, never committed). Copy
+`qa/local-paths.example.json` to `qa/local-paths.json` and fill in your own
+absolute paths:
 
 ```json
-{ "le": "D:\\path\\to\\little-endian.sgy" }
+{
+  "segy": "C:\\path\\to\\your.segy",
+  "le": "C:\\path\\to\\your-little-endian.sgy",
+  "sps": ["C:\\path\\to\\your.s01", "C:\\path\\to\\your.r01", "C:\\path\\to\\your.x01"]
+}
 ```
+
+The same file also feeds `scripts/test-fuzz.ts`, `scripts/test-crossformat.ts`
+and `scripts/positioning-qc.ts` (`npm run test:fuzz` / `test:crossformat` /
+`qc:positioning`, all three rolled into `npm run test:all`), via the shared
+resolver in `qa/local-paths.mjs` (env var > this file > loud failure - never a
+silent fallback to a real path):
+
+| Env var | local-paths.json key | Used by |
+|---------|----------------------|---------|
+| `SEISCONV_FUZZ_DATA` | `fuzzData` | `test:fuzz` - a folder of `.segd`/`.segy` files to mutate |
+| `SEISCONV_FUZZ_DIRS` | `fuzzDirs` | `test:fuzz` - optional `;`-separated sub-directories under `fuzzData` |
+| `SEISCONV_XFMT_DIR` | `xfmtDir` | `test:crossformat` - a corpus root holding paired `SEGD_Rev_2` / `SEGD_Rev_3` / `SEGY_REV_0` / `SEGY_Rev_2` sub-directories |
+| `SEISCONV_SPS_DIR` + `SEISCONV_SPS_BASE` | `spsDir` + `spsBase` | `qc:positioning` - a folder holding `<spsBase>.s01/.r01/.x01` |
+
+With none of those set, each script names exactly what to set and exits
+non-zero (`test:fuzz`/`test:crossformat`) or SKIPs with exit 0
+(`qc:positioning`, matching the file-backed-tests convention) - it never
+falls back to a path baked into the repo.
 
 ```sh
 # PowerShell

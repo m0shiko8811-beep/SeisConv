@@ -318,7 +318,13 @@ main.main{grid-area:main;overflow:hidden;display:flex;flex-direction:column;min-
 .fileinfo .fi-name{color:var(--teal-deep);font-weight:700;}
 .fileinfo .fi-body{color:var(--ink-3);font-family:var(--mono);}
 
-.scroll{flex:1;overflow:auto;padding:8px 22px 18px;min-height:0;}
+/* `scrollbar-gutter:stable` keeps the 10px scrollbar lane reserved even when the
+   panel is short enough not to need one. Without it, anything that makes a panel
+   taller (the first velocity pick, a health/first-break bar under the section)
+   makes the vertical scrollbar appear, every canvas below loses 10px of width,
+   and the picture reflows sideways under the cursor - which is why the FIRST
+   velocity pick used to land ~5px left of the click while later picks were fine. */
+.scroll{flex:1;overflow:auto;scrollbar-gutter:stable;padding:8px 22px 18px;min-height:0;}
 .scroll::-webkit-scrollbar{width:10px;height:10px;}
 .scroll::-webkit-scrollbar-thumb{background:var(--scroll-thumb);border-radius:9px;border:2px solid var(--canvas);}
 
@@ -775,12 +781,12 @@ table.olog-grid tr.olog-row-pending:hover td:not(.olog-rowhdr){background:rgba(2
 .audit-tools .trace-label{margin-left:auto;}
 .audit-list{display:flex;flex-direction:column;gap:0;max-height:46vh;overflow:auto;border:1px solid var(--hair-soft);border-radius:9px;}
 .audit-empty{padding:18px;text-align:center;color:var(--ink-3);font-size:12.5px;}
-.audit-entry{display:grid;grid-template-columns:148px 78px 90px 1fr;gap:10px;align-items:baseline;padding:7px 12px;border-bottom:1px solid var(--hair-soft);font-size:12px;}
+.audit-entry{display:grid;grid-template-columns:214px 78px 90px 1fr;gap:10px;align-items:baseline;padding:7px 12px;border-bottom:1px solid var(--hair-soft);font-size:12px;}
 .audit-entry:last-child{border-bottom:none;}
 .audit-entry .ae-ts{font-family:var(--mono);color:var(--ink-3);font-size:11px;white-space:nowrap;}
 .audit-entry .ae-user{font-weight:700;color:var(--ink);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
 .audit-entry .ae-act{font-family:var(--mono);color:var(--teal-deep);text-transform:uppercase;font-size:10.5px;letter-spacing:.4px;}
-.audit-entry .ae-detail{color:var(--ink-2);}
+.audit-entry .ae-detail{color:var(--ink-2);min-width:0;overflow-wrap:anywhere;}
 .audit-entry .ae-detail .ae-tab{color:var(--ink-3);font-size:11px;}
 .audit-backups{margin-top:14px;padding-top:12px;border-top:1px solid var(--hair-soft);}
 .audit-bk-head{font-size:12px;font-weight:800;color:var(--ink-2);margin-bottom:8px;}
@@ -871,6 +877,7 @@ table.olog-grid tr.olog-row-pending:hover td:not(.olog-rowhdr){background:rgba(2
 
 /* ====== shared toolbars / controls for QC tabs ====== */
 .trace-bar,.sec-bar{display:flex;align-items:center;gap:12px;margin-bottom:12px;flex-wrap:wrap;}
+#panel-section .sec-bar{margin-bottom:6px;}
 .trace-bar .slider{flex:1;}
 .trace-label{font-size:12px;color:var(--ink-3);font-family:var(--mono);white-space:nowrap;}
 .ctl{background:var(--input-bg);color:var(--ink);border:1px solid var(--hair);border-radius:9px;padding:6px 9px;font-family:inherit;font-size:12px;height:32px;}
@@ -975,6 +982,14 @@ table.olog-grid tr.olog-row-pending:hover td:not(.olog-rowhdr){background:rgba(2
 .health-adv-grid .ctl-lbl{font-family:var(--mono);font-size:10.5px;color:var(--ink-3);}
 .health-adv-grid input{width:62px;}
 .health-adv-note{font-size:10.5px;color:var(--ink-3);margin:8px 0 0;line-height:1.5;}
+/* Near-trace gather: the records that contributed no column. Scrolls rather than
+   pushing the gather canvas off the modal when a folder has many unreadable files. */
+/* The attribute profile keeps .canvas (same 1px border, so its clientWidth matches
+   #secCanvas to the pixel) and overrides only the height. */
+.sec-attr{height:172px;margin-top:8px;}
+.gather-skips{font-family:var(--mono);font-size:11px;color:var(--ink-3);line-height:1.5;
+  margin:6px 0 10px;padding:6px 10px 6px 26px;max-height:120px;overflow:auto;
+  background:var(--surface);border:1px solid var(--hair-soft);border-radius:8px;}
 .health-sens-foot{display:flex;align-items:center;gap:12px;margin-top:10px;}
 .health-live{font-family:var(--mono);font-size:11.5px;color:var(--ink);font-weight:600;font-variant-numeric:tabular-nums lining-nums;}
 .health-coverage{font-family:var(--mono);font-size:11px;color:var(--ink-3);background:var(--surface);border:1px solid var(--hair-soft);border-radius:8px;padding:6px 10px;margin:2px 0 10px;line-height:1.5;}
@@ -1167,16 +1182,18 @@ table.olog-grid tr.olog-row-pending:hover td:not(.olog-rowhdr){background:rgba(2
   border:1.5px dashed var(--cyan);background:rgba(34,201,191,.16);border-radius:3px;
   box-shadow:0 0 0 1px rgba(13,31,51,.35);
 }
-/* Live hover read-out (Feature A) - a mono pill over the bottom-left of the plot.
-   pointer-events:none so it never intercepts the canvas's own mouse handlers
-   (hover/box-zoom rely on them). Always visible regardless of the 60vh canvas. */
+/* Live hover read-out (Feature A) - a mono pill on its own row DIRECTLY UNDER the
+   plot. It used to float over the bottom-left of the canvas, where it hid the
+   bottom axis ticks and, on Velocity, the panel's own "(click to pick)" caption.
+   In the flow it can never cover drawn content on any viewer, and the canvas
+   keeps its fixed 60vh height so nothing it draws moves. It stays after the
+   canvas inside .cv-wrap, so the rubber-band overlay still measures from the
+   canvas's top-left. */
 .cv-readout{
-  position:absolute;left:10px;bottom:10px;z-index:5;pointer-events:none;
-  max-width:calc(100% - 20px);
+  display:block;margin:6px 2px 0;max-width:100%;
   font-family:var(--mono);font-size:11px;line-height:1.3;color:#bfeee9;
   background:rgba(13,31,51,.74);border:1px solid rgba(52,219,208,.38);
   border-radius:7px;padding:4px 9px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;
-  backdrop-filter:blur(2px);-webkit-backdrop-filter:blur(2px);
 }
 
 /* ---- Zoom viewer (in-app, draggable + resizable overlay window) ----
@@ -1762,8 +1779,18 @@ table.olog-grid tr.olog-row-pending:hover td:not(.olog-rowhdr){background:rgba(2
           <button class="btn sm" id="traceBoxZoom" title="Magnifier - drag a box over the trace to open that time/amplitude region enlarged in a zoom viewer (Esc / click again to exit)" aria-label="Box-zoom a region">
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="7"/><path d="m21 21-4.3-4.3"/></svg>
           </button>
+          <label class="ctl-lbl" title="What the amplitude swing is measured against. Record max and Record pct are taken over the WHOLE trace, so zooming the time axis no longer changes how big an event looks; Visible window rescales to whatever is on screen.">Scale
+            <select id="traceScaleMode" class="ctl" style="width:126px">
+              <option value="max">Record max</option>
+              <option value="pct" selected>Record pct</option>
+              <option value="window">Visible window</option>
+            </select>
+          </label>
+          <label class="ctl-lbl" id="traceScalePctWrap" title="Percentile of the whole trace used by 'Record pct' - 95 ignores the hottest 5% of samples">Pct <input type="number" id="traceScalePct" class="ctl" style="width:62px" min="1" max="100" step="1" value="95"></label>
+          <label class="ctl-lbl" title="Flip the displayed polarity. DISPLAY ONLY - the stored samples are untouched and nothing written by Convert is affected. Shared with the File Viewer and the box-zoom viewer, since all three show the same open file."><input type="checkbox" id="traceInvert"> Flip polarity (display)</label>
           <span id="traceAxisRange" title="Type an exact axis window; blank/invalid reverts that axis to auto-fit"></span>
           <button class="btn sm" id="traceToWb" title="Add the current trace to the Trace Workbench">Add to Workbench</button>
+          <button class="btn sm" id="traceExportImgBtn" title="Save this panel exactly as it is drawn - the display-state strip, both axes and the colour bar - as a PNG image at three times the screen resolution, with the file name and the time of export added underneath.">Save image…</button>
           <span class="trace-label" id="traceLabel">Open a file to inspect traces</span>
         </div>
         <div class="cv-wrap">
@@ -1789,11 +1816,13 @@ table.olog-grid tr.olog-row-pending:hover td:not(.olog-rowhdr){background:rgba(2
 
       <!-- ===================== FILE VIEWER (section) ===================== -->
       <section id="panel-section" style="display:none;">
+        <!-- ROW A: file in / out + which file of the folder. ROW B (below) is the
+             display toolbar. Everything else the viewer offers lives behind the
+             Display / Health toggles so the section canvas starts high on screen -
+             this app is read on a laptop in a truck. -->
         <div class="sec-bar">
           <button class="btn sm" id="secOpenBtn" title="Open a seismic file (SEG-Y / SEG-D / SEG-2 / SU) - shared with the Converter and other viewers">Open file…</button>
           <button class="btn sm" id="secClearBtn" title="Clear the open seismic file and every derived view">Clear</button>
-        </div>
-        <div class="sec-bar">
           <button class="btn sm" id="filePrevBtn" title="Previous file in folder ([)" disabled>
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 6l-6 6 6 6"/></svg>
             Prev
@@ -1803,6 +1832,11 @@ table.olog-grid tr.olog-row-pending:hover td:not(.olog-rowhdr){background:rgba(2
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 6l6 6-6 6"/></svg>
           </button>
           <span class="trace-label" id="fileNavLabel">-</span>
+          <!-- Near-trace gather. Deliberately in ROW A, beside Prev/Next: it reads
+               the SAME folder list those buttons step, and row B is pinned to its
+               measured width (see the note on #secColor). Adding it here keeps
+               #secCanvas at top 257 at 1240x860 - re-measure if this row grows. -->
+          <button class="btn sm" id="secGatherBtn" title="Near-trace gather - take ONE chosen channel out of EVERY record in this folder and draw them side by side, one column per record. Shows how the source and the spread behave shot to shot, which a single-record view cannot." disabled>Gather…</button>
           <span class="seg" id="secPageNav" style="display:none" title="Page through this file in fixed blocks of traces - click to jump to the next / previous block">
             <button class="segbtn" id="secPagePrev" title="Previous block of traces" disabled>&#9664;</button>
             <span class="trace-label" id="secPageLabel" style="min-width:158px;text-align:center;font-variant-numeric:tabular-nums">-</span>
@@ -1810,20 +1844,33 @@ table.olog-grid tr.olog-row-pending:hover td:not(.olog-rowhdr){background:rgba(2
           </span>
           <label class="ctl-lbl" id="secPageSizeWrap" style="display:none" title="How many traces to show per block">Block <input type="number" id="secPageSize" class="ctl" style="width:78px" min="100" step="500" value="2000"></label>
           <span style="flex:1"></span>
+          <span id="secAxisRange" title="Type an exact axis window; blank/invalid reverts that axis to auto-fit"></span>
+        </div>
+        <div class="sec-bar">
           <select id="secMode" class="ctl">
             <option value="vd">Variable Density</option>
             <option value="wiggle">Wiggle</option>
             <option value="va">Variable Area</option>
             <option value="vdwig">VD + Wiggle</option>
           </select>
-          <select id="secColor" class="ctl">
+          <!-- Width is PINNED, and the number is measured, not guessed. .sec-bar is
+               flex-wrap, and this toolbar was compacted to two rows on purpose. At
+               1240x860 the row has just enough slack for 161px (the width the longest
+               new label auto-sizes to, showing it in full); 168px wraps the row and
+               drops #secCanvas from top 257.3 to 286.7. Re-measure before widening. -->
+          <select id="secColor" class="ctl" style="width:161px">
             <option value="seismic">Seismic</option>
             <option value="gray">Gray</option>
             <option value="amber">Amber</option>
             <option value="viridis">Viridis</option>
+            <option value="grayL">Gray (perceptual)</option>
+            <option value="berlin">Berlin (dark centre)</option>
+            <option value="vik">Vik (light centre)</option>
+            <option value="grayPosBlack">Gray (positive black)</option>
+            <option value="grayLPosBlack">Gray L* (positive black)</option>
           </select>
-          <label class="ctl-lbl">Gain <input type="range" id="secGain" class="slider sm" min="0.2" max="6" step="0.1" value="1"></label>
-          <label class="ctl-lbl"><input type="checkbox" id="secAgc"> AGC</label>
+          <button class="btn sm" id="secDisplayBtn" title="Display settings - gain, AGC, clip, excursion and the scale basis. Every one of them is reported permanently on the strip inside the section, so this panel only needs to be open while you change them." aria-expanded="false" aria-controls="secDisplayPanel">Display…</button>
+          <button class="btn sm" id="secHealthToggle" title="Trace health - scan every trace for dead, noisy, hot/weak, clipped/spiky or reversed traces. QC proposes, you confirm - flags are suggestions, not edits. Scan, then click a flagged row to locate it on the section. Raise a detector&#39;s sensitivity if it under-flags, lower it if it over-flags; every metric is shown against its LOCAL neighbour baseline." aria-expanded="false" aria-controls="secHealthWrap">Health…</button>
           <span class="seg" title="Zoom into the seismic data (wheel over the section, drag to pan, double-click to fit)">
             <button class="segbtn" id="secZoomOut" title="Zoom out (data)">&minus;</button>
             <button class="segbtn" id="secZoomFit" title="Fit / reset data zoom">Fit</button>
@@ -1832,66 +1879,187 @@ table.olog-grid tr.olog-row-pending:hover td:not(.olog-rowhdr){background:rgba(2
           <button class="btn sm" id="secBoxZoom" title="Magnifier - drag a box over the section to open that trace/time region enlarged in a zoom viewer (Esc / click again to exit)" aria-label="Box-zoom a region">
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="7"/><path d="m21 21-4.3-4.3"/></svg>
           </button>
-          <span id="secAxisRange" title="Type an exact axis window; blank/invalid reverts that axis to auto-fit"></span>
           <button class="btn sm" id="secToWb" title="Toggle, then click a trace on the section to add it to the Trace Workbench">+ Workbench</button>
           <button class="btn sm" id="secFbToggle" title="First breaks - assisted onset picking: drop 2+ seed picks, then Assisted fill picks the rest along the moveout. Click again (or this button) to exit." aria-pressed="false">First breaks</button>
           <span class="trace-label" id="secLabel">Open a file to view the section</span>
         </div>
-        <div class="sec-bar" id="secHealthBar">
-          <button class="btn sm" id="secHealthBtn" title="Scan every trace for quality problems - dead · noisy · hot/weak amplitude · clipped/spiky · reversed polarity - judged against LOCAL neighbour baselines, and flag them on the section" disabled>Health scan</button>
-          <button class="btn sm" id="secHealthSensBtn" title="Tune per-detector sensitivity (Low = stricter / fewer flags, High = more) - the flagged count updates live, no re-scan" disabled aria-expanded="false">Sensitivity…</button>
-          <button class="btn sm" id="secHealthClearBtn" title="Remove the trace-health flags + findings from the section" disabled>Clear flags</button>
-          <button class="btn sm" id="secHealthExportBtn" title="Export the flagged traces (per-detector score · confidence · reason · local baseline · real std) as CSV" disabled>Export report…</button>
-          <span class="health-legend" id="secHealthLegend" aria-hidden="true">
-            <span><span class="health-dot" data-flag="dead"></span>dead</span>
-            <span><span class="health-dot" data-flag="noisy"></span>noisy</span>
-            <span><span class="health-dot" data-flag="amp"></span>hot/weak</span>
-            <span><span class="health-dot" data-flag="clipped"></span>clipped/spiky</span>
-            <span><span class="health-dot" data-flag="reversed"></span>reversed</span>
-          </span>
-          <span style="flex:1"></span>
-          <span class="trace-label" id="secHealthSummary">Run a health scan to flag bad traces.</span>
-        </div>
-        <div class="sec-hint" id="secHealthHint">QC <em>proposes</em>, you confirm - flags are suggestions, not edits. Scan, then click a flagged row to locate it on the section. Raise a detector's sensitivity if it under-flags, lower it if it over-flags; every metric is shown against its LOCAL neighbour baseline.</div>
-        <div class="health-sens" id="secHealthSens" style="display:none;">
+        <!-- Collapsed DISPLAY panel: gain, AGC, clip, excursion and the scale basis.
+             Hidden by default, and nothing is lost by hiding it, because the display-state
+             strip painted inside the canvas reports every one of these settings at all
+             times. Opened by #secDisplayBtn; tab order follows the DOM, so every control
+             stays keyboard-reachable as soon as the panel is open. -->
+        <div class="health-sens" id="secDisplayPanel" style="display:none;">
           <div class="health-sens-grid">
-            <label class="ctl-lbl" title="DEAD - an absolute flat line, OR gated RMS far below the live-neighbour median (measured on a first-break time-gate so a normal quiet far-offset trace is NOT called dead)">dead
-              <select id="sensDead" class="ctl sm"><option value="low">Low</option><option value="med" selected>Med</option><option value="high">High</option></select></label>
-            <label class="ctl-lbl" title="NOISY - an RMS MAD z-score outlier (with a zero-crossing pre-screen) OR a spectral anomaly (dominant-freq / high-freq fraction / monochromatic 50-60 Hz) vs neighbours">noisy
-              <select id="sensNoisy" class="ctl sm"><option value="low">Low</option><option value="med" selected>Med</option><option value="high">High</option></select></label>
-            <label class="ctl-lbl" title="HOT / WEAK - amplitude MAD-outlier vs neighbours, both tails. The catch-all so a real bad trace doesn't slip the narrower families">hot/weak
-              <select id="sensAmp" class="ctl sm"><option value="low">Low</option><option value="med" selected>Med</option><option value="high">High</option></select></label>
-            <label class="ctl-lbl" title="CLIPPED / SPIKY - a contiguous at-rail RUN (true clipping) OR an isolated spike vs the trace's own robust amplitude">clipped
-              <select id="sensClipped" class="ctl sm"><option value="low">Low</option><option value="med" selected>Med</option><option value="high">High</option></select></label>
-            <label class="ctl-lbl" title="REVERSED POLARITY - flipped vs a robust median neighbour pilot, moveout-aligned + first-break gated, agreeing across two disjoint neighbour subsets (so legitimate AVO far-offset reversal is not flagged)">reversed
-              <select id="sensReversed" class="ctl sm"><option value="low">Low</option><option value="med" selected>Med</option><option value="high">High</option></select></label>
+            <label class="ctl-lbl" id="secExcWrap" title="Excursion - how far a sample at the clip level deflects, measured against the spacing to the NEAREST neighbouring trace. 1.0 is the usual default and just reaches that neighbour, whether the traces are evenly spaced or placed by a geometry header; above 1 the wiggles overlap their neighbours so coherent events join into a continuous band.">Exc
+              <input type="number" id="secExc" class="ctl" style="width:62px" min="0.1" max="8" step="0.1" value="1">
+            </label>
+            <label class="ctl-lbl" title="Display clip - percentile of the visible sample magnitudes at which the display saturates. 100 means no clipping beyond the scale basis. This is cosmetic only: it never changes the stored samples, and it is NOT the red 'clipped' health flag, which means the recording itself was overdriven.">Clip
+              <input type="number" id="secClip" class="ctl" style="width:62px" min="50" max="100" step="0.5" value="100">
+            </label>
+            <label class="ctl-lbl" title="How sample values map to the colour / wiggle scale. Record max = nothing ever clips; Record pct = ignore the few hottest traces so the rest stay readable; Per trace = every trace scaled to itself; None (raw) = full scale is the sample value 1, the only basis under which you can quote an absolute amplitude.">Scale
+              <select id="secScaleMode" class="ctl" style="width:126px">
+                <option value="max">Record max</option>
+                <option value="pct" selected>Record pct</option>
+                <option value="trace">Per trace</option>
+                <option value="raw">None (raw)</option>
+              </select>
+            </label>
+            <label class="ctl-lbl" id="secScalePctWrap" title="Across-trace percentile used by 'Record pct' - 95 ignores the hottest 5% of traces">Pct <input type="number" id="secScalePct" class="ctl" style="width:62px" min="1" max="100" step="1" value="95"></label>
+            <!-- Gain LAW. Sits between AGC and the scale basis: AGC (worker) -> gain
+                 law -> scale basis -> the dB gain below -> display clip. The laws are
+                 Seismic Unix `sugain` (tpow, epow, gpow, pbal) applied in SU's own
+                 order. The point of the time laws is that the correction depends only
+                 on TIME, identically on every trace, so a weak geophone still reads as
+                 weak - which is exactly what AGC and Equalise destroy. -->
+            <label class="ctl-lbl" title="How the display brightens the data before the scale basis and the dB gain below. Applied after AGC. The sentence underneath describes whichever law is selected.">Gain law
+              <select id="secGainLaw" class="ctl" style="width:190px">
+                <option value="none">None (true amplitude)</option>
+                <option value="fixed" selected>Fixed gain</option>
+                <option value="tpow">Time gain (t^n)</option>
+                <option value="epow">Exponential time gain</option>
+                <option value="gpow">Amplitude compression</option>
+                <option value="pbal">Equalise traces (RMS)</option>
+              </select>
+            </label>
+            <label class="ctl-lbl" id="secGainLawExpWrap" style="display:none" title="The exponent used by the selected gain law">n
+              <input type="number" id="secGainLawExp" class="ctl" style="width:70px" min="-3" max="4" step="0.1" value="2">
+            </label>
+            <label class="ctl-lbl" title="Display gain in decibels - covers the whole useful range (about 600:1 on raw data) in one smooth sweep">Gain
+              <input type="range" id="secGainDb" class="slider sm" min="-20" max="60" step="0.5" value="0">
+            </label>
+            <input type="number" id="secGain" class="ctl" style="width:76px" min="0.1" max="1000" step="any" value="1" title="Exact gain multiplier - type a value here, or sweep the dB slider">
+            <span class="trace-label" id="secGainReadout" style="min-width:104px;font-variant-numeric:tabular-nums" title="The display gain actually applied">&times;1.00 (0.0 dB)</span>
+            <button class="btn sm" id="secGainReset" title="Reset the display gain to &times;1 (0 dB)">Reset</button>
+            <label class="ctl-lbl"><input type="checkbox" id="secAgc"> AGC</label>
+            <label class="ctl-lbl" title="Flip the displayed polarity of every trace. DISPLAY ONLY - the stored samples are untouched and nothing written by Convert is affected. Use it to check a channel you suspect is wired in reverse. The state strip says FLIPPED while it is on."><input type="checkbox" id="secInvert"> Flip polarity (display)</label>
+            <label class="ctl-lbl" id="secAgcWinWrap" style="display:none" title="AGC window length in milliseconds - shorter equalises harder and flattens the amplitude character">Win <input type="number" id="secAgcWin" class="ctl" style="width:70px" min="10" max="5000" step="10" value="250"></label>
+            <!-- RMS + Mean only. The core also implements a MEDIAN AGC, but it sorts a
+                 fresh window per sample: measured 25 s for one 222-trace section at a
+                 100 ms window, versus ~10 ms for RMS/Mean (which use prefix sums). It
+                 is not offered here because it would appear to hang the viewer. -->
+            <label class="ctl-lbl" id="secAgcTypeWrap" style="display:none" title="How the AGC measures the signal level inside each window">
+              <select id="secAgcType" class="ctl" style="width:86px">
+                <option value="rms">RMS</option>
+                <option value="mean">Mean</option>
+              </select>
+            </label>
+            <!-- Trace spacing. Positions each trace by a geometry header instead of by its
+                 array index, so a spread gap or a dropped station is drawn as a REAL gap
+                 rather than being silently closed up. SEG-Y's fixed trace header carries no
+                 receiver-station field, so the options are the geometry numbers it does
+                 store. Lives in this collapsed panel for the same reason as reduced time:
+                 #secCanvas must keep its measured top of about 257 at 1240x860. -->
+            <label class="ctl-lbl" title="Where each trace is drawn across the plot. Trace number is one even column per trace, today's behaviour. Any other choice positions the trace at its own header value, so a spread gap, a dropped station or a channel missing from the file appears as a real gap instead of being closed up. If the chosen header is missing, all zero or all the same, the section falls back to even spacing and says so on the strip.">Trace spacing
+              <select id="secSpacing" class="ctl" style="width:184px">
+                <option value="trace" selected>Trace number (even)</option>
+                <option value="offset">Source-receiver offset</option>
+                <option value="channel">Channel number</option>
+                <option value="srcPt">Shotpoint</option>
+                <option value="cdp">CDP / ensemble</option>
+              </select>
+            </label>
+            <!-- Reduced time (linear moveout). Lives in this collapsed panel and NOT in a
+                 toolbar row, so #secCanvas keeps its measured top of about 257 at
+                 1240x860. Disabled with a stated reason on a record that carries no
+                 source-to-receiver offset header. -->
+            <label class="ctl-lbl" title="Reduced time - shift every trace by its offset divided by the reducing velocity, so refracted first breaks flatten into a straight horizontal line. A reversed geophone, a timing slip or a station planted at the wrong stake then reads as a STEP in that line instead of a kink in a hyperbola. DISPLAY ONLY: the stored samples are never changed, and the strip inside the section says so while it is on."><input type="checkbox" id="secReduce" disabled> Reduced time (flatten first breaks)</label>
+            <label class="ctl-lbl" id="secReduceVelWrap" title="Reducing velocity in kilometres per second - Seismic Unix's `sureduce rv`, default 8.0. Set it near the refractor velocity you want flat: too high leaves the breaks curving down, too low curves them up.">Reducing velocity (km/s)
+              <input type="number" id="secReduceVel" class="ctl" style="width:74px" min="0.01" max="1000" step="0.1" value="8" disabled>
+            </label>
+            <button class="btn sm" id="secExportImgBtn" title="Save this panel exactly as it is drawn - the display-state strip, both axes and the colour bar - as a PNG image at three times the screen resolution, with the file name and the time of export added underneath.">Save image…</button>
+            <!-- Reset display. Lives HERE, at the end of the panel that holds the
+                 settings it undoes, and not in a toolbar row: row B is pinned to its
+                 measured width (see the note on #secColor) and #secCanvas has to keep
+                 its measured top of about 257 at 1240x860. Note the neighbouring
+                 #secGainReset above is the GAIN-only reset, which is why this one is
+                 labelled in full. -->
+            <button class="btn sm" id="secResetDisplay" title="Reset display - put every setting in this panel, plus the display mode, the colour map, the trace spacing, the polarity flip and the zoom, back to the way a file opens. Nothing stored in the file is touched, and the trace-health flags, the first-break picks and the record you are on all stay as they are. An Undo button appears for a few seconds afterwards.">Reset display</button>
+            <button class="btn sm" id="secCvdBtn" title="Colour-vision check - show this exact section as a viewer with a red, green or blue colour deficiency would see it. About 1 in 12 men has one, so a display that only works in full colour is a real limitation. A spot check, not a mode: it opens a still picture and closes again.">Colour check…</button>
           </div>
-          <details id="secHealthAdvanced" class="health-adv">
-            <summary>Advanced numeric thresholds (blank = use the sensitivity preset)</summary>
-            <div class="health-adv-grid">
-              <label class="ctl-lbl" title="dead-abs: flag when std/peak ≤ this">flatEps <input type="number" id="advFlatEps" class="ctl sm" step="0.001" min="0" placeholder="auto"></label>
-              <label class="ctl-lbl" title="dead-rel: flag when gated RMS < this × the live-neighbour median">deadFrac <input type="number" id="advDeadFrac" class="ctl sm" step="0.01" min="0" placeholder="auto"></label>
-              <label class="ctl-lbl" title="hot: flag when local-RMS z ≥ this (σ)">hotZ <input type="number" id="advHotZ" class="ctl sm" step="0.5" min="0" placeholder="auto"></label>
-              <label class="ctl-lbl" title="weak: flag when local-RMS z ≤ -this (σ)">weakZ <input type="number" id="advWeakZ" class="ctl sm" step="0.5" min="0" placeholder="auto"></label>
-              <label class="ctl-lbl" title="noisy amplitude leg: flag when local-RMS z ≥ this (σ)">noiseZ <input type="number" id="advNoiseZ" class="ctl sm" step="0.5" min="0" placeholder="auto"></label>
-              <label class="ctl-lbl" title="noisy spectral leg: flag when the spectral-anomaly score ≥ this">specK <input type="number" id="advSpecK" class="ctl sm" step="0.5" min="0" placeholder="auto"></label>
-              <label class="ctl-lbl" title="noisy ZCR pre-screen gate (sign changes / sample)">zcrAbs <input type="number" id="advZcrAbs" class="ctl sm" step="0.02" min="0" placeholder="auto"></label>
-              <label class="ctl-lbl" title="clipped: flag when the longest at-rail run ≥ this fraction of the trace">clipRun <input type="number" id="advClipRun" class="ctl sm" step="0.005" min="0" placeholder="auto"></label>
-              <label class="ctl-lbl" title="spiky: flag when peak ≥ this × the trace's robust amplitude">spikeK <input type="number" id="advSpikeK" class="ctl sm" step="1" min="0" placeholder="auto"></label>
-              <label class="ctl-lbl" title="reversed: flag when the neighbour-pilot correlation ≤ -this">reverseCorr <input type="number" id="advReverseCorr" class="ctl sm" step="0.05" min="0" max="1" placeholder="auto"></label>
-              <label class="ctl-lbl" title="reversed: require polarity confidence ≥ this">reverseConf <input type="number" id="advReverseConf" class="ctl sm" step="0.05" min="0" max="1" placeholder="auto"></label>
-            </div>
-            <p class="health-adv-note">These cut-offs re-classify the cached scan live (no re-parse). The neighbour window is fixed at scan time - change it by re-running Health scan.</p>
-          </details>
-          <div class="health-sens-foot">
-            <span class="health-live" id="secHealthLiveCount">-</span>
-          </div>
+          <!-- Plain-English description of the SELECTED gain law. An <option title>
+               does not render reliably inside a Chromium select, so the sentence lives
+               here and secSyncScaleControls() rewrites it on every change. -->
+          <p class="health-adv-note" id="secGainLawNote">One multiplier for everything. Brightness changes, comparisons do not.</p>
+          <!-- Why reduced time is or is not available for the record on screen. Written
+               by secReduceUpdateAvailability() after every fetch; never a silent
+               unshifted picture pretending to be a reduced one. -->
+          <p class="health-adv-note" id="secReduceNote">Open a file first.</p>
+          <!-- Whether the chosen spacing header could actually be used for the record on
+               screen, and what it spans. Written by the section's own paint, so it can
+               never disagree with the pixels. -->
+          <p class="health-adv-note" id="secSpacingNote">Open a file first.</p>
         </div>
-        <div class="health-coverage" id="secHealthCoverage" style="display:none;"></div>
+        <!-- Trace-health tools, collapsed behind #secHealthToggle. The QC guidance that
+             used to sit here as two lines of prose is now that toggle&#39;s tooltip. -->
+        <div id="secHealthWrap" style="display:none;">
+          <div class="sec-bar" id="secHealthBar">
+            <button class="btn sm" id="secHealthBtn" title="Scan every trace for quality problems - dead · noisy · hot/weak amplitude · clipped/spiky · reversed polarity - judged against LOCAL neighbour baselines, and flag them on the section" disabled>Health scan</button>
+            <!-- The per-trace attribute profile lives HERE, in the Health tools,
+                 and not in the display toolbar above: it draws the health scan's
+                 OWN per-trace numbers, and row B of that toolbar is pinned to its
+                 measured width (see the note on #secColor), so a button there
+                 would wrap the row and push #secCanvas down the page. -->
+            <button class="btn sm" id="secAttrToggle" aria-pressed="false" title="Attribute profile - draw each trace's peak, its RMS, and a separate pre-first-break noise RMS as a line profile under the section, on the same trace axis. These are numbers that do NOT depend on the display normalisation, so a weak, hot or noisy geophone stays visible where per-trace scaling and AGC would hide it. It uses the trace-health scan's own measurements; if this file has not been scanned yet, turning it on runs the scan." disabled>Attributes</button>
+            <button class="btn sm" id="secHealthSensBtn" title="Tune per-detector sensitivity (Low = stricter / fewer flags, High = more) - the flagged count updates live, no re-scan" disabled aria-expanded="false">Sensitivity…</button>
+            <button class="btn sm" id="secHealthClearBtn" title="Remove the trace-health flags + findings from the section" disabled>Clear flags</button>
+            <button class="btn sm" id="secHealthExportBtn" title="Export the flagged traces (per-detector score · confidence · reason · local baseline · real std) as CSV" disabled>Export report…</button>
+            <span class="health-legend" id="secHealthLegend" aria-hidden="true">
+              <span><span class="health-dot" data-flag="dead"></span>dead</span>
+              <span><span class="health-dot" data-flag="noisy"></span>noisy</span>
+              <span><span class="health-dot" data-flag="amp"></span>hot/weak</span>
+              <span><span class="health-dot" data-flag="clipped"></span>clipped/spiky</span>
+              <span><span class="health-dot" data-flag="reversed"></span>reversed</span>
+            </span>
+            <span style="flex:1"></span>
+            <span class="trace-label" id="secHealthSummary">Run a health scan to flag bad traces.</span>
+          </div>
+          <div class="health-sens" id="secHealthSens" style="display:none;">
+            <div class="health-sens-grid">
+              <label class="ctl-lbl" title="DEAD - an absolute flat line, OR gated RMS far below the live-neighbour median (measured on a first-break time-gate so a normal quiet far-offset trace is NOT called dead)">dead
+                <select id="sensDead" class="ctl sm"><option value="low">Low</option><option value="med" selected>Med</option><option value="high">High</option></select></label>
+              <label class="ctl-lbl" title="NOISY - an RMS MAD z-score outlier (with a zero-crossing pre-screen) OR a spectral anomaly (dominant-freq / high-freq fraction / monochromatic 50-60 Hz) vs neighbours">noisy
+                <select id="sensNoisy" class="ctl sm"><option value="low">Low</option><option value="med" selected>Med</option><option value="high">High</option></select></label>
+              <label class="ctl-lbl" title="HOT / WEAK - amplitude MAD-outlier vs neighbours, both tails. The catch-all so a real bad trace doesn't slip the narrower families">hot/weak
+                <select id="sensAmp" class="ctl sm"><option value="low">Low</option><option value="med" selected>Med</option><option value="high">High</option></select></label>
+              <label class="ctl-lbl" title="CLIPPED / SPIKY - a contiguous at-rail RUN (true clipping) OR an isolated spike vs the trace's own robust amplitude">clipped
+                <select id="sensClipped" class="ctl sm"><option value="low">Low</option><option value="med" selected>Med</option><option value="high">High</option></select></label>
+              <label class="ctl-lbl" title="REVERSED POLARITY - flipped vs a robust median neighbour pilot, moveout-aligned + first-break gated, agreeing across two disjoint neighbour subsets (so legitimate AVO far-offset reversal is not flagged)">reversed
+                <select id="sensReversed" class="ctl sm"><option value="low">Low</option><option value="med" selected>Med</option><option value="high">High</option></select></label>
+            </div>
+            <details id="secHealthAdvanced" class="health-adv">
+              <summary>Advanced numeric thresholds (blank = use the sensitivity preset)</summary>
+              <div class="health-adv-grid">
+                <label class="ctl-lbl" title="dead-abs: flag when std/peak ≤ this">flatEps <input type="number" id="advFlatEps" class="ctl sm" step="0.001" min="0" placeholder="auto"></label>
+                <label class="ctl-lbl" title="dead-rel: flag when gated RMS < this × the live-neighbour median">deadFrac <input type="number" id="advDeadFrac" class="ctl sm" step="0.01" min="0" placeholder="auto"></label>
+                <label class="ctl-lbl" title="hot: flag when local-RMS z ≥ this (σ)">hotZ <input type="number" id="advHotZ" class="ctl sm" step="0.5" min="0" placeholder="auto"></label>
+                <label class="ctl-lbl" title="weak: flag when local-RMS z ≤ -this (σ)">weakZ <input type="number" id="advWeakZ" class="ctl sm" step="0.5" min="0" placeholder="auto"></label>
+                <label class="ctl-lbl" title="noisy amplitude leg: flag when local-RMS z ≥ this (σ)">noiseZ <input type="number" id="advNoiseZ" class="ctl sm" step="0.5" min="0" placeholder="auto"></label>
+                <label class="ctl-lbl" title="noisy spectral leg: flag when the spectral-anomaly score ≥ this">specK <input type="number" id="advSpecK" class="ctl sm" step="0.5" min="0" placeholder="auto"></label>
+                <label class="ctl-lbl" title="noisy ZCR pre-screen gate (sign changes / sample)">zcrAbs <input type="number" id="advZcrAbs" class="ctl sm" step="0.02" min="0" placeholder="auto"></label>
+                <label class="ctl-lbl" title="clipped: flag when the longest at-rail run ≥ this fraction of the trace">clipRun <input type="number" id="advClipRun" class="ctl sm" step="0.005" min="0" placeholder="auto"></label>
+                <label class="ctl-lbl" title="spiky: flag when peak ≥ this × the trace's robust amplitude">spikeK <input type="number" id="advSpikeK" class="ctl sm" step="1" min="0" placeholder="auto"></label>
+                <label class="ctl-lbl" title="reversed: flag when the neighbour-pilot correlation ≤ -this">reverseCorr <input type="number" id="advReverseCorr" class="ctl sm" step="0.05" min="0" max="1" placeholder="auto"></label>
+                <label class="ctl-lbl" title="reversed: require polarity confidence ≥ this">reverseConf <input type="number" id="advReverseConf" class="ctl sm" step="0.05" min="0" max="1" placeholder="auto"></label>
+              </div>
+              <p class="health-adv-note">These cut-offs re-classify the cached scan live (no re-parse). The neighbour window is fixed at scan time - change it by re-running Health scan.</p>
+            </details>
+            <div class="health-sens-foot">
+              <span class="health-live" id="secHealthLiveCount">-</span>
+            </div>
+          </div>
+          <div class="health-coverage" id="secHealthCoverage" style="display:none;"></div>
+        </div>
         <div class="cv-wrap">
           <canvas id="secCanvas" class="canvas"></canvas>
           <div class="cv-rubber" id="secRubber"></div>
           <div class="cv-readout mono" id="secHover">Hover the section to read trace · time · amplitude.</div>
+        </div>
+        <!-- Per-trace attribute profile. A SIBLING of .cv-wrap, so it is exactly as
+             wide as #secCanvas and its plot rectangle can BE the section's own -
+             that is what keeps the two trace axes aligned under zoom and pan. It
+             sits BELOW the section, so #secCanvas keeps its measured top. -->
+        <div id="secAttrWrap" style="display:none">
+          <canvas id="secAttrCanvas" class="canvas sec-attr"></canvas>
         </div>
         <div class="health-find-filter" id="secHealthFilterWrap" style="display:none;">
           <input type="text" id="secHealthFilter" class="ctl sm" placeholder="Filter findings - trace #, problem or FFID…" aria-label="Filter health findings">
@@ -1954,6 +2122,7 @@ table.olog-grid tr.olog-row-pending:hover td:not(.olog-rowhdr){background:rgba(2
           </span>
           <button class="btn sm" id="spsHeadersBtn" title="View / edit the SPS H-record header block (CRS, datum, admin, raw records)">Headers…</button>
           <button class="btn sm" id="spsRenumberBtn" title="Re-create / renumber the survey's source &amp; receiver line and point numbers, then save the rewritten S / R / X files" disabled>Re-create / Renumber…</button>
+          <button class="btn sm" id="spsExportImgBtn" title="Save the survey grid exactly as it is drawn as a PNG image at three times the screen resolution, with the survey's files, counts, CRS, bearing and what is plotted added underneath. Survey-grid view only - the real map is a web map, not a canvas.">Save image…</button>
           <span class="sps-stats" id="spsStats"></span>
           <span class="trace-label" id="spsLabel">Load S/R/X files to plot the survey</span>
         </div>
@@ -2266,6 +2435,7 @@ table.olog-grid tr.olog-row-pending:hover td:not(.olog-rowhdr){background:rgba(2
           <label class="ctl-lbl">Step <input type="number" id="velStep" class="numin" value="50"></label>
           <button class="btn sm" id="velComputeBtn">Compute semblance</button>
           <button class="btn sm" id="velExportBtn">Export picks CSV…</button>
+          <button class="btn sm" id="velExportImgBtn" title="Save this panel exactly as it is drawn - the display-state strip, both axes and the colour bar - as a PNG image at three times the screen resolution, with the file name and the time of export added underneath.">Save image…</button>
           <span class="seg" title="Zoom the panel (wheel over the canvas, double-click to fit)">
             <button class="segbtn" id="velZoomOut" title="Zoom out">&minus;</button>
             <button class="segbtn" id="velZoomFit" title="Fit / reset zoom">Fit</button>
@@ -2274,7 +2444,10 @@ table.olog-grid tr.olog-row-pending:hover td:not(.olog-rowhdr){background:rgba(2
           <span id="velAxisRange" title="Type an exact axis window; blank/invalid reverts that axis to auto-fit"></span>
           <span class="trace-label" id="velLabel">Open a file, then compute</span>
         </div>
-        <canvas id="velCanvas" class="canvas"></canvas>
+        <div class="cv-wrap">
+          <canvas id="velCanvas" class="canvas"></canvas>
+          <div class="cv-readout mono" id="velHover">Hover the panel to read velocity · time · semblance.</div>
+        </div>
         <div id="velPicks" class="qc-results"></div>
       </section>
 
@@ -2334,9 +2507,13 @@ table.olog-grid tr.olog-row-pending:hover td:not(.olog-rowhdr){background:rgba(2
             <span id="specFkAxis" title="Type an exact wavenumber/freq window; blank/invalid reverts that axis to auto-fit"></span>
           </span>
 
+          <button class="btn sm" id="specExportImgBtn" title="Save this panel exactly as it is drawn - the display-state strip, both axes and the colour bar - as a PNG image at three times the screen resolution, with the file name and the time of export added underneath.">Save image…</button>
           <span class="trace-label" id="specLabel">Open a seismic file to analyse its spectrum.</span>
         </div>
-        <canvas id="specCanvas" class="canvas"></canvas>
+        <div class="cv-wrap">
+          <canvas id="specCanvas" class="canvas"></canvas>
+          <div class="cv-readout mono" id="specHover">Hover the panel to read frequency · time · magnitude.</div>
+        </div>
         <p class="note" id="specFkNote">F-K (frequency-wavenumber) maps each event to a slope f/kx = apparent velocity; flat-lying reflections sit near kx = 0, steep dips fan outward, and energy wrapping at the kx edges flags spatial aliasing.</p>
       </section>
 
@@ -2363,12 +2540,21 @@ table.olog-grid tr.olog-row-pending:hover td:not(.olog-rowhdr){background:rgba(2
           <div class="seg">
             <button class="segbtn" id="wbInvertBtn" title="Flip trace polarity (display only - the collected samples are not modified)">Invert</button>
           </span>
+          <label class="ctl-lbl" title="How sample values map to the wiggle swing, in the same words the File Viewer uses. Record max = the loudest collected trace sets the level for all of them; Record pct = ignore the few loudest so the rest stay readable; Per trace = every trace scaled to itself, which hides a weak or dead geophone.">Scale
+            <select id="wbScaleMode" class="ctl" style="width:126px">
+              <option value="max">Record max</option>
+              <option value="pct" selected>Record pct</option>
+              <option value="trace">Per trace</option>
+            </select>
+          </label>
+          <label class="ctl-lbl" id="wbScalePctWrap" title="Across-trace percentile used by 'Record pct' - 95 ignores the loudest 5% of the collected traces">Pct <input type="number" id="wbScalePct" class="ctl" style="width:62px" min="1" max="100" step="1" value="95"></label>
           <span class="seg" title="Zoom the shared time axis (wheel over the canvas, drag to pan, double-click to fit)">
             <button class="segbtn" id="wbZoomOut" title="Zoom out (time)">&minus;</button>
             <button class="segbtn" id="wbZoomFit" title="Fit / reset time zoom">Fit</button>
             <button class="segbtn" id="wbZoomIn" title="Zoom in (time)">+</button>
           </span>
           <span id="wbAxisRange" title="Type an exact time/amplitude window; blank/invalid reverts that axis to auto-fit"></span>
+          <button class="btn sm" id="wbExportImgBtn" title="Save this panel exactly as it is drawn - the display-state strip, both axes and the colour bar - as a PNG image at three times the screen resolution, with the file name and the time of export added underneath.">Save image…</button>
           <span class="trace-label" id="wbLabel">Pick traces to compare</span>
         </div>
         <div class="status" id="wbStatus" style="margin:2px 0 8px;"></div>
@@ -2385,7 +2571,10 @@ table.olog-grid tr.olog-row-pending:hover td:not(.olog-rowhdr){background:rgba(2
           </div>
         </div>
 
-        <canvas id="wbCanvas" class="canvas"></canvas>
+        <div class="cv-wrap">
+          <canvas id="wbCanvas" class="canvas"></canvas>
+          <div class="cv-readout mono" id="wbHover">Hover the traces to read time · trace · amplitude.</div>
+        </div>
 
         <!-- ANALYSIS: cross-correlation + difference + stats for any two traces -->
         <div class="card" id="wbAnalysisCard" style="margin-top:16px;">
@@ -2668,6 +2857,7 @@ table.olog-grid tr.olog-row-pending:hover td:not(.olog-rowhdr){background:rgba(2
               </label>
               <label class="ctl-lbl" title="Peak amplitude as a fraction of full scale (0-1)">Amplitude <input type="number" id="swAmp" class="numin" value="1" min="0.05" max="1" step="0.05" style="width:64px;"></label>
               <button class="btn btn-primary sm" id="swBuildBtn" title="Generate the sweep and refresh every plot">Build sweep</button>
+              <button class="btn sm" id="swClearBtn" title="Clear the whole tab - the built sweep, every plot and any measured sweep. The parameters above stay so you can Build again.">Clear</button>
               <span class="trace-label" id="swStatus">Set the parameters, then Build.</span>
             </div>
             <div class="sec-bar" style="margin-bottom:0;">
@@ -2734,7 +2924,7 @@ table.olog-grid tr.olog-row-pending:hover td:not(.olog-rowhdr){background:rgba(2
             <div class="sec-bar" style="flex-wrap:wrap;">
               <button class="btn btn-primary sm" id="swQcLoadBtn" title="Open a recorded sweep (SEG-Y / SEG-D / SEG-2 / SU) and compare the chosen trace against the designed sweep">Load measured sweep…</button>
               <label class="ctl-lbl" title="Which trace of the measured file to QC (0-based)">Trace # <input type="number" id="swQcTraceIdx" class="numin" value="0" min="0" step="1" style="width:70px;"></label>
-              <button class="btn sm" id="swQcClearBtn" title="Drop the measured sweep (the design stays)">Clear measured</button>
+              <button class="btn sm" id="swQcClearBtn" title="Drop the measured sweep only - the built sweep and its plots stay. To clear the whole tab use Clear, next to Build sweep.">Clear measured</button>
               <span class="trace-label" id="swQcFileLabel">No measured sweep loaded.</span>
             </div>
             <div class="sec-bar" style="flex-wrap:wrap;">
@@ -3787,6 +3977,70 @@ table.olog-grid tr.olog-row-pending:hover td:not(.olog-rowhdr){background:rgba(2
       </div>
       <div class="zoom-body">
         <canvas id="zoomCanvas" class="canvas zoom-canvas"></canvas>
+      </div>
+    </div>
+  </div>
+
+  <!-- Near-trace (common-offset) gather. One chosen channel out of EVERY record in
+       the open file's folder, one column per record, drawn through the SAME
+       paintSection path and the SAME File Viewer display controls as the section
+       behind it. A modal rather than a tab precisely so there is only one set of
+       those controls and one folder list. -->
+  <div class="modal-back" id="gatherBack" role="dialog" aria-modal="true" aria-labelledby="gatherTitle">
+    <div class="modal" id="gatherModal" style="max-width:1180px;width:94vw">
+      <div class="mh">
+        <h2 id="gatherTitle">Near-trace gather</h2>
+        <button class="mclose" id="gatherClose" title="Close (Esc)" aria-label="Close">
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M18 6 6 18M6 6l12 12"/></svg>
+        </button>
+      </div>
+      <div class="mbody">
+        <p class="health-adv-note">One trace out of every record in this folder, side by side - one column per record, so the picture reads shot to shot instead of channel to channel. The display mode, colour map, gain law, scale basis, clip, excursion, polarity flip and AGC all come from the File Viewer's own toolbar behind this window, so both pictures always describe the same settings.</p>
+        <div class="sec-bar">
+          <label class="ctl-lbl" title="How the one trace is chosen out of each record">Choose the trace by
+            <select id="gatherSelectBy" class="ctl" style="width:168px">
+              <option value="channel">Channel number</option>
+              <option value="offset">Nearest offset</option>
+              <option value="index">Trace position</option>
+            </select>
+          </label>
+          <label class="ctl-lbl" id="gatherChannelWrap" title="The channel-number header value to take out of each record">Channel
+            <input type="number" id="gatherChannel" class="ctl" style="width:88px" min="1" step="1" value="1">
+          </label>
+          <label class="ctl-lbl" id="gatherOffsetWrap" style="display:none" title="The signed source-receiver offset to match nearest in each record. Signed, so a split spread keeps its side.">Offset
+            <input type="number" id="gatherOffset" class="ctl" style="width:98px" step="any" value="0">
+          </label>
+          <label class="ctl-lbl" id="gatherIndexWrap" style="display:none" title="Plain array position inside each record, counting from 0 - the fallback when a record carries no usable channel or offset header">Position
+            <input type="number" id="gatherIndex" class="ctl" style="width:88px" min="0" step="1" value="0">
+          </label>
+          <button class="btn sm" id="gatherRun" title="Read every record in the folder and build the gather. The worker reads one file at a time and cannot be cancelled, so file Prev/Next is disabled while it runs.">Run</button>
+          <button class="btn sm" id="gatherExportImgBtn" title="Save this panel exactly as it is drawn - the display-state strip, both axes and the colour bar - as a PNG image at three times the screen resolution, with the file name and the time of export added underneath.">Save image…</button>
+        </div>
+        <div class="status" id="gatherNote"></div>
+        <div id="gatherSkips" style="display:none"></div>
+        <div class="cv-wrap">
+          <canvas id="gatherCanvas" class="canvas"></canvas>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Colour-vision check. A still of the section as it is on screen right now,
+       repeated through the three dichromacy simulations, so the reader can see
+       whether the chosen colour map still separates positive from negative for a
+       colour-blind viewer. Deliberately a snapshot in a modal rather than a display
+       mode: it is a check you run occasionally, not a way to work. -->
+  <div class="modal-back" id="secCvdBack" role="dialog" aria-modal="true" aria-labelledby="secCvdTitle">
+    <div class="modal" id="secCvdModal" style="max-width:1180px;width:94vw">
+      <div class="mh">
+        <h2 id="secCvdTitle">Colour-vision check</h2>
+        <button class="mclose" id="secCvdClose" title="Close (Esc)" aria-label="Close">
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M18 6 6 18M6 6l12 12"/></svg>
+        </button>
+      </div>
+      <div class="mbody">
+        <p class="health-adv-note" id="secCvdNote">Snapshot of the section as it is on screen now.</p>
+        <div id="secCvdGrid" style="display:grid;grid-template-columns:1fr 1fr;gap:10px"></div>
       </div>
     </div>
   </div>

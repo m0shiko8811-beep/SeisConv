@@ -1,4 +1,4 @@
-// seisconv - POSITIONING-FORMAT QC harness (REAL Israeli SPS survey data)
+// seisconv - POSITIONING-FORMAT QC harness (runs against a real SPS survey triplet you supply)
 //
 // Validates the NEW positioning-format readers/writers in core/sps/formats by
 // round-tripping a REAL SPS survey triplet (.s01 / .r01 / .x01) through every
@@ -36,13 +36,19 @@ import { parseP111, buildP111 } from '../core/sps/formats/p111';
 import { parseCoordCsv, buildCoordCsv } from '../core/sps/formats/coordcsv';
 import { parseSegP1 } from '../core/sps/formats/segp1';
 import { parseP611 } from '../core/sps/formats/p611';
+import { resolveValue } from '../qa/local-paths.mjs';
 
-// -- Config: default to the ITM NodesCheck20 triplet so it runs with no args. --
-const DATA_ROOT = process.env.SEISCONV_DATA_ROOT || 'D:/Projects/SeisconvApp';
-const DEFAULT_DIR = `${DATA_ROOT}/SPS_Games/Exported SPS/SPS_EPSG_2039`;
-const DEFAULT_BASE = 'NodesCheck20';
-const DIR = process.env.SEISCONV_SPS_DIR || DEFAULT_DIR;
-const BASE = process.env.SEISCONV_SPS_BASE || DEFAULT_BASE;
+// -- Config: point this at your own SPS triplet. Nothing site-specific is
+// hard-coded; set SEISCONV_SPS_DIR to the folder holding <BASE>.s01/.r01/.x01
+// and SEISCONV_SPS_BASE to that file stem (or SEISCONV_DATA_ROOT for the
+// enclosing corpus root). The git-ignored qa/local-paths.json can carry the
+// same two settings as "spsDir" / "spsBase". The defaults below are
+// placeholders, not real files.
+const DATA_ROOT = process.env.SEISCONV_DATA_ROOT || '';
+const DEFAULT_DIR = DATA_ROOT ? `${DATA_ROOT}/sps` : '.';
+const DEFAULT_BASE = 'example';
+const DIR = resolveValue('spsDir', 'SEISCONV_SPS_DIR', DEFAULT_DIR);
+const BASE = resolveValue('spsBase', 'SEISCONV_SPS_BASE', DEFAULT_BASE);
 
 // Per-point match tolerances.
 const TOL_EXACT = 1e-3; // P1/11 + coord-CSV carry full-precision metres → 1e-3 m.
@@ -288,7 +294,7 @@ function main(): number {
     // No local corpus → SKIP (exit 0), matching the file-backed-tests philosophy.
     // This gate only runs where a real SPS triplet is present.
     console.log(`SKIP: no real SPS triplet at "${DIR}" (base "${BASE}").`);
-    console.log('      Set SEISCONV_SPS_DIR + SEISCONV_SPS_BASE to a local .s01/.r01/.x01 triplet to run this gate.');
+    console.log('      Set SEISCONV_SPS_DIR + SEISCONV_SPS_BASE (or "spsDir" + "spsBase" in the git-ignored qa/local-paths.json) to a local .s01/.r01/.x01 triplet to run this gate.');
     console.log(`      (${(e as Error).message})`);
     return 0;
   }

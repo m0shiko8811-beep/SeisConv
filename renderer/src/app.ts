@@ -2,8 +2,19 @@
 // renderer/dist/app.js. Talks only to window.seisconvAPI (preload bridge);
 // never touches Node/fs directly. Pure render helpers come from core.
 
-import { normFactorPercentile } from '../../core/render/model';
-import { getColor, colorViridis } from '../../core/render/colormaps';
+import { normFactorPercentile, normAcrossTraces, AGC_DEFAULT_WINDOW_MS, AGC_DEFAULT_TYPE, SCALE_DEFAULT_PERCENTILE } from '../../core/render/model';
+import { getColor, colorViridis, simulateCvd, type ColorMapName, type CvdType, type RGB } from '../../core/render/colormaps';
+import { applyGain, type GainParams } from '../../core/dsp/gain';
+import { reduceTrace, canReduce, SU_DEFAULT_REDUCING_VELOCITY_KM_PER_SEC } from '../../core/dsp/reduce';
+import { buildTraceAxis, traceX, traceGaps, nearestTraceAtX, xToValue, type TraceAxis, type IndexAxisReason } from '../../core/render/tracex';
+import { plotRect, plotHeight, WB_MARGINS, WB_MAIN_MARGINS, SPEC_AVG_MARGINS, TRC_MARGINS, SEC_MARGINS, VEL_MARGINS, withStrip } from '../../core/render/frame';
+import { beginCanvas, beginPlot, attachOverlay, renderScale, setRenderScale } from './render/surface';
+import { drawMsTimeAxis, drawStateStrip, stateStripFor, clearStateStrip } from './render/axes';
+import { blitRaster } from './render/heat';
+import { attachPlotInteraction, PLOT_ZOOM_STEP } from './render/interaction';
+import { niceStep, tickValues } from '../../core/render/ticks';
+import { anchorZoom, anchorZoomY, anchorZoomYFromHigh, clampToExtent, minSpanFor, boxToWindow } from '../../core/render/zoom';
+import { rasterizeToRGBA, sectionUnit, magnitudeUnit, logMagnitudeUnit } from '../../core/render/raster';
 import { searchEPSG, extraProjFields, type CRS } from '../../core/sps/reproject';
 import { resolveCrsTagCRS } from '../../core/sps/formats/coordcsv';
 import { projToLatLon, latLonToUTM, latLonToITM, geodeticToTM, type Projection } from '../../core/coords';
@@ -19,7 +30,7 @@ import { crossCorrelate, difference } from '../../core/dsp/correlate';
 import { resampleLinear } from '../../core/dsp/interpolate';
 import { MANUAL } from './manual';
 import {
-  classifyTrace, thresholdsForSensitivity, readEvidence, DETECTOR_IDS,
+  classifyTrace, thresholdsForSensitivity, readEvidence, DETECTOR_IDS, NOISE_GUARD_MS,
   type DetectorId, type DetectorResult, type TraceFinding, type HealthThresholds, type Sensitivity,
 } from '../../core/dsp/tracehealth';
 import {
@@ -66,13 +77,26 @@ type Summary = {
   // SEG-Y path (multi-GB files / tape-image archives). The File Viewer then pages
   // through the traces in fixed blocks instead of fitting the whole record at once.
   streamed?: boolean;
+  // SEG-Y binary header bytes 3257-3258 / 3259-3260. 0 means the file declares
+  // nothing; absent means the format carries no such field at all. Reported
+  // verbatim by the display-state strip - never translated to "normal/reverse".
+  impulsePolarity?: number;
+  vibratoryPolarity?: number;
 };
 type TraceData = { index: number; nSamples: number; sampleInt: number; hdr: Record<string, number | string>; samples: Float32Array };
 // One trace pulled from an arbitrary file by the Trace Workbench (extractTrace):
 // TraceData plus the source file name + total trace count, for labelling/clamping.
 type ExtractedTrace = { name: string; index: number; traceCount: number; nSamples: number; sampleInt: number; hdr: Record<string, number | string>; samples: Float32Array };
 type SectionOpts = { maxTraces?: number; maxSamples?: number; traceStart?: number; traceEnd?: number; sampStart?: number; sampEnd?: number; agc?: boolean; agcType?: 'rms' | 'median' | 'mean'; agcWindowMs?: number };
-type SectionData = { numTraces: number; colLen: number; norm: number; sampleInt: number; traceStep: number; data: Float32Array; traceStart: number; traceEnd: number; sampStart: number; sampEnd: number; fullTraces: number; fullSamples: number };
+type SectionData = { numTraces: number; colLen: number; norm: number; norms?: Float32Array; sampleInt: number; traceStep: number; data: Float32Array; traceStart: number; traceEnd: number; sampStart: number; sampEnd: number; fullTraces: number; fullSamples: number; colOffset?: Float32Array | null; colChannel?: Float32Array | null; colSrcPt?: Float32Array | null; colCdp?: Float32Array | null };
+// Near-trace (common-offset) gather: ONE chosen channel from EVERY record in the
+// open file's folder, assembled into a panel whose columns are RECORDS. The matrix
+// mirrors SectionData (row-major numTraces x colLen), so it draws through exactly
+// the same paintSection path as a section. Mirrors preload's NearGatherOpts /
+// NearGatherRecord / NearGatherData.
+type NearGatherOpts = { selectBy?: 'channel' | 'offset' | 'index'; channel?: number; offsetTarget?: number; index?: number; maxRecords?: number; maxSamples?: number; agc?: boolean; agcType?: 'rms' | 'median' | 'mean'; agcWindowMs?: number };
+type NearGatherRecord = { name: string; ffid: number | null; column: number; traceIndex: number; channel: number | null; offset: number | null; sampleInt: number; nSamples: number; resampled: boolean; ambiguous: boolean; ok: boolean; reason?: string; detail?: string };
+type NearGatherData = { numTraces: number; colLen: number; norm: number; norms: Float32Array; sampleInt: number; data: Float32Array; records: NearGatherRecord[]; truncated: boolean; droppedByCap: number; offered: number; mixedSampleInt: boolean; sampleInts: number[]; skipped: string[]; selectBy: string };
 // Trace-health QC scan of the open file (File Viewer). `evidence` is a row-major
 // Float32 struct-of-arrays (traceIndex.length rows × evStride cols) the renderer
 // re-classifies live; arrays are keyed by ABSOLUTE trace index. Mirrors preload's TraceHealthData.
@@ -237,6 +261,10 @@ declare global {
       // Trace Workbench: parse `path` locally and pull ONE trace + source meta.
       extractTrace(path: string, index: number): Promise<ExtractedTrace>;
       getSection(o?: SectionOpts): Promise<SectionData>;
+      // Near-trace gather across the open file's FOLDER. `paths` is deliberately
+      // NOT passed: main.ts fills it from the very sibling list file Prev/Next
+      // steps, and an unauthorized path would be rejected.
+      getNearGather(o?: NearGatherOpts): Promise<NearGatherData>;
       // Single-file conversion of the currently-open file (save dialog).
       // `outBaseName` (no extension) becomes the dialog's default file name.
       convertSingle(format: string, outBaseName?: string): Promise<ConvResult>;
@@ -714,6 +742,18 @@ function applyKeyHints() {
   }
   // rail + header tooltips
   $opt('railHelp')?.setAttribute('title', `Help / Manual - keys: ${KEY_OPEN} open · ${KEY_BATCH} batch · ${TAB_KEY_RANGE} tabs · ${KEY_OBSLOG} observer log · ? help`);
+  // File Viewer display keys: append the key to each control's own tooltip, from
+  // the SAME table the handler reads, so a rebind can never leave a stale hint.
+  // Appended, never replacing - the existing tooltips explain what the control does.
+  for (const row of SEC_KEYS) {
+    // The AGC tick box carries no tooltip of its own - its <label> does.
+    const host = (row.id === 'secAgc' ? $opt('secAgc')?.closest('label') : $opt(row.id)) as HTMLElement | null;
+    if (!host) continue;
+    const base = host.getAttribute('title') ?? '';
+    const key = row.keys[0].length === 1 ? row.keys[0].toUpperCase() : row.keys[0];
+    const hint = `Key: ${key} (File Viewer)`;
+    if (!base.includes('Key: ')) host.setAttribute('title', base ? `${base} ${hint}` : hint);
+  }
   // in-manual key chips that carry a data-key marker
   document.querySelectorAll<HTMLElement>('.kbd[data-key]').forEach((el) => {
     const k = el.getAttribute('data-key');
@@ -749,7 +789,7 @@ let traceMode: 'wave' | 'spectrum' = 'wave';
 // exclusive) within the FULL trace, which is already in lastTrace.samples - so
 // zoom/pan is renderer-only (no worker fetch). `fullS` caches the trace length
 // for clamping; init=false ⇒ "fit whole trace" (reset on every new trace).
-const traceView = { s0: 0, s1: 0, fullS: 0, init: false };
+const traceView = { s0: 0, s1: 0, fullS: 0, siUs: 0, init: false };
 // Manual amplitude (X-axis) override for the Trace Inspector waveform. null ⇒
 // auto-normalize per the visible window (the default); when set, the wiggle maps
 // [ampMin,ampMax] (raw sample units) across the plot width instead. Guarded so a
@@ -759,6 +799,7 @@ let traceAmpRange: { min: number; max: number } | null = null;
 // so editing ONLY the Amp (Y) boxes leaves an existing wheel/button zoom intact -
 // we refit the time axis only on the manual→auto X transition, never on an Amp edit.
 let traceManualX = false;
+let traceManualY = false;
 // Manual X (time) / Y (amplitude) range control group for the Trace Inspector.
 let traceAxisRange: AxisRangeHandle | null = null;
 let outFormat = 'segy1';
@@ -917,6 +958,37 @@ let wbMode: 'side' | 'overlay' = 'side';
  *  are never modified - inverting is a way to compare a reversed-polarity trace
  *  against a normal one, not an edit, so anything exported stays as recorded. */
 let wbInvert = false;
+
+/** Display-only polarity flip for the File Viewer, the Trace Inspector and the
+ *  box-zoom viewer - the three panels that show the OPEN FILE, and so the three
+ *  places a per-channel wiring reversal is actually spotted. Separate from
+ *  wbInvert, which flips the Workbench's own collected traces.
+ *
+ *  It is applied at DRAW time only. The parsed samples, `lastSection.data` (which
+ *  the hover read-out and the first-break picks read) and everything the worker
+ *  writes are untouched, so a converted output file can never carry it: the
+ *  convert path (api.convertSingle / api.convertTraces) takes a format and a base
+ *  name and never sees a display flag. The strip says so on screen whenever it is
+ *  on, so a flipped picture can never be mistaken for the recorded data. */
+let viewInvert = false;
+
+/** +1 normally, -1 while the display flip is on. One place, so the section
+ *  raster, the wiggles, the VA fill and the single-trace plot can never disagree
+ *  about which way the display is pointing. */
+function viewPolarity(): number { return viewInvert ? -1 : 1; }
+
+/** Toggle the display-only flip, keep the File Viewer and Inspector controls in
+ *  step, and repaint every panel it affects (including an open box-zoom popup). */
+function setViewInvert(on: boolean) {
+  viewInvert = !!on;
+  for (const id of ['secInvert', 'traceInvert']) {
+    const el = $opt(id) as HTMLInputElement | null;
+    if (el) el.checked = viewInvert;
+  }
+  if (lastSection) drawSection($('secCanvas') as HTMLCanvasElement, lastSection);
+  if (lastTrace) renderTrace();
+  if (zoomViewerOpen()) drawZoom();
+}
 const wbView = { s0: 0, s1: 0, fullS: 0, init: false };
 // Workbench manual X (time, ms - shared with the wbView sample window) / Y
 // (amplitude, normalized fraction of the per-trace/shared swing) range boxes.
@@ -1018,8 +1090,8 @@ const KEY_OBSLOG_TAB: Tab = 'obslog';
 /** The bare letter that jumps to the Observer Log, in the case the hints show. */
 const KEY_OBSLOG = 'O';
 
-// Which tab is showing - drives the universal header "Clear" button (see
-// clearActiveTab / updateHeaderClear). Kept in sync by switchTab.
+// Which tab is showing - drives the per-tab "Clear" dispatch (see
+// clearActiveTab). Kept in sync by switchTab.
 let activeTab: Tab = 'conv';
 
 function switchTab(tab: Tab) {
@@ -1039,7 +1111,6 @@ function switchTab(tab: Tab) {
   }
   // Open + Clear now live in each data tab's own top bar (the header no longer
   // carries a global pair). Keep the per-tab Clear dispatch state in sync.
-  updateHeaderClear();
   if (tab === 'trace' && summary) void refreshTrace();
   if (tab === 'section' && summary) void refreshSection();
   if (tab === 'sps' && spsSummary) void refreshSps();
@@ -1133,6 +1204,27 @@ function updateProgress(done: number, total: number, label?: string) {
   }
 }
 
+const TS_MON = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+const ts2 = (n: number) => String(n).padStart(2, '0');
+
+/** Wall clock as HH:MM:SS, 24 hour, no locale involved. */
+function fmtClock(d: Date): string {
+  return `${ts2(d.getHours())}:${ts2(d.getMinutes())}:${ts2(d.getSeconds())}`;
+}
+
+/** One timestamp format for the whole app: "06 Sep 2026, 14:32:07 (UTC+03:00)".
+ *  The month is spelled out so nobody has to guess day versus month order, and the
+ *  offset is always carried so an exported record still means one instant when it is
+ *  read somewhere else. Built from the local Date getters, never from a locale API,
+ *  so the packaged app shipping only the en-US Chromium locale cannot change it. */
+function fmtStamp(d: Date): string {
+  const off = -d.getTimezoneOffset(); // minutes east of UTC
+  const a = Math.abs(off);
+  const sign = off < 0 ? '-' : '+';
+  const tz = `UTC${sign}${ts2(Math.floor(a / 60))}:${ts2(a % 60)}`;
+  return `${ts2(d.getDate())} ${TS_MON[d.getMonth()]} ${d.getFullYear()}, ${fmtClock(d)} (${tz})`;
+}
+
 /** Bytes → a short human string. Binary units, matching how a browser reports a
  *  download; 0 renders as "0 B" rather than blank. Non-finite → ''. */
 function fmtBytes(n: number): string {
@@ -1203,12 +1295,27 @@ function fmtAmpVal(v: number): string {
   return v.toPrecision(4);
 }
 
+/** Format one edge of a manual axis-range box. Plain 2 decimals for everyday
+ *  magnitudes (times in ms, frequencies in Hz), but seismic amplitudes are often
+ *  a small fraction - a real 0 to 2.8e-4 range used to round to "0" to "0", which
+ *  told the reader the range was zero. Small values therefore keep three
+ *  significant digits, and very small ones go to exponent form, matching the
+ *  display-state strip (0.0104) and the hover read-out (9.89e-8). The result is
+ *  always a valid floating-point number string, so the box parses it straight
+ *  back. Callers guard non-finite before this point. */
+function fmtAxisEdge(v: number): string {
+  if (v === 0) return '0';
+  const a = Math.abs(v);
+  if (a >= 1) return String(Math.round(v * 100) / 100);
+  if (a < 1e-3) return v.toExponential(2);
+  return String(Number(v.toPrecision(3)));
+}
+
 function renderInfo() {
   if (!summary) {
     $('fileInfo').style.display = 'none';
     clearSummaryPanel();
     updateStatusStrip();
-    updateHeaderClear();
     updateGlobalLoaded();    // shared seismic file gone → refresh the global readout
     return;
   }
@@ -1223,7 +1330,6 @@ function renderInfo() {
   renderSummaryPanel();
   renderHeaderQc();
   updateStatusStrip();
-  updateHeaderClear();
   updateGeomqcReadout();   // shared seismic file changed → keep the Geometry QC readout fresh
   updateGlobalLoaded();    // …and the global header "Loaded" readout
 }
@@ -1337,7 +1443,7 @@ function setState(kind: StripState, label: string) {
  * re-render whichever QC view is visible. Shared by onOpen and the sibling-nav so
  * both paths behave identically.
  */
-function applyOpenedFile(s: Summary) {
+function applyOpenedFile(s: Summary, keepSectionView = false) {
   summary = s;
   traceIndex = 0;
   // Drop the previous file's cached trace. Without this, stepping files with ]/[
@@ -1351,7 +1457,17 @@ function applyOpenedFile(s: Summary) {
   // holding the OLD file's matrix and secView pinned to the OLD file's zoom window,
   // so the next section redraw could paint stale data before refreshSection re-fits.
   lastSection = null;
-  secView.init = false;
+  // Stepping to a SIBLING (Prev/Next) keeps the File Viewer's zoom window - the
+  // one last looked at, however it was reached: paging a folder is a comparison,
+  // and re-fitting each step threw it away. refreshSection() clamps the kept window to the new record.
+  // A fresh Open from the dialog is a new job, so that still starts fitted.
+  if (!keepSectionView) {
+    // A fresh Open from the dialog is a new job: every viewer starts fitted again.
+    secView.init = false;
+    traceView.init = false;
+    velView.v0 = velView.v1 = velView.t0 = velView.t1 = null;
+    for (const view of [specAvgView, specGramView, specFkView]) { view.x0 = view.x1 = view.y0 = view.y1 = null; }
+  }
   // Drop any trace-health overlay/findings tied to the previous file.
   secHealthReset();
   fbReset(); // drop first-break picks/guide tied to the previous file (keep the mode)
@@ -1364,14 +1480,16 @@ function applyOpenedFile(s: Summary) {
   specTraceIdx = 0;
   velResult = null;
   velPicks = [];
-  // Reset the Velocity + Spectrum manual-range view-state AND clear their boxes
-  // here, regardless of whether those panels are currently visible. The payloads
-  // above are keyed to the previous file, so without this the axis boxes keep
-  // showing the OLD file's typed values (and velView/spec*View keep its window)
-  // until the user re-computes/refreshes. Mirrors how lastSection/secView reset.
-  velView.v0 = velView.v1 = velView.t0 = velView.t1 = null;
+  // Clear the Velocity + Spectrum axis BOXES (the payloads above are keyed to the
+  // previous file, so leaving the old file's typed numbers on screen over a panel
+  // that no longer holds those data would be a lie). Stepping to a SIBLING keeps
+  // the view WINDOWS themselves: they are in physical units (Hz, s, ms, m/s) that
+  // mean the same thing on the next record, so comparing the same frequency band
+  // or the same velocity fan record after record is exactly the point of stepping
+  // files. Every draw clamps them to the data it actually has (boxToWindow / the
+  // keep-clamp on each compute path), so a kept window can never paint an empty
+  // panel. A fresh Open resets them just above, with the other viewers.
   velAxisRange?.clear();
-  for (const view of [specAvgView, specGramView, specFkView]) { view.x0 = view.x1 = view.y0 = view.y1 = null; }
   specAvgAxis?.clear(); specGramAxis?.clear(); specFkAxis?.clear();
   renderInfo();
   showSingleLoaded();      // banner + light up the single-file wizard
@@ -1400,6 +1518,11 @@ async function onOpen() {
       updateStatusStrip();
       return;
     }
+    // A file picked from the dialog can be in a DIFFERENT folder, and the gather
+    // is a picture of a folder - so drop it here. Stepping with Prev/Next does
+    // NOT reset it, because that walks the very sibling list the gather was
+    // built from, so it stays true.
+    gatherReset();
     applyOpenedFile(s);
   } catch (e) {
     setStatus('convStatus', 'Could not read file: ' + errMsg(e), 'err');
@@ -1418,6 +1541,13 @@ function updateFileNav() {
   // is meaningless inside it, so hide file-nav entirely and let the trace-paging
   // control (updateSecPaging) drive movement through the record instead.
   const streamed = !!summary?.streamed;
+  // The near-trace gather steps the same folder list, so it follows the same rule:
+  // offered for a normal file in a folder, hidden inside one giant tape archive.
+  const gbtn = $opt('secGatherBtn') as HTMLButtonElement | null;
+  if (gbtn) {
+    gbtn.style.display = streamed ? 'none' : '';
+    gbtn.disabled = !summary || gatherPending;
+  }
   if (prev) prev.style.display = streamed ? 'none' : '';
   if (next) next.style.display = streamed ? 'none' : '';
   if (lbl) lbl.style.display = streamed ? 'none' : '';
@@ -1429,9 +1559,12 @@ function updateFileNav() {
     if (lbl) lbl.textContent = summary ? '' : '-';
     return;
   }
-  if (prev) prev.disabled = !summary.hasPrev;
-  if (next) next.disabled = !summary.hasNext;
-  if (lbl) lbl.textContent = `file ${summary.index + 1} / ${summary.count}`;
+  // A near-trace gather reads the WHOLE folder through the same single-threaded
+  // worker, and there is no cancel - so stepping files mid-gather would just queue
+  // behind it and look frozen. Prev/Next stay disabled until the gather settles.
+  if (prev) prev.disabled = !summary.hasPrev || gatherPending;
+  if (next) next.disabled = !summary.hasNext || gatherPending;
+  if (lbl) lbl.textContent = gatherPending ? 'building the gather…' : `file ${summary.index + 1} / ${summary.count}`;
 }
 
 /** Show/refresh the trace-paging control (Prev/Next block + 'traces A-B / total')
@@ -1473,6 +1606,7 @@ async function secPageStep(delta: number) {
   const fitted = (secView.t1 - secView.t0) >= fullT - 1; // viewing (nearly) the whole record
   let start = fitted ? (delta > 0 ? 0 : lastStart) : secView.t0 + delta * page;
   start = Math.max(0, Math.min(lastStart, start));
+  secReleaseTypedAxis(); // paging blocks moves the view; the boxes follow it
   secView.t0 = start;
   secView.t1 = Math.min(fullT, start + page);
   await fetchSectionWindow(); // echoes the real window back into secView + repaints
@@ -1485,6 +1619,7 @@ async function secPageApplySize() {
   const fullT = secView.fullT || summary.traceCount;
   const page = secPageSize();
   const start = Math.max(0, Math.min(Math.max(0, fullT - page), secView.t0));
+  secReleaseTypedAxis(); // a new block size moves the view; the boxes follow it
   secView.t0 = start;
   secView.t1 = Math.min(fullT, start + page);
   await fetchSectionWindow();
@@ -1494,6 +1629,8 @@ async function secPageApplySize() {
 /** Step ±delta to a sibling file in the open file's folder; no-op when none loaded. */
 async function navFile(delta: number) {
   if (!summary) return;                 // guard: nothing loaded
+  // Same reason the buttons are disabled - the '[' / ']' keys must respect it too.
+  if (gatherPending) return;
   if (delta < 0 && !summary.hasPrev) return;
   if (delta > 0 && !summary.hasNext) return;
   setState('busy', delta < 0 ? 'Opening previous…' : 'Opening next…');
@@ -1501,7 +1638,7 @@ async function navFile(delta: number) {
   try {
     const s = await api.openSiblingFile(delta);
     if (!s) { updateFileNav(); updateStatusStrip(); return; } // edge / no move
-    applyOpenedFile(s);                 // updates summary, re-renders, resets trace
+    applyOpenedFile(s, true);           // updates summary, re-renders, resets trace; KEEPS the section view
   } catch (e) {
     setStatus('convStatus', 'Could not read file: ' + errMsg(e), 'err');
     setState('err', 'Open failed');
@@ -2132,14 +2269,30 @@ async function clearConverter() {
   summary = null;
   lastTrace = null;
   lastSection = null;
-  secView.init = false; // forget the data-zoom window so the next file opens fitted
+  secView.init = false;   // forget the data-zoom window so the next file opens fitted
+  traceView.init = false; // same for the Trace Inspector's time window
+  // Empty the viewer axis boxes too: with no file open there is no window for them
+  // to describe, and leaving the last record's numbers there states a view that is
+  // not on screen.
+  secAxisRange?.clear();
+  traceAxisRange?.clear();
+  traceAmpRange = null;
+  traceManualX = false; traceManualY = false;
+  // Same for the Spectrum + Velocity views: their file is gone, so their windows
+  // and boxes go with it and the next file starts fitted.
+  velView.v0 = velView.v1 = velView.t0 = velView.t1 = null;
+  for (const view of [specAvgView, specGramView, specFkView]) { view.x0 = view.x1 = view.y0 = view.y1 = null; }
+  velAxisRange?.clear();
+  specAvgAxis?.clear(); specGramAxis?.clear(); specFkAxis?.clear();
   secHealthReset();     // drop the trace-health overlay + findings
   fbReset();            // drop first-break picks + guide
   if (fbMode) setFbMode(false); // exit first-breaks mode on a full Clear
   disarmSecToWb();      // reset the '+ Workbench' click-to-add toggle (button + cursor)
   exitBoxModes();       // disarm both magnifier modes (button + cursor + rubber-band)
   closeZoom();          // close any open box-zoom viewer (its data is now gone)
-  secHoverHdrCache.clear(); secHoverLastIdx = -1; // drop cached per-trace header suffixes
+  gatherReset();        // drop the near-trace gather (its folder went with the file)
+  secAttrReset();       // hide the per-trace attribute profile (its scan went too)
+  secHoverHdrCache.clear(); secHoverLastIdx = -1; secHoverTrace = null; secHoverLast = null; // drop cached per-trace headers AND stored samples
   clearSecHover(); clearTraceHover();             // reset the hover captions
   traceIndex = 0;
   // batch state
@@ -2177,59 +2330,13 @@ async function clearConverter() {
   renderTraceHeader();   // clear the trace-header table (lastTrace is now null)
 }
 
-// -- Universal "Clear" (header button) --
-// One Clear button in the header, sitting next to "Open file…", clears the
-// ACTIVE tab's data. The Converter / Trace Inspector / File Viewer all hang off
-// the single open seismic file, so clearing any of them resets that file +
-// every derived view via clearConverter(). The SPS, Velocity and Workbench tabs
-// own independent state and clear only themselves.
-const CLEAR_TIP: Record<Tab, string> = {
-  conv: 'Clear file',
-  trace: 'Clear file',
-  section: 'Clear file',
-  sps: 'Clear SPS',
-  spscreate: 'Clear picks',
-  geomqc: 'Clear file + SPS',
-  vel: 'Clear picks',
-  spectrum: 'Clear spectrum',
-  workbench: 'Clear workbench',
-  obslog: 'Clear log',
-  sweeps: 'Clear sweep',
-  field: 'Clear log',
-};
-
-/** Whether the active tab currently holds anything worth clearing - drives the
- *  header Clear button's disabled state so it reads as "nothing to clear". */
-function activeTabHasData(tab: Tab): boolean {
-  switch (tab) {
-    case 'conv':
-    case 'trace':
-    case 'section':
-      return !!summary;
-    case 'sps':
-      return !!spsSummary;
-    case 'spscreate':
-      return createLines.some((l) => l.points.length > 0);
-    case 'geomqc':
-      // Geometry QC reads the shared open seismic file + loaded SPS survey;
-      // either present means there's something its Clear can drop.
-      return !!summary || !!spsSummary;
-    case 'vel':
-      return !!velResult || velPicks.length > 0;
-    case 'spectrum':
-      return !!summary;
-    case 'workbench':
-      return wbTraces.length > 0;
-    case 'obslog':
-      return logRows.length > 0;
-    case 'sweeps':
-      return swResult !== null || swMeasured !== null;
-    case 'field':
-      return fieldLogLines.length > 0;
-    default:
-      return false;
-  }
-}
+// -- Per-tab "Clear" --
+// Each data tab carries its own Clear button in its own top bar (Trace Inspector,
+// File Viewer, Spectrum, Workbench, Observer Log, Sweeps); every one of them
+// routes here through clearActiveTab(). The Converter / Trace Inspector / File
+// Viewer all hang off the single open seismic file, so clearing any of them
+// resets that file + every derived view via clearConverter(). The SPS, Velocity,
+// Workbench and Sweeps tabs own independent state and clear only themselves.
 
 /** Clear the data of whichever tab is currently active. The data-dropping tabs
  *  (Velocity / Workbench / Observer Log) snapshot their in-memory state to a
@@ -2286,15 +2393,6 @@ function clearActiveTab() {
       break;
     }
   }
-  updateHeaderClear();
-}
-
-/** Sync the header Clear button's tooltip + disabled state to the active tab. */
-function updateHeaderClear() {
-  const btn = $opt('headerClearBtn') as HTMLButtonElement | null;
-  if (!btn) return;
-  btn.title = CLEAR_TIP[activeTab] ?? 'Clear';
-  btn.disabled = !activeTabHasData(activeTab);
 }
 
 // -- Trace Inspector --
@@ -2303,9 +2401,15 @@ async function refreshTrace() {
   traceIndex = Math.max(0, Math.min(summary.traceCount - 1, traceIndex));
   try {
     lastTrace = await api.getTrace(traceIndex);
-    traceFit(lastTrace); // reset the time-axis zoom window to the whole trace
+    // The time window survives stepping traces AND stepping to a sibling file; it
+    // resets only on a fresh Open or Clear (both drop traceView.init), mirroring
+    // the File Viewer. Amplitude still starts auto on every trace - see
+    // traceKeepView for why that axis is treated differently.
+    if (traceView.init) traceKeepView(lastTrace);
+    else { traceFit(lastTrace); trcKeepNote = ''; }
     traceAmpRange = null; // a new trace starts on auto amplitude…
-    traceAxisRange?.clear(); // …and clears any stale manual X/Y boxes
+    traceManualX = false; traceManualY = false; // …and neither axis is pinned any more
+    traceAxisRange?.clear(); // …so the boxes go back to reporting the live window
     ($('traceSlider') as HTMLInputElement).max = String(summary.traceCount - 1);
     ($('traceSlider') as HTMLInputElement).value = String(traceIndex);
     renderTrace();
@@ -2476,6 +2580,266 @@ function renderTraceHeader() {
   if (!anyField) grid.innerHTML = '<div class="hdr-empty">This trace carries no populated header fields.</div>';
 }
 
+// -- Export the view on screen as a PNG image ------------------------------------
+//
+// A screenshot of a seismic panel is only defensible as evidence if it carries
+// what was done to the data, so the export is the panel's OWN redraw, not a crop
+// of the window: the display-state strip, both axes with their labels and units
+// and the colour bar are drawn by the same code that drew them on screen. A
+// footer band underneath adds the two facts the canvas does not carry - which
+// file this is, and when the picture was taken.
+//
+// HOW IT GETS ITS RESOLUTION: `setRenderScale` (renderer/src/render/surface.ts)
+// raises the device pixels behind the canvas for ONE redraw while leaving the CSS
+// size alone, so every margin, tick count and truncation is what the operator saw,
+// just with more pixels. The live canvas is redrawn at the normal scale in the
+// `finally`, so nothing on screen is left changed.
+//
+// PNG only, deliberately. The wiggle modes draw single-pixel lines, and JPEG rings
+// around those hard edges in a way that looks like data; a vector format is not
+// reachable from a raster canvas at all.
+
+/** Device pixels per CSS pixel for an exported image. Three keeps the 10px state
+ *  strip at an effortlessly legible 30px, puts a 1240-wide section at about 3700px
+ *  (a full-page figure at 300 dpi), and still encodes in well under a second. */
+const EXPORT_SCALE = 3;
+/** Chromium refuses a canvas dimension beyond this, and a refused canvas exports
+ *  blank rather than failing loudly, so the scale is clamped to stay inside it. */
+const EXPORT_MAX_PX = 16384;
+/** Height of the footer band, in CSS pixels, on top of the panel's own height.
+ *  Two lines - what the panel is, and when it was exported - plus one line for
+ *  each line of display-state text the on-screen strip had to cut. */
+const EXPORT_FOOT_H = 34;
+/** The most footer the export will ever add, which is also what the max-side
+ *  clamp has to allow for before the footer's real height is known. */
+const EXPORT_FOOT_MAX_H = 200;
+
+type ViewExportSpec = {
+  /** The canvas to capture; null when the panel has not been built yet. */
+  canvas: HTMLCanvasElement | null;
+  /** Repaint that canvas from already-cached data. Must be synchronous. */
+  redraw: () => void;
+  /** Plain-English name of the panel, for the footer and the toast. */
+  view: string;
+  /** What the picture is of, for the footer (usually the open file's name). */
+  source: string;
+  /** File-name stem suffix, e.g. 'section' gives "<file>_section.png". */
+  suffix: string;
+  /** Override the file-name stem when `source` is not a file name (the Workbench
+   *  draws traces collected from several files, so no single name is honest). */
+  stem?: string;
+  /** Extra footer lines describing what the picture shows, for a panel that draws
+   *  NO display-state strip. The six seismic viewers carry their state on the
+   *  canvas itself and pass nothing here; the SPS survey grid has no strip, so a
+   *  map with no survey, no counts and no CRS on it would not be evidence.
+   *  Read once, after the redraw, and wrapped like the strip remainder. */
+  context?: () => string[];
+};
+
+/** Trim `txt` to fit `avail` CSS pixels, marking the cut - same rule the state
+ *  strip uses, so the footer can never run off the edge of the image. */
+function exportFitText(ctx: CanvasRenderingContext2D, txt: string, avail: number): string {
+  if (!(avail > 0)) return '';
+  let out = txt;
+  if (ctx.measureText(out).width <= avail) return out;
+  while (out.length > 4 && ctx.measureText(out + '...').width > avail) out = out.slice(0, -1);
+  return out + '...';
+}
+
+/** Split `txt` into as many lines as it takes to fit `avail` CSS pixels, breaking
+ *  between words. Used for the footer's full display-state text, which is exactly
+ *  the text the on-screen strip had to cut. Bounded, so a pathological string
+ *  cannot grow the image without limit. */
+function exportWrapText(ctx: CanvasRenderingContext2D, txt: string, avail: number, maxLines = 8): string[] {
+  if (!(avail > 0) || !txt) return [];
+  const words = txt.split(' ');
+  const lines: string[] = [];
+  let cur = '';
+  for (const w of words) {
+    const next = cur ? cur + ' ' + w : w;
+    if (cur && ctx.measureText(next).width > avail) {
+      lines.push(cur);
+      if (lines.length >= maxLines) return [...lines.slice(0, maxLines - 1), exportFitText(ctx, cur, avail)];
+      cur = w;
+    } else {
+      cur = next;
+    }
+  }
+  if (cur) lines.push(exportFitText(ctx, cur, avail));
+  return lines.slice(0, maxLines);
+}
+
+/** Redraw one viewer at export resolution, add the footer band, and save it as a
+ *  PNG through the shared native save dialog. Reports through the snackbar; never
+ *  a browser dialog, since the renderer is sandboxed. */
+async function exportViewImage(spec: ViewExportSpec): Promise<void> {
+  const cv = spec.canvas;
+  if (!cv) { infoToast('There is nothing on this panel to export yet.'); return; }
+  const W = cv.clientWidth, H = cv.clientHeight;
+  if (!Number.isFinite(W) || !Number.isFinite(H) || !(W > 0) || !(H > 0)) {
+    infoToast('There is nothing on this panel to export yet.');
+    return;
+  }
+  // Clamp so neither side can exceed what Chromium will allocate; a clamped
+  // export is still a good picture, a refused one is a blank file. The footer's
+  // height is not known until the panel has been redrawn, so the clamp allows for
+  // the largest one it can produce.
+  const scale = Math.max(1, Math.min(EXPORT_SCALE, Math.floor(EXPORT_MAX_PX / Math.max(W, H + EXPORT_FOOT_MAX_H))));
+  const outW = Math.round(W * scale);
+  if (!(outW > 0)) { infoToast('This panel is too large to export as an image.'); return; }
+  const avail = Math.max(40, W - 12);
+
+  let out: HTMLCanvasElement | null = null;
+  let octx: CanvasRenderingContext2D | null = null;
+  let footer: string[] = [];
+  let footH = EXPORT_FOOT_H;
+  try {
+    // 1. The panel itself, redrawn at export resolution and copied across. The
+    // strip text is read back AFTER the redraw, because how much of it fitted -
+    // and therefore how much the footer has to repeat - depends on the panel.
+    try {
+      clearStateStrip(cv);           // a panel that draws no strip must not inherit one
+      setRenderScale(scale);
+      spec.redraw();
+
+      const strip = stateStripFor(cv);
+      const meas = document.createElement('canvas').getContext('2d');
+      if (meas) {
+        meas.font = '10px Consolas, monospace';
+        footer = [`${spec.view} · ${spec.source || 'no file'}`, `Exported by SeisConv on ${fmtStamp(new Date())}`];
+        // The strip drops whole trailing clauses on a panel too narrow to hold
+        // them, and on the File Viewer that cut usually eats the excursion and
+        // the flattened percentage. The reader of an exported image cannot open the Display
+        // panel to recover them, so whatever was cut is repeated here in full.
+        // A strip-less panel states its context here instead (SPS survey grid).
+        for (const l of spec.context?.() ?? []) {
+          if (typeof l === 'string' && l) footer.push(...exportWrapText(meas, l, avail));
+        }
+        const cut = strip ? [strip.line1, strip.line2].filter((l) => meas.measureText(l).width > avail) : [];
+        if (cut.length) {
+          footer.push('Display state in full (the strip above is cut to fit the panel width):');
+          for (const l of cut) footer.push(...exportWrapText(meas, l, avail));
+        }
+        footH = Math.min(EXPORT_FOOT_MAX_H, 8 + footer.length * 13 + 6);
+      }
+      const outH = Math.round((H + footH) * scale);
+      if (!(outH > 0)) throw new Error('the image would have no height');
+      out = document.createElement('canvas');
+      out.width = outW; out.height = outH;
+      octx = out.getContext('2d');
+      if (!octx) throw new Error('no drawing context');
+      octx.fillStyle = '#0d1f33';
+      octx.fillRect(0, 0, outW, outH);
+      if (cv.width > 0 && cv.height > 0) {
+        octx.drawImage(cv, 0, 0, cv.width, cv.height, 0, 0, outW, Math.round(H * scale));
+      }
+    } finally {
+      // Non-negotiable: a scale left standing would change every later repaint.
+      setRenderScale(null);
+      spec.redraw();
+    }
+
+    // 2. The footer band, drawn in CSS units so it matches the strip's type size.
+    octx.save();
+    octx.setTransform(scale, 0, 0, scale, 0, 0);
+    octx.fillStyle = '#0d1f33';
+    octx.fillRect(0, H, W, footH);
+    octx.strokeStyle = '#24405e';
+    octx.lineWidth = 1;
+    octx.beginPath(); octx.moveTo(0, H + 0.5); octx.lineTo(W, H + 0.5); octx.stroke();
+    octx.textAlign = 'left'; octx.textBaseline = 'alphabetic';
+    octx.font = '10px Consolas, monospace';
+    for (let i = 0; i < footer.length; i++) {
+      const y = H + 15 + i * 13;
+      if (!Number.isFinite(y) || y > H + footH) break;
+      octx.fillStyle = i === 0 ? '#c8d2e0' : '#9fb0c4';
+      octx.fillText(exportFitText(octx, footer[i], avail), 6, y);
+    }
+    octx.restore();
+
+    // 3. Encode and hand the bytes to the existing binary save channel.
+    const png = out;
+    const blob = await new Promise<Blob | null>((res) => png.toBlob((b) => res(b), 'image/png'));
+    if (!blob) { infoToast('Could not encode the image.'); return; }
+    const bytes = new Uint8Array(await blob.arrayBuffer());
+    const stem = ((spec.stem ?? spec.source ?? 'view').replace(/\.[^.]+$/, '').replace(/[^A-Za-z0-9_.-]/g, '_') || 'view').slice(0, 64);
+    const r = await api.exportBinary(`${stem}_${spec.suffix}.png`, bytes);
+    if (r.ok) infoToast(`Image saved (${png.width} × ${png.height} pixels) → ${r.path ?? 'PNG'}`);
+    else if (!r.canceled) infoToast('Image export failed: ' + (r.error ?? 'unknown'));
+  } catch (e) {
+    infoToast('Image export failed: ' + errMsg(e));
+  }
+}
+
+/** The open seismic file's name, or a stand-in, for an export footer. */
+function exportSourceName(): string {
+  return summary?.name || 'no file open';
+}
+
+/** The SPS survey grid's footer context.
+ *
+ *  The six seismic viewers burn their display state onto the canvas, so their
+ *  exports carry it for free. The survey grid has no strip, and a station plot,
+ *  a fold heatmap and an X-ref spider of the same survey look nothing alike - so
+ *  the facts a reader needs to interpret the map are stated in the footer:
+ *  station and line counts, the layout and the CRS the eastings/northings are in,
+ *  the bearing the picture is turned to, and which layers are actually drawn. */
+function spsExportContext(): string[] {
+  const s = spsSummary;
+  if (!s) return [];
+  const out: string[] = [];
+  const proj = s.projection?.desc || s.projection?.type || s.projection?.subtype || 'unknown CRS';
+  const srcLines = spsGeom ? spsGeom.src.names.length : 0;
+  const rcvLines = spsGeom ? spsGeom.rcv.names.length : 0;
+  out.push(`Survey: ${s.sources} sources on ${srcLines} lines · ${s.receivers} receivers on ${rcvLines} lines · ${s.xrefs} X-refs · layout ${s.layout || 'unstated'}`);
+  out.push(`Coordinates: projected easting/northing in ${proj}`
+    + (s.formats && s.formats.length ? ` · read from ${s.formats.join(' · ')}` : ''));
+  const bearing = Number.isFinite(spsBearing) ? spsBearing : 0;
+  out.push(`Orientation: ${bearing === 0
+    ? 'north is up (bearing 0°)'
+    : `turned to a bearing of ${bearing}° clockwise from North about the survey centre`}`);
+  const layers: string[] = [];
+  if (($opt('spsShowS') as HTMLInputElement | null)?.checked) layers.push('sources');
+  if (($opt('spsShowR') as HTMLInputElement | null)?.checked) layers.push('receivers');
+  if (spsShowXrefs()) layers.push('X-ref spider');
+  if (spsShowFold()) layers.push(`fold/coverage at ${spsBinSize()} m bins`);
+  if (spsShowBinGrid()) layers.push('P6/11 bin grid');
+  out.push(`Plotted: ${layers.length ? layers.join(' · ') : 'nothing (all layers switched off)'}`);
+  if (s.errors.length) out.push(`Load flagged ${s.errors.length} header/record issue${s.errors.length > 1 ? 's' : ''} - see the SPS tab.`);
+  return out;
+}
+
+/** Save the survey grid as a PNG through the same mechanism the six seismic
+ *  viewers use. Grid view only: the real map is a Leaflet web map, not a canvas,
+ *  and its tiles are a third party's to redistribute, not ours. */
+async function exportSurveyGridImage(): Promise<void> {
+  if (spsView !== 'grid') {
+    infoToast('Switch to the Survey grid view to save it as an image - the real map is a web map, not a canvas.');
+    return;
+  }
+  if (!spsSummary || !spsGeom) { infoToast('Load an SPS survey before saving the grid as an image.'); return; }
+  // The loaded S/R/X file names are only known to the worker, so ask for them
+  // here (outside the synchronous redraw). Best effort - a failure costs the
+  // footer its file list, never the export.
+  let src = 'SPS survey';
+  try {
+    const r = await api.spsHeaderList();
+    const names = r?.ok ? r.files.map((f) => f.name).filter(Boolean) : [];
+    if (names.length) src = names.join(', ');
+  } catch { /* keep the generic label */ }
+  await exportViewImage({
+    canvas: $opt('spsCanvas') as HTMLCanvasElement | null,
+    redraw: () => drawSurveyGrid(),
+    view: 'SPS survey grid',
+    source: src,
+    // Three joined file names would make an unreadable stem, so name it for what
+    // the picture is instead.
+    stem: 'survey',
+    suffix: 'grid',
+    context: spsExportContext,
+  });
+}
+
 /** Draw the active trace in the current mode (waveform or amplitude spectrum). */
 function renderTrace() {
   if (!summary || !lastTrace) return;
@@ -2493,7 +2857,9 @@ function renderTrace() {
   } else {
     drawTrace(cv, t);
     syncTraceAxisPlaceholders(); // reflect the live time/amplitude window in the boxes
-    $('traceLabel').textContent = `Trace ${t.index + 1} / ${summary.traceCount}  ·  ${t.nSamples} samples`;
+    $('traceLabel').textContent =
+      `Trace ${t.index + 1} / ${summary.traceCount}  ·  ${t.nSamples} samples` + trcKeepNote;
+    trcKeepNote = ''; // said once, for the trace it was about
   }
   // Header table tracks the active trace regardless of plot mode.
   renderTraceHeader();
@@ -2511,25 +2877,86 @@ function setTraceMode(m: 'wave' | 'spectrum') {
   renderTrace();
 }
 
+// -- Trace Inspector amplitude scale basis (P2-9) -----------------------------
+// The Inspector used to renormalise over the VISIBLE window on every zoom, so the
+// same event changed apparent size as you zoomed and two zoom levels could not be
+// compared. It now offers the File Viewer's Scale vocabulary, defaulting to the
+// same "Record pct" the File Viewer defaults to, so a zoom changes what you see
+// and not how big it looks. "Record" is the whole trace here, since the Inspector
+// shows one trace; the File Viewer's third option, "Per trace", would be
+// meaningless on a single trace, so that slot carries the old visible-window
+// behaviour instead, kept so nothing is lost.
+type TrcScaleMode = 'max' | 'pct' | 'window';
+
+function trcScaleMode(): TrcScaleMode {
+  const v = ($opt('traceScaleMode') as HTMLSelectElement | null)?.value;
+  return v === 'max' || v === 'window' ? v : 'pct';
+}
+
+function trcScalePct(): number {
+  const v = parseFloat(($opt('traceScalePct') as HTMLInputElement | null)?.value ?? '');
+  return Number.isFinite(v) ? Math.min(100, Math.max(1, v)) : SCALE_DEFAULT_PERCENTILE;
+}
+
+/** Show the percentile box only for the percentile basis. */
+function trcSyncScaleControls() {
+  const wrap = $opt('traceScalePctWrap');
+  if (wrap) wrap.style.display = trcScaleMode() === 'pct' ? '' : 'none';
+}
+
+/** The amplitude normalisation factor drawTraceCore actually draws with, for a
+ *  given basis. Called by the DRAW and by both hit-test sides (the manual-range
+ *  placeholders and the box-drag inverse), so the picture, the boxes and the
+ *  magnifier can never disagree about the swing - the drift hazard the plan calls
+ *  out. Always finite and > 0. */
+// Single-slot memo for the WHOLE-TRACE bases ('max' and 'pct'), keyed exactly the
+// way secGainedSection keys its gained matrix: source identity + a settings
+// string. Those two bases do not depend on s0/s1, so a drag was re-sorting the
+// entire trace on every mousemove for a number that cannot change - at the
+// MAX_SAMPLES_PER_TRACE cap that is an 8 MB allocation and a 1e6-element sort per
+// tick. The source is `t.samples`: every fetch hands back a FRESH transferable
+// (lastTrace = await api.getTrace(...)), and nothing in the renderer ever writes
+// into a fetched sample array, so stepping to another trace, opening another file
+// and a plain refetch all produce a new object and miss the slot. 'window' is
+// window-dependent by definition and stays live.
+let trcBasisSrc: Float32Array | null = null;
+let trcBasisKey = '';
+let trcBasisVal = 1;
+
+function trcNormFactor(t: TraceData, s0: number, s1: number, scale?: { mode: TrcScaleMode; pct: number }): number {
+  const sc = scale ?? { mode: 'window' as TrcScaleMode, pct: 95 };
+  const a = Math.max(0, Math.min(t.nSamples - 1, Math.floor(s0)));
+  const b = Math.max(a + 1, Math.min(t.nSamples, Math.ceil(s1)));
+  if (sc.mode === 'max' || sc.mode === 'pct') {
+    const p = Math.min(1, Math.max(0.01, sc.pct / 100));
+    const key = `${sc.mode}|${p}`;
+    if (trcBasisSrc === t.samples && trcBasisKey === key) return trcBasisVal;
+    const whole = sc.mode === 'max' ? trcMaxAbs(t.samples) : normFactorPercentile(t.samples, p);
+    const safe = Number.isFinite(whole) && whole > 0 ? whole : 1;
+    trcBasisSrc = t.samples; trcBasisKey = key; trcBasisVal = safe;
+    return safe;
+  }
+  const raw = normFactorPercentile(t.samples.subarray(a, b), 0.95);
+  return Number.isFinite(raw) && raw > 0 ? raw : 1;
+}
+
+/** Largest absolute sample in a trace, guarded so a dead or all-NaN trace can
+ *  never divide a canvas coordinate by zero. */
+function trcMaxAbs(samples: Float32Array): number {
+  let m = 0;
+  for (let i = 0; i < samples.length; i++) {
+    const a = Math.abs(samples[i]);
+    if (Number.isFinite(a) && a > m) m = a;
+  }
+  return m > 1e-12 ? m : 1;
+}
+
 function drawTrace(cv: HTMLCanvasElement, t: TraceData) {
   // The Inspector paints its live zoom window + manual amplitude override; the
   // shared core does the actual drawing so the zoom viewer can reuse it with an
   // explicit window / amplitude range without disturbing the Inspector's state.
   if (!traceView.init || traceView.fullS !== t.nSamples) traceFit(t);
-  drawTraceCore(cv, t, traceView.s0, traceView.s1, traceAmpRange);
-}
-
-/** The shared 6-line time grid for the single-trace canvases (ms down the left
- *  edge). Identical in the Inspector, the box-zoom viewer, the workbench and the
- *  comparison plot; extracted verbatim so the four stay in step. */
-function drawMsTimeGrid(ctx: CanvasRenderingContext2D, ML: number, MT: number, pw: number, ph: number, s0: number, denom: number, msPerSample: number) {
-  for (let k = 0; k <= 5; k++) {
-    const y = MT + (ph * k) / 5;
-    const sampleAt = s0 + (denom * k) / 5;
-    ctx.fillText((sampleAt * msPerSample).toFixed(0) + ' ms', 6, y + 3);
-    ctx.strokeStyle = '#173049';
-    ctx.beginPath(); ctx.moveTo(ML, y); ctx.lineTo(ML + pw, y); ctx.stroke();
-  }
+  drawTraceCore(cv, t, traceView.s0, traceView.s1, traceAmpRange, undefined, { mode: trcScaleMode(), pct: trcScalePct() });
 }
 
 /** Paint one trace into `cv` over the sample window [s0,s1) with an optional raw
@@ -2539,16 +2966,12 @@ function drawMsTimeGrid(ctx: CanvasRenderingContext2D, ML: number, MT: number, p
 function drawTraceCore(
   cv: HTMLCanvasElement, t: TraceData,
   s0in: number, s1in: number, ampRange: { min: number; max: number } | null,
+  strip?: { name?: string; polarity?: boolean },
+  scale?: { mode: TrcScaleMode; pct: number },
 ) {
-  const dpr = window.devicePixelRatio || 1;
-  const W = cv.clientWidth || 800;
-  const H = cv.clientHeight || 460;
-  cv.width = Math.round(W * dpr);
-  cv.height = Math.round(H * dpr);
-  const ctx = cv.getContext('2d')!;
-  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-  ctx.fillStyle = '#0d1f33';
-  ctx.fillRect(0, 0, W, H);
+  const surf = beginCanvas(cv, { fallbackW: 800, fallbackH: 460 }, '#0d1f33');
+  if (!surf) return;
+  const { ctx, W, H } = surf;
   const n = t.nSamples;
   if (!n || !t.samples.length) return;
 
@@ -2561,8 +2984,15 @@ function drawTraceCore(
   const ML = TRC_ML, MR = TRC_MR, MT = TRC_MT, MB = TRC_MB;
   const pw = W - ML - MR, ph = H - MT - MB;
   const cx = ML + pw / 2;
-  // Renormalize over the VISIBLE window so zoom shows local detail at full swing.
-  const nf = normFactorPercentile(t.samples.subarray(s0, s1), 0.95) || 1;
+  // Amplitude scale basis. Anything other than 'window' is computed over the WHOLE
+  // trace, so the basis does not move when the time window does and amplitudes stay
+  // comparable across zoom levels. Callers with no controls (the Sweeps pilot plot)
+  // get the old visible-window behaviour.
+  const sc = scale ?? { mode: 'window' as TrcScaleMode, pct: 95 };
+  const nf = trcNormFactor(t, s0, s1, sc);
+  const scaleTxt = sc.mode === 'max' ? `Scale Record max (basis ${secNum(nf)})`
+    : sc.mode === 'pct' ? `Scale Record pct ${sc.pct}% (basis ${secNum(nf)})`
+      : `Scale visible window, 95th percentile (basis ${secNum(nf)})`;
 
   // X (amplitude) axis: auto-normalized about the centre axis, OR a manual raw
   // [ampMin,ampMax] window stretched across the plot width. The manual range is
@@ -2572,7 +3002,13 @@ function drawTraceCore(
   const useAmp = ampRange !== null;
   const aMin = ampRange ? ampRange.min : 0;
   const aSpan = ampRange ? (ampRange.max - ampRange.min) : 1;
-  const xOfAmp = (raw: number) => {
+  // Display-only polarity flip (File Viewer / Inspector / box zoom). Applied to
+  // the value on its way to a pixel; t.samples is never written. `polarity: false`
+  // marks samples that did NOT come from the open file (the Sweeps pilot plot),
+  // and the open file's display flip must not be applied to those.
+  const pol = strip?.polarity === false ? 1 : viewPolarity();
+  const xOfAmp = (rawIn: number) => {
+    const raw = rawIn * pol;
     if (useAmp) {
       const f = Math.max(0, Math.min(1, (raw - aMin) / aSpan));
       return ML + f * pw;
@@ -2607,7 +3043,7 @@ function drawTraceCore(
   ctx.fillStyle = '#7e93ac';
   ctx.font = '10px Consolas, monospace';
   const msPerSample = t.sampleInt / 1000;
-  drawMsTimeGrid(ctx, ML, MT, pw, ph, s0, denom, msPerSample);
+  drawMsTimeAxis(ctx, { ML, MT, pw, ph, t0Ms: s0 * msPerSample, t1Ms: (s0 + denom) * msPerSample, target: 5, grid: '#173049' });
 
   // amplitude (X) axis ticks - make the horizontal swing readable. Three ticks:
   // left edge / centre / right edge, showing the ACTUAL sample amplitude at that
@@ -2615,8 +3051,10 @@ function drawTraceCore(
   // right=+nf, centre≈0); in manual mode the plot width spans [aMin,aMax]. SEG-Y/
   // SEG-D samples are dimensionless, so the caption says 'Amplitude' - no unit.
   // All values are guarded finite before formatting so no NaN reaches the canvas.
-  const ampLeft = useAmp ? aMin : -nf;
-  const ampRight = useAmp ? aMin + aSpan : nf;
+  // In auto mode the LEFT edge is the amplitude that maps there, which the
+  // display flip swaps, so the tick labels follow the picture instead of lying.
+  const ampLeft = (useAmp ? aMin : -nf) * pol;
+  const ampRight = (useAmp ? aMin + aSpan : nf) * pol;
   const ampMid = (ampLeft + ampRight) / 2;
   const fmtAmp = (v: number) => {
     if (!Number.isFinite(v)) return '-';
@@ -2642,6 +3080,28 @@ function drawTraceCore(
   ctx.textAlign = 'center';
   ctx.fillText('Amplitude (sample value)', ML + pw / 2, MT + ph - 4);
   ctx.textAlign = 'left';
+
+  // Display-state strip: this viewer's OWN transform chain. It applies no gain,
+  // no AGC and no display clip - saying so is the point, since the section next
+  // door does apply all three and the two are compared side by side.
+  const winTxt = Number.isFinite(msPerSample)
+    ? `Window ${(s0 * msPerSample).toFixed(1)} to ${(s1 * msPerSample).toFixed(1)} ms`
+    : `Window ${s0} to ${s1} samples`;
+  drawStateStrip(surf.ctx, W,
+    [
+      `${strip?.name ?? 'Single trace'} · Wiggle`,
+      useAmp
+        ? `Scale manual ${fmtAmp(aMin)} to ${fmtAmp(aMin + aSpan)}`
+        : scaleTxt,
+      ...(pol < 0 ? ['Polarity FLIPPED for display only (stored samples unchanged)'] : []),
+      'Gain ×1.00 (0.0 dB)',
+      'AGC off',
+      'Clip none',
+      winTxt,
+    ],
+    stripValueLine(pol < 0
+      ? 'Display is inverted, so a positive stored sample deflects LEFT of the centre axis'
+      : 'Positive sample value deflects RIGHT of the centre axis', { polarity: strip?.polarity }));
 }
 
 /** A frequency-domain spectrum: parallel freqs/amp arrays + the Nyquist edge.
@@ -2669,14 +3129,15 @@ function drawSpectrum(
     aMin?: number | null; aMax?: number | null;
   } = {},
 ) {
-  const dpr = window.devicePixelRatio || 1;
-  const W = cv.clientWidth || 800, H = cv.clientHeight || 460;
-  cv.width = Math.round(W * dpr); cv.height = Math.round(H * dpr);
-  const ctx = cv.getContext('2d')!;
-  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-  const bg = ctx.createLinearGradient(0, 0, 0, H);
-  bg.addColorStop(0, '#0f2540'); bg.addColorStop(1, '#0b1a2c');
-  ctx.fillStyle = bg; ctx.fillRect(0, 0, W, H);
+  // The only gradient background: built in user space AFTER the dpr transform,
+  // which is why the fill is a factory rather than a colour string.
+  const surf = beginCanvas(cv, { fallbackW: 800, fallbackH: 460 }, (c, _W, h) => {
+    const bg = c.createLinearGradient(0, 0, 0, h);
+    bg.addColorStop(0, '#0f2540'); bg.addColorStop(1, '#0b1a2c');
+    return bg;
+  });
+  if (!surf) return;
+  const { ctx, W, H } = surf;
   if (!sp.amp.length) {
     ctx.fillStyle = '#5e7186'; ctx.font = '13px Consolas, monospace'; ctx.textAlign = 'center';
     ctx.fillText('No spectrum to show', W / 2, H / 2); ctx.textAlign = 'left';
@@ -2684,8 +3145,8 @@ function drawSpectrum(
   }
 
   const dB = !!opts.dB;
-  const ML = 56, MR = 16, MT = 18, MB = 28;
-  const pw = W - ML - MR, ph = H - MT - MB;
+  const { ML, MR, MT, MB } = SPEC_AVG_MARGINS;
+  const { w: pw, h: ph } = plotRect(W, H, SPEC_AVG_MARGINS);
   const fmax = sp.nyquist || 1;
   // Linear peak amplitude (skip DC at k=0) → reference for both peak + dB scale.
   let amax = 0, pk = 1;
@@ -2714,7 +3175,7 @@ function drawSpectrum(
   ctx.font = '10px Consolas, monospace'; ctx.lineWidth = 1;
   const fStep = niceStep(fSpan, 8);
   const fStart = Math.ceil(fLo / fStep) * fStep;
-  for (let f = fStart; f <= fHi + 1e-6; f += fStep) {
+  for (let f = fStart; f <= fHi + fStep * 1e-6; f += fStep) {
     const x = Xf(f); if (x < ML - 0.5 || x > ML + pw + 0.5) continue;
     ctx.strokeStyle = 'rgba(33,69,100,0.45)';
     ctx.beginPath(); ctx.moveTo(x, MT); ctx.lineTo(x, MT + ph); ctx.stroke();
@@ -2960,13 +3421,14 @@ function axisRangeControls(host: HTMLElement, opts: AxisRangeOptions): AxisRange
       // Edited (dirty) edges keep whatever the user typed.
       const put = (el: HTMLInputElement, v: number) => {
         if (!Number.isFinite(v)) return;
-        // Round to a tidy step: integer axes to whole numbers, else 2 decimals.
-        const r = el.step === '1' ? Math.round(v) : Math.round(v * 100) / 100;
+        const s = el.step === '1' ? String(Math.round(v)) : fmtAxisEdge(v);
+        const r = Number(s);
+        if (!Number.isFinite(r)) return;
         // Record the synced extent for EVERY edge (even dirty ones) so readPair can
         // seed an un-edited partner from it rather than from a stepper-nudged box.
+        // It is the number actually SHOWN, so seeding and re-parsing agree exactly.
         ext.set(el, r);
         if (dirty.has(el)) return; // keep the user's typed value visible
-        const s = String(r);
         if (el.value !== s) el.value = s;
       };
       put(xLo, xMin); put(xHi, xMax); put(yLo, yMin); put(yHi, yMax);
@@ -2978,11 +3440,865 @@ function axisRangeControls(host: HTMLElement, opts: AxisRangeOptions): AxisRange
 // -- File Viewer (section) --
 // Plot-rectangle margins (shared by drawSection + the data-zoom interactions so
 // a cursor pixel maps to the exact same data window the renderer paints).
-const SEC_ML = 58, SEC_MR = 12, SEC_MT = 10, SEC_MB = 24;
+// SEC_MT carries the permanent display-state strip (RULE 6.5): two 10px text
+// lines painted INSIDE the canvas, so the strip can never go stale relative to
+// the pixels beside it and costs the toolbar nothing.
+const { ML: SEC_ML, MR: SEC_MR, MT: SEC_MT, MB: SEC_MB } = SEC_MARGINS; // MT = 10 + SEC_STRIP_H
+
+/** The display mode the File Viewer is painting with - ONE reader, so the draw
+ *  and every hit test agree about which margins are in force. */
+function secDisplayMode(): string {
+  return ($opt('secMode') as HTMLSelectElement | null)?.value || 'wiggle';
+}
+
+/** The section's RIGHT margin for a display mode. A Variable Density panel now
+ *  carries a numeric colour bar (a colour that cannot be turned back into a
+ *  number is not evidence), and the bar plus its tick labels need the same right
+ *  margin the spectrogram and velocity panels already use. A pure wiggle panel
+ *  has no bar, so it keeps the narrow margin and stays as wide as it ever was.
+ *  The other three margins never vary. */
+function secMR(mode: string = secDisplayMode()): number {
+  return mode === 'vd' || mode === 'vdwig' ? 92 : SEC_MR;
+}
 // Trace Inspector plot-rectangle margins - shared by drawTraceCore, the hover
 // read-out and the box-zoom region math so a cursor pixel maps to the exact same
 // sample/amplitude the renderer paints.
-const TRC_ML = 60, TRC_MR = 14, TRC_MT = 14, TRC_MB = 26;
+const { ML: TRC_ML, MR: TRC_MR, MT: TRC_MT, MB: TRC_MB } = TRC_MARGINS;
+
+// -- Section display scaling (Feature: real exposure control) -----------------
+// The section used to be normalized by the MAXIMUM across plotted traces of each
+// trace's own p95, with a linear 0.2-6 gain slider. On real data that maximum is
+// ~600x the median trace's p95, so the median trace sat at 1/600 of full scale
+// and the ENTIRE slider lived in the bottom 1% of the useful range - the record
+// stayed flat grey at gain 6. Switch AGC on and the spread collapses to 1.15:1,
+// so the very same slider position saturated instead. One slider, two completely
+// different exposures depending on a checkbox.
+//
+// The worker now returns `norms` (each plotted trace's own p95), so all three
+// scaling modes are derived HERE and switching mode is a pure redraw - no
+// refetch, and therefore no loss of zoom.
+
+type SecScaleMode = 'max' | 'pct' | 'trace' | 'raw';
+
+/** Current scaling mode; unknown/absent control falls back to the historical
+ *  'max' behaviour so the old look is always reachable. */
+function secScaleMode(): SecScaleMode {
+  const v = ($opt('secScaleMode') as HTMLSelectElement | null)?.value;
+  return v === 'pct' || v === 'trace' || v === 'raw' ? v : 'max';
+}
+
+// -- Display GAIN LAW (Seismic Unix `sugain` family) ---------------------------
+// The viewer had a flat multiplier and AGC, which sit at opposite extremes: AGC
+// normalises every window to the same level, so a weak or dying geophone looks
+// exactly as healthy as its neighbours. The time laws below correct with a factor
+// that depends only on TIME and is identical on every trace, so relative amplitude
+// between channels survives and a bad channel still reads as bad. That is the
+// capability spread QC was missing.
+//
+// Position in the pipeline, stated on the state strip because a QC record has to
+// say what was done to the data:
+//     worker AGC -> gain law -> scale basis -> the dB gain -> display clip
+// SU applies AGC BETWEEN its gpow and pbal stages; here AGC has already been
+// applied by the worker before the samples arrive, so the law runs after it. That
+// divergence is deliberate (the worker parses once and serves a decimated matrix)
+// and is why the strip prints the order rather than leaving it to be guessed.
+
+type SecGainLaw = 'none' | 'fixed' | 'tpow' | 'epow' | 'gpow' | 'pbal';
+
+/** Per-law exponent limits and default. ONE table drives the number box's
+ *  min/max/step, the clamp, and the remembered value, so the box can never offer
+ *  a value the clamp would silently reject. */
+const SEC_GAIN_LAW_EXP: Record<'tpow' | 'epow' | 'gpow', { min: number; max: number; step: number; dflt: number }> = {
+  tpow: { min: -3, max: 4, step: 0.1, dflt: 2 },
+  // epow is an exponential: the useful range is small and negative values would
+  // suppress late time instead of boosting it, which no one asks a "stronger
+  // late-time boost" control for.
+  epow: { min: 0, max: 10, step: 0.1, dflt: 1 },
+  // gpow must be > 0 (signedPow rejects <= 0) and < 1 to COMPRESS; 1 is identity.
+  gpow: { min: 0.05, max: 1, step: 0.05, dflt: 0.5 },
+};
+
+/** Plain English, no SU vocabulary. Shown under the picker (an <option title>
+ *  does not render inside a Chromium select) and abbreviated onto the strip. */
+const SEC_GAIN_LAW_NOTE: Record<SecGainLaw, string> = {
+  none: 'Raw sample values. The only mode you can quote an amplitude from.',
+  fixed: 'One multiplier for everything. Brightness changes, comparisons do not.',
+  tpow: 'Brightens later arrivals to offset spreading loss. Same correction on every trace, so a weak channel still looks weak.',
+  epow: 'Stronger late-time boost, for heavily attenuated data.',
+  gpow: 'Squashes the loud and quiet range so weak events show without flattening them. Polarity and the order of amplitudes are kept.',
+  pbal: 'Warning: every trace ends at the same level. Like AGC, this hides a weak or dying geophone, so do not use it for spread QC.',
+};
+
+/** Short name for the state strip. */
+const SEC_GAIN_LAW_LABELS: Record<SecGainLaw, string> = {
+  none: 'None (true amplitude)',
+  fixed: 'Fixed gain',
+  tpow: 'Time gain t^n',
+  epow: 'Exponential time gain',
+  gpow: 'Amplitude compression',
+  pbal: 'Equalise traces (RMS)',
+};
+
+/** Last exponent the user typed for each law, so switching away and back does
+ *  not silently reset it. Seeded with each law's own default. */
+const secGainLawExpMemo: Record<'tpow' | 'epow' | 'gpow', number> = {
+  tpow: SEC_GAIN_LAW_EXP.tpow.dflt,
+  epow: SEC_GAIN_LAW_EXP.epow.dflt,
+  gpow: SEC_GAIN_LAW_EXP.gpow.dflt,
+};
+
+/** Which law's exponent the shared number box is currently displaying. Starts as
+ *  'tpow' because that is the law the box's HTML min/max/value are written for. */
+let secGainLawExpFor: 'tpow' | 'epow' | 'gpow' = 'tpow';
+
+/** Selected law; anything unknown falls back to 'fixed', which is exactly the
+ *  behaviour the viewer had before this control existed. */
+function secGainLaw(): SecGainLaw {
+  const v = ($opt('secGainLaw') as HTMLSelectElement | null)?.value;
+  return v === 'none' || v === 'tpow' || v === 'epow' || v === 'gpow' || v === 'pbal' ? v : 'fixed';
+}
+
+/** The exponent for a law that takes one, clamped into that law's own range.
+ *  Always finite - it multiplies straight into a sample that reaches a canvas. */
+function secGainLawExp(law: 'tpow' | 'epow' | 'gpow'): number {
+  const lim = SEC_GAIN_LAW_EXP[law];
+  const v = parseFloat(($opt('secGainLawExp') as HTMLInputElement | null)?.value ?? '');
+  if (!Number.isFinite(v)) return lim.dflt;
+  return Math.min(lim.max, Math.max(lim.min, v));
+}
+
+/** GainParams for the selected law, or null when the law is the identity
+ *  ('none' / 'fixed' - the dB gain alone). Returning null is load-bearing: the
+ *  caller then paints the worker's matrix untouched, so the default display costs
+ *  nothing and is bit-for-bit what it was before this feature. */
+function secGainLawParams(): GainParams | null {
+  const law = secGainLaw();
+  if (law === 'tpow') return { tpow: secGainLawExp('tpow') };
+  if (law === 'epow') return { epow: secGainLawExp('epow') };
+  if (law === 'gpow') return { gpow: secGainLawExp('gpow') };
+  if (law === 'pbal') return { pbal: true };
+  return null;
+}
+
+/** The section matrix with the gain law applied, plus fresh per-trace norms so
+ *  the scale basis describes the samples actually painted. Cached on the section
+ *  object identity + the parameter string, so changing colour map, mode, clip or
+ *  the dB gain is still a pure redraw and never re-runs the gain.
+ *
+ *  Time comes from the SAME convention as the drawn time axis (t0 = sampStart x
+ *  sampleInt, dt = the decimated column spacing), so "t" on the strip and "t" in
+ *  the law are the one number. Every trace is passed identical dt/t0/params, so
+ *  gain.ts's memoised time-factor table is built ONCE for the whole record and
+ *  reused for every remaining trace; the output also writes into one preallocated
+ *  buffer, so there is no per-trace allocation either. */
+let secGainedKey = '';
+let secGainedSrc: SectionData | null = null;
+let secGainedOut: SectionData | null = null;
+
+function secGainedSection(sec: SectionData): SectionData {
+  const p = secGainLawParams();
+  if (!p) return sec;
+  const { numTraces, colLen } = sec;
+  if (!(numTraces > 0) || !(colLen > 0) || sec.data.length < numTraces * colLen) return sec;
+  const siUs = summary?.sampleInt ?? sec.sampleInt;
+  const si = Number.isFinite(siUs) && siUs > 0 ? siUs : 0;
+  const t0 = (sec.sampStart * si) / 1e6;
+  const span = sec.sampEnd - sec.sampStart;
+  const dt = span > 0 ? (span * si) / 1e6 / colLen : 0;
+  const key = `${numTraces}|${colLen}|${t0}|${dt}|${p.tpow ?? 0}|${p.epow ?? 0}|${p.gpow ?? 1}|${p.pbal ? 1 : 0}`;
+  if (secGainedSrc === sec && secGainedKey === key && secGainedOut) return secGainedOut;
+
+  const dst = new Float32Array(numTraces * colLen);
+  const norms = new Float32Array(numTraces);
+  let norm = 0;
+  for (let t = 0; t < numTraces; t++) {
+    const base = t * colLen;
+    const col = applyGain(sec.data.subarray(base, base + colLen), dt, t0, p, dst.subarray(base, base + colLen));
+    const nf = normFactorPercentile(col, 0.95);
+    norms[t] = Number.isFinite(nf) && nf > 0 ? nf : 0;
+    if (norms[t] > norm) norm = norms[t];
+  }
+  // DIVERGENCE, stated: the worker builds `norm` from each trace's FULL-resolution
+  // p95 and `norms` from the decimated column. Once a law is active the renderer
+  // only holds the decimated matrix, so both are recomputed from it. On a record
+  // that decimates, the record-max basis can therefore differ slightly from the
+  // ungained one - it describes the samples actually painted, which is the basis
+  // the strip and the colour bar are quoting.
+  // `norm` is the record-max basis and it DIVIDES a draw, so it can never be 0.
+  const out: SectionData = { ...sec, data: dst, norms, norm: norm > 0 ? norm : 1 };
+  secGainedSrc = sec; secGainedKey = key; secGainedOut = out;
+  return out;
+}
+
+// -- Reduced time (linear moveout) ----------------------------------------------
+// Shifting every trace by |offset| / velocity flattens the refracted first breaks
+// into a straight horizontal line. Against a straight line a reversed geophone, a
+// timing slip or a station planted at the wrong stake reads as an obvious STEP,
+// where on the raw hyperbola it is a kink that is easy to miss.
+//
+// The maths, the units and the SU reference live in core/dsp/reduce.ts. This
+// panel only has to feed it correctly, and the units are the whole risk: the core
+// wants METRES, KILOMETRES PER SECOND and SECONDS, while BinaryHeader.sampleInt is
+// MICROSECONDS and the section matrix is DECIMATED on the sample axis. The
+// interval of the grid actually painted is therefore
+// ((sampEnd - sampStart) / colLen) x sampleInt / 1e6 seconds - the same dt the
+// gain law above already uses - and NOT sampleInt / 1e6.
+//
+// This app parses no SEG-Y measurement-system field, so the offset header is taken
+// in metres and the strip says so rather than guessing feet.
+
+// The box is read as km/s over an offset header read as METRES. Real files are
+// met that store the offset in a smaller unit (a 25 m group interval written as
+// 250), and the honest response is to let the reader dial the velocity that
+// actually flattens THEIR record rather than to guess a unit for them - so the
+// range is deliberately far wider than any physical rock velocity.
+const SEC_REDUCE_VEL_MIN = 0.01;  // km/s
+const SEC_REDUCE_VEL_MAX = 1000;  // km/s
+
+/** Reducing velocity in KM/S (SU's `rv`), clamped, defaulting to SU's 8.0. */
+function secReduceVelocity(): number {
+  const raw = ($opt('secReduceVel') as HTMLInputElement | null)?.value ?? '';
+  const v = parseFloat(raw);
+  if (!Number.isFinite(v) || v <= 0) return SU_DEFAULT_REDUCING_VELOCITY_KM_PER_SEC;
+  return Math.min(SEC_REDUCE_VEL_MAX, Math.max(SEC_REDUCE_VEL_MIN, v));
+}
+
+/** The reduced-time toggle, honoured only while the control is actually usable - a
+ *  record with no offset header disables it, and a disabled box must never leave a
+ *  stale tick behind that silently reduces the next file. */
+function secReduceRequested(): boolean {
+  const el = $opt('secReduce') as HTMLInputElement | null;
+  return !!el && el.checked && !el.disabled;
+}
+
+/** The per-column source-receiver offsets the worker sent with this section, or
+ *  null when the record carries no readable offset header at all. */
+function secColOffsets(sec: SectionData): Float32Array | null {
+  const a = sec.colOffset;
+  return a && a.length >= sec.numTraces ? a : null;
+}
+
+/** What the reduced-time control can do for the record on screen. `reason` is the
+ *  sentence shown beside the disabled control, in plain English. */
+function secReduceAvailability(sec: SectionData | null): { ok: boolean; reason: string } {
+  if (!sec) return { ok: false, reason: 'Open a file first.' };
+  const off = secColOffsets(sec);
+  if (!off) return { ok: false, reason: 'Needs the offset header: this record has no source-to-receiver distance stored.' };
+  if (!canReduce(off)) return { ok: false, reason: 'Needs the offset header: every trace in this record reports offset 0, so the field was never filled in.' };
+  return { ok: true, reason: '' };
+}
+
+/** One record put into reduced time, plus the per-column shift the rest of the
+ *  panel needs so the hover read-out and the first-break overlay stay honest. */
+type SecReduced = {
+  sec: SectionData;
+  /** Shift applied to column c, in SECONDS. NaN where the column could not be
+   *  shifted, and was therefore drawn blank rather than drawn wrong. */
+  shiftSec: Float64Array;
+  /** Columns that could not be shifted at all - stated on the strip. */
+  blank: number;
+  /** Columns whose shift exceeds the window, so SU's zero-fill left them empty. */
+  offTop: number;
+  velocityKmPerSec: number;
+};
+
+let secReducedSrc: SectionData | null = null;
+let secReducedKey = '';
+let secReducedOut: SecReduced | null = null;
+
+/** Put the whole visible window into reduced time, or return null when reduced
+ *  time is off or this record cannot support it. Memoised on the source matrix and
+ *  the velocity, so a redraw that changes only colour, clip or excursion does not
+ *  re-shift hundreds of traces. */
+function secReducedSection(sec: SectionData): SecReduced | null {
+  if (!secReduceRequested()) return null;
+  const off = secColOffsets(sec);
+  if (!off || !canReduce(off)) return null;
+  const { numTraces, colLen } = sec;
+  if (!(numTraces > 0) || !(colLen > 0) || sec.data.length < numTraces * colLen) return null;
+  const siUs = summary?.sampleInt ?? sec.sampleInt;
+  const si = Number.isFinite(siUs) && siUs > 0 ? siUs : 0;
+  const span = sec.sampEnd - sec.sampStart;
+  // SECONDS per painted row. The matrix is decimated, so this is NOT si / 1e6.
+  const dt = span > 0 && si > 0 ? (span * si) / 1e6 / colLen : 0;
+  if (!(dt > 0)) return null;
+  const vel = secReduceVelocity();
+  const key = numTraces + '|' + colLen + '|' + dt + '|' + vel;
+  if (secReducedSrc === sec && secReducedKey === key && secReducedOut) return secReducedOut;
+
+  const dst = new Float32Array(numTraces * colLen);
+  const shiftSec = new Float64Array(numTraces).fill(NaN);
+  const scratch = new Float32Array(colLen);
+  let blank = 0, offTop = 0;
+  for (let t = 0; t < numTraces; t++) {
+    const base = t * colLen;
+    const r = reduceTrace(sec.data.subarray(base, base + colLen), off[t], dt, { reducingVelocityKmPerSec: vel }, scratch);
+    if (!r.ok) {
+      // The union carries NO samples on failure, so there is nothing to draw. A
+      // blank column is the honest picture: this trace could not be shifted.
+      blank++;
+      continue;
+    }
+    shiftSec[t] = r.shiftSeconds;
+    dst.set(r.samples, base);
+    // SU zero-fills a shift longer than the trace, so a far trace can legitimately
+    // arrive empty. Counted and stated, never passed off as a dead geophone.
+    if (r.shiftSeconds / dt >= colLen) offTop++;
+  }
+  // The scale basis is deliberately CARRIED OVER from the un-shifted section.
+  // Reduced time is a pure shift in time: it changes no sample value, so the
+  // exposure must not change either. Recomputing it here also went actively wrong
+  // - a trace shifted entirely out of the window is all zeros, and
+  // normFactorPercentile answers 1 for an all-zero trace, which drove the record
+  // basis from 4e-4 to 1 and washed the whole section out.
+  const out: SecReduced = {
+    sec: { ...sec, data: dst },
+    shiftSec, blank, offTop, velocityKmPerSec: vel,
+  };
+  secReducedSrc = sec; secReducedKey = key; secReducedOut = out;
+  return out;
+}
+
+/** What the File Viewer's canvas was LAST painted with, so the hover read-out, the
+ *  first-break overlay and the pick hit-tests shift by exactly the numbers the
+ *  pixels were shifted by. Null whenever the section is in true time. */
+let secReduceState: { shiftSec: Float64Array; traceStart: number; traceStep: number; velocityKmPerSec: number } | null = null;
+
+/** The shift applied to the column holding absolute trace `abs`, in MILLISECONDS,
+ *  or null when that trace is not on a reduced axis. Positive means the data moved
+ *  EARLIER on screen, so true time = reduced time + this. */
+function secReduceShiftMsForAbs(abs: number): number | null {
+  const st = secReduceState;
+  if (!st || !(st.traceStep > 0)) return null;
+  const c = Math.round((abs - st.traceStart) / st.traceStep);
+  if (!(c >= 0 && c < st.shiftSec.length)) return null;
+  const v = st.shiftSec[c];
+  return Number.isFinite(v) ? v * 1000 : null;
+}
+
+// -- Trace spacing by a header value --------------------------------------------
+// The section places trace i at uniform spacing BY ARRAY INDEX. A spread gap, a
+// dropped station or a channel that never made it into the file is then silently
+// closed up and the record looks perfect. Positioned by offset the gap is drawn as
+// a real gap, which is exactly the geometry error a field engineer is hunting.
+//
+// The maths, both directions, live in core/render/tracex.ts: ONE `fracs` array is
+// read by the forward map and by the inverse, so drawing and hit-testing cannot
+// drift apart. Nothing in this file computes a header position itself.
+//
+// WHAT IS ON OFFER, and why not "Station": this app parses the SEG-Y rev-0 fixed
+// trace header (core/formats/segy.ts), which carries NO receiver-station field.
+// The geometry numbers it really has are the source-receiver offset, the channel /
+// trace number, the shotpoint and the ensemble (CDP), so those are what the picker
+// names. Calling the channel number "Station" would be inventing a header.
+
+type SecSpacingKey = 'trace' | 'offset' | 'channel' | 'srcPt' | 'cdp';
+
+const SEC_SPACING_LABELS: Record<SecSpacingKey, string> = {
+  trace: 'trace number',
+  offset: 'source-receiver offset',
+  channel: 'channel number',
+  srcPt: 'shotpoint',
+  cdp: 'CDP / ensemble',
+};
+
+/** Plain-English reason the chosen header could not position the traces. */
+const SEC_SPACING_REASONS: Record<IndexAxisReason, string> = {
+  'no-header': 'this record does not carry that header',
+  'non-finite': 'a trace reports a value that is not a number',
+  'all-zero': 'every trace reports 0, so the header was never filled in',
+  'zero-range': 'every trace reports the same value, so there is nothing to space by',
+  empty: 'there are no traces on screen',
+};
+
+/** A header value for a label. Deliberately NOT secNum: three significant figures
+ *  turns a real maximum offset of 24759 into "24800", and an axis endpoint that is
+ *  not the number in the file is a small lie in a picture people make decisions on. */
+function secAxisValTxt(v: number): string {
+  if (!Number.isFinite(v)) return 'n/a';
+  const a = Math.abs(v);
+  if (a === 0) return '0';
+  if (a >= 1e7 || a < 1e-3) return v.toExponential(3);
+  return String(Number(v.toPrecision(7)));
+}
+
+function secSpacingKey(): SecSpacingKey {
+  const v = ($opt('secSpacing') as HTMLSelectElement | null)?.value;
+  return v === 'offset' || v === 'channel' || v === 'srcPt' || v === 'cdp' ? v : 'trace';
+}
+
+/** The per-column values for a spacing key, or null for the plain index axis. */
+function secSpacingValues(sec: SectionData, key: SecSpacingKey): Float32Array | null {
+  const a = key === 'offset' ? sec.colOffset
+    : key === 'channel' ? sec.colChannel
+      : key === 'srcPt' ? sec.colSrcPt
+        : key === 'cdp' ? sec.colCdp
+          : null;
+  return a && a.length >= sec.numTraces ? a : null;
+}
+
+/** The axis a section is drawn on, plus what to say about it. `fellBack` is true
+ *  only when a HEADER was asked for and could not be used - the default trace-
+ *  number axis is a choice, not a failure, and never reports a reason. */
+type SecAxisInfo = { axis: TraceAxis; key: SecSpacingKey; fellBack: boolean };
+
+function secBuildAxis(sec: SectionData, key: SecSpacingKey): SecAxisInfo {
+  if (key === 'trace') return { axis: buildTraceAxis(null, sec.numTraces), key, fellBack: false };
+  const axis = buildTraceAxis(secSpacingValues(sec, key), sec.numTraces);
+  return { axis, key, fellBack: axis.kind !== 'header' };
+}
+
+/** The axis the File Viewer's own canvas was LAST painted on, so every hit test
+ *  reads exactly what the pixels were drawn from. */
+let secAxis: TraceAxis | null = null;
+
+/** THE forward map, column -> x. Used by the raster, the wiggles, both overlays,
+ *  the attribute profile and the bottom axis; there is no second copy.
+ *
+ *  The index axis deliberately does NOT go through tracex's own index fallback:
+ *  core puts trace 0 at fraction 0 and trace n-1 at fraction 1, while this panel
+ *  has always centred trace i in its own column at (i + 0.5)/n. Routing the
+ *  default through core would move every existing pixel in the app for no gain,
+ *  so the header axis is the only case tracex positions - and the inverse below
+ *  branches on exactly the same condition, so the two can still never disagree. */
+function secColX(axis: TraceAxis, c: number, n: number, ML: number, pw: number): number {
+  if (axis.kind === 'header') return traceX(axis, c, ML, pw);
+  return ML + ((c + 0.5) * pw) / Math.max(1, n);
+}
+
+/** THE per-column WIDTH in pixels, column -> how much room this trace has before
+ *  it reaches its nearest neighbour. The wiggle excursion scales off this.
+ *
+ *  On the index axis every column is pw / n wide, so the spacing to the
+ *  neighbour is exactly pw / n - the average width the code used to assume,
+ *  which is why nothing moves on a trace-number axis.
+ *
+ *  On a HEADER axis that average is a lie: clustered offsets overlapped into mud
+ *  and an open spread drew threads. traceGaps() (core/render/tracex.ts) reads the
+ *  SAME fracs array the forward map above reads, so the width a trace is drawn at
+ *  and the position it is drawn at can never come from two different pictures.
+ *
+ *  Every entry is finite and > 0, so nothing here can put a NaN on a canvas. */
+function secColWidths(axis: TraceAxis, n: number, pw: number): Float64Array {
+  const cnt = Math.max(0, n | 0);
+  const even = pw / Math.max(1, cnt);
+  const fallback = Number.isFinite(even) && even > 0 ? even : 1;
+  const out = new Float64Array(cnt);
+  const gaps = axis.kind === 'header' && axis.count === cnt ? traceGaps(axis) : null;
+  for (let i = 0; i < cnt; i++) {
+    const w = gaps ? gaps[i] * pw : even;
+    out[i] = Number.isFinite(w) && w > 0 ? w : fallback;
+  }
+  return out;
+}
+
+/** THE inverse, x -> column, the exact mirror of secColX. */
+function secColAtX(axis: TraceAxis, px: number, n: number, ML: number, pw: number): number {
+  if (axis.kind === 'header') return nearestTraceAtX(axis, px, ML, pw);
+  if (!(pw > 0) || !(n > 0) || !Number.isFinite(px)) return -1;
+  return Math.max(0, Math.min(n - 1, Math.floor(((px - ML) / pw) * n)));
+}
+
+/** Plot fraction -> column of the section on screen. */
+function secColAtFrac(fx: number): number {
+  if (!lastSection) return -1;
+  const axis = secAxis ?? buildTraceAxis(null, lastSection.numTraces);
+  return secColAtX(axis, fx, lastSection.numTraces, 0, 1);
+}
+
+/** Plot fraction -> ABSOLUTE trace index in the open file.
+ *
+ *  ONE source of truth, both axis kinds: the cursor is resolved to a COLUMN by
+ *  the exact inverse of the forward map the painter used (secColAtFrac), and that
+ *  column is turned into an absolute index by the very expression drawSection
+ *  paints it from, `traceStart + c * traceStep`.
+ *
+ *  This replaces an interpolation across the visible TRACE RANGE. That read used
+ *  a second, different quantisation: it rounded `t0 + fx * (t1 - t0)`, so the
+ *  right half of every column band rounded up to the NEXT trace, and on a
+ *  decimated section (traceStep > 1, i.e. zoomed out) it could answer a trace
+ *  that was never drawn at all. Clicking a trace then added its neighbour. */
+function secAbsTraceAtFrac(fx: number): number {
+  const sec = lastSection;
+  if (sec && sec.traceStep > 0 && sec.numTraces > 0) {
+    const c = secColAtFrac(fx);
+    if (c >= 0) {
+      const abs = sec.traceStart + c * sec.traceStep;
+      if (Number.isFinite(abs)) return abs;
+    }
+  }
+  // No section painted yet (nothing to hit-test against): fall back to the
+  // visible window so the read-out is defined rather than NaN.
+  const v = Math.round(secView.t0 + fx * (secView.t1 - secView.t0));
+  return Number.isFinite(v) ? v : 0;
+}
+
+/** Say what the spacing picker can and cannot do for the record on screen. */
+function secSpacingUpdateNote(info: SecAxisInfo | null) {
+  const note = $opt('secSpacingNote');
+  if (!note) return;
+  if (!info || !lastSection) { note.textContent = 'Open a file first.'; return; }
+  if (info.key === 'trace') {
+    note.textContent = 'Traces are spaced evenly, one column each. Space them by a geometry header instead and a spread gap or a dropped station is drawn as a REAL gap rather than being closed up. This app parses no receiver-station field, so the geometry headers on offer are the ones SEG-Y actually stores.';
+    return;
+  }
+  note.textContent = info.fellBack
+    ? `Cannot space by ${SEC_SPACING_LABELS[info.key]}: ${SEC_SPACING_REASONS[info.axis.reason ?? 'no-header']}. Falling back to even spacing by trace number.`
+    : `Spaced by ${SEC_SPACING_LABELS[info.key]}, from ${secAxisValTxt(info.axis.lo)} to ${secAxisValTxt(info.axis.hi)} across the plot. Gaps on screen are gaps in the geometry.`;
+}
+
+/** Enable or disable the reduced-time controls for the record on screen, and say
+ *  plainly why when they are unavailable. */
+function secReduceUpdateAvailability() {
+  const box = $opt('secReduce') as HTMLInputElement | null;
+  const vel = $opt('secReduceVel') as HTMLInputElement | null;
+  const note = $opt('secReduceNote');
+  const av = secReduceAvailability(lastSection);
+  if (box) { box.disabled = !av.ok; if (!av.ok) box.checked = false; }
+  if (vel) vel.disabled = !av.ok || !box || !box.checked;
+  if (note) {
+    note.textContent = av.ok
+      ? 'Reduced time shifts every trace by its offset divided by the reducing velocity, so refracted first breaks flatten into a straight line. A step in that line is a reversed geophone, a timing slip or a station in the wrong place. Offsets are read as metres; the stored samples are never changed.'
+      : av.reason;
+  }
+}
+
+/** Across-trace percentile for 'pct' mode, clamped to [1, 100]. */
+function secScalePct(): number {
+  const v = parseFloat(($opt('secScalePct') as HTMLInputElement | null)?.value ?? '');
+  return Number.isFinite(v) ? Math.min(100, Math.max(1, v)) : SCALE_DEFAULT_PERCENTILE;
+}
+
+/** Excursion: how far a sample AT the clip level deflects, measured in trace
+ *  spacings. 1.0 is the industry default (Seismic Unix `xcur`, DUG "Excursion",
+ *  Geometrics "Trace Overlap"); values above 1 deliberately let neighbouring
+ *  wiggles overlap, which is how a coherent event becomes a readable band.
+ *  Always finite and > 0 - this number multiplies straight into a canvas path. */
+function secExcursion(): number {
+  const v = parseFloat(($opt('secExc') as HTMLInputElement | null)?.value ?? '');
+  return Number.isFinite(v) && v > 0 ? Math.min(8, Math.max(0.1, v)) : 1;
+}
+
+/** Display-clip percentile of |amplitude| over the visible samples. 100 means no
+ *  clipping beyond the scale basis, which is the only default that cannot
+ *  silently misrepresent amplitude. Clamped to [50, 100]. */
+function secClipPct(): number {
+  const v = parseFloat(($opt('secClip') as HTMLInputElement | null)?.value ?? '');
+  return Number.isFinite(v) ? Math.min(100, Math.max(50, v)) : 100;
+}
+
+const SEC_GAIN_MIN = 0.1, SEC_GAIN_MAX = 1000;
+
+/** The display gain MULTIPLIER actually applied. Single source of truth: the
+ *  number box holds the multiplier, the dB slider writes into it. Always returns
+ *  a finite, strictly-positive number - a NaN here would reach the canvas. */
+function secGainValue(): number {
+  const v = parseFloat(($opt('secGain') as HTMLInputElement | null)?.value ?? '');
+  if (!Number.isFinite(v) || v <= 0) return 1;
+  return Math.min(SEC_GAIN_MAX, Math.max(SEC_GAIN_MIN, v));
+}
+
+/** AGC settings as the worker wants them - ONE place, so the section, the zoom
+ *  viewer and the magnifier can never disagree about what AGC was applied. */
+function secAgcOpts(): { agc: boolean; agcWindowMs: number; agcType: 'rms' | 'median' | 'mean' } {
+  const agc = !!($opt('secAgc') as HTMLInputElement | null)?.checked;
+  const w = parseFloat(($opt('secAgcWin') as HTMLInputElement | null)?.value ?? '');
+  const t = ($opt('secAgcType') as HTMLSelectElement | null)?.value;
+  return {
+    agc,
+    agcWindowMs: Number.isFinite(w) && w > 0 ? Math.min(5000, Math.max(10, w)) : AGC_DEFAULT_WINDOW_MS,
+    agcType: t === 'mean' || t === 'median' ? t : AGC_DEFAULT_TYPE,
+  };
+}
+
+/** Per-column gain factors for the current scaling mode. Entry is 0 (flat line)
+ *  for a dead/degenerate trace: `gain / 0` would be Infinity and `0 * Infinity`
+ *  is NaN, which silently drops the whole trace from a wiggle path. */
+function secGainFactors(sec: SectionData, gain: number): { gf: Float64Array; basis: number } {
+  const n = sec.numTraces;
+  const out = new Float64Array(n);
+  const g = Number.isFinite(gain) && gain > 0 ? gain : 1;
+  const norms = sec.norms && sec.norms.length === n ? sec.norms : null;
+  const mode = secScaleMode();
+  if (mode === 'trace' && norms) {
+    for (let t = 0; t < n; t++) {
+      const nf = norms[t];
+      out[t] = Number.isFinite(nf) && nf > 0 ? g / nf : 0;
+    }
+    // Each trace has its own basis, so there is no single number to state.
+    return { gf: out, basis: NaN };
+  }
+  // One shared factor for the whole record.
+  let base: number;
+  // 'raw': the basis is literally 1, so a sample of 1.0 sits at full scale and
+  // the colour bar reads in stored sample values. The only basis under which an
+  // absolute amplitude claim is defensible, which is why it is a named mode.
+  if (mode === 'raw') base = 1;
+  else if (mode === 'pct' && norms) base = normAcrossTraces(norms, secScalePct());
+  else base = sec.norm;
+  if (!Number.isFinite(base) || base <= 0) base = 1;
+  out.fill(g / base);
+  return { gf: out, basis: base };
+}
+
+/** The display-clip level, in SCALE-BASIS units, plus how much of the visible
+ *  data it actually saturates.
+ *
+ *  `level` is what a sample must reach to be drawn at full excursion / at the end
+ *  of the colour map. At 100 % it stays at 1.0, i.e. exactly the historical
+ *  behaviour and no clipping beyond the scale basis itself. Below 100 % it is the
+ *  requested percentile of |sample x gain| over the visible panel, so lowering it
+ *  brightens the display and says by how much.
+ *
+ *  `frac` is the fraction of visible samples the display saturates - reported on
+ *  screen, because DISPLAY clipping is cosmetic and reversible while ACQUISITION
+ *  clipping destroyed the sample in the field, and a viewer that cannot tell them
+ *  apart is useless for field QC.
+ *
+ *  Both values are always finite; `level` is always > 0 (it divides a draw). */
+function secClipLevel(sec: SectionData, gf: Float64Array, pct: number): { level: number; frac: number } {
+  const { numTraces, colLen, data } = sec;
+  const total = numTraces * colLen;
+  if (!(total > 0) || colLen <= 0) return { level: 1, frac: 0 };
+  // Sample at a stride rather than sorting the whole panel: a full section can be
+  // a million values and this runs on every redraw.
+  const CAP = 120000;
+  const stride = Math.max(1, Math.ceil(total / CAP));
+  const vals: number[] = [];
+  for (let i = 0; i < total; i += stride) {
+    const t = (i / colLen) | 0;
+    const g = gf[t];
+    if (!(g > 0)) continue;
+    const a = Math.abs(data[i] * g);
+    if (Number.isFinite(a)) vals.push(a);
+  }
+  if (!vals.length) return { level: 1, frac: 0 };
+  let level = 1;
+  if (pct < 100) {
+    vals.sort((a, b) => a - b);
+    const k = Math.min(vals.length - 1, Math.max(0, Math.round((pct / 100) * (vals.length - 1))));
+    const v = vals[k];
+    if (Number.isFinite(v) && v > 0) level = v;
+  }
+  let over = 0;
+  for (let i = 0; i < vals.length; i++) if (vals[i] > level * (1 + 1e-9)) over++;
+  return { level, frac: over / vals.length };
+}
+
+/** Keep the dB slider, the multiplier box and the readout consistent, then
+ *  redraw. `src` says which control the user actually touched. */
+function secSyncGain(src: 'db' | 'box' | 'reset') {
+  const slider = $opt('secGainDb') as HTMLInputElement | null;
+  const box = $opt('secGain') as HTMLInputElement | null;
+  if (src === 'reset') {
+    if (box) box.value = '1';
+    if (slider) slider.value = '0';
+  } else if (src === 'db' && slider) {
+    const db = parseFloat(slider.value);
+    const mult = Number.isFinite(db) ? Math.pow(10, db / 20) : 1;
+    const clamped = Math.min(SEC_GAIN_MAX, Math.max(SEC_GAIN_MIN, mult));
+    if (box) box.value = clamped < 10 ? clamped.toFixed(2) : clamped.toFixed(1);
+  } else if (src === 'box') {
+    const mult = secGainValue();
+    if (box) box.value = String(mult);
+    // log10(mult) is finite because secGainValue guarantees mult >= 0.1 > 0.
+    if (slider) slider.value = String(Math.min(60, Math.max(-20, 20 * Math.log10(mult))));
+  }
+  const m = secGainValue();
+  const db = 20 * Math.log10(m);
+  setText('secGainReadout', `×${m < 10 ? m.toFixed(2) : m.toFixed(1)} (${db >= 0 ? '+' : ''}${db.toFixed(1)} dB)`);
+  redrawSection();
+}
+
+/** Show the percentile box only in 'pct' mode, and the AGC window/type only when
+ *  AGC is on - the bar is already crowded. */
+function secSyncScaleControls() {
+  const pctWrap = $opt('secScalePctWrap');
+  if (pctWrap) pctWrap.style.display = secScaleMode() === 'pct' ? '' : 'none';
+  // Excursion only means something where a wiggle is drawn; hiding it in pure
+  // Variable Density keeps the toolbar from growing another row.
+  const excWrap = $opt('secExcWrap');
+  const dmode = ($opt('secMode') as HTMLSelectElement | null)?.value;
+  if (excWrap) excWrap.style.display = dmode === 'vd' ? 'none' : '';
+  const on = !!($opt('secAgc') as HTMLInputElement | null)?.checked;
+  const w = $opt('secAgcWinWrap'), t = $opt('secAgcTypeWrap');
+  if (w) w.style.display = on ? '' : 'none';
+  if (t) t.style.display = on ? '' : 'none';
+  secSyncGainLawControls();
+}
+
+/** Point the exponent box at the selected law (its own range, its own remembered
+ *  value), show it only for the laws that take one, write the plain-English
+ *  sentence, and hold the dB gain at x1 under 'None (true amplitude)' - a mode
+ *  that promised true amplitude while a multiplier was still live would be a lie
+ *  on the strip. */
+function secSyncGainLawControls() {
+  const law = secGainLaw();
+  const box = $opt('secGainLawExp') as HTMLInputElement | null;
+  const wrap = $opt('secGainLawExpWrap');
+  const takesExp = law === 'tpow' || law === 'epow' || law === 'gpow';
+  if (wrap) wrap.style.display = takesExp ? '' : 'none';
+  if (box && takesExp) {
+    const lim = SEC_GAIN_LAW_EXP[law];
+    // WHICH law the box is currently showing has to be tracked explicitly. Judging
+    // it by "is the value in the new law's range" is wrong whenever the ranges
+    // overlap: switching Time gain (default 2) to Exponential time gain would keep
+    // the 2, silently giving exp(2t) where the picker promised exp(1t), and
+    // switching back would then overwrite the remembered 2 with the other law's
+    // value. Save the old law's number, then load the new law's own.
+    if (secGainLawExpFor !== law) {
+      if (secGainLawExpFor) {
+        const old = SEC_GAIN_LAW_EXP[secGainLawExpFor];
+        const prev = parseFloat(box.value);
+        if (Number.isFinite(prev)) secGainLawExpMemo[secGainLawExpFor] = Math.min(old.max, Math.max(old.min, prev));
+      }
+      box.min = String(lim.min); box.max = String(lim.max); box.step = String(lim.step);
+      box.value = String(secGainLawExpMemo[law]);
+      secGainLawExpFor = law;
+    } else {
+      // Same law: the user is editing its own exponent, so remember what they typed.
+      const shown = parseFloat(box.value);
+      if (Number.isFinite(shown)) secGainLawExpMemo[law] = Math.min(lim.max, Math.max(lim.min, shown));
+    }
+  }
+  setText('secGainLawNote', SEC_GAIN_LAW_NOTE[law]);
+  const slider = $opt('secGainDb') as HTMLInputElement | null;
+  const gbox = $opt('secGain') as HTMLInputElement | null;
+  const rst = $opt('secGainReset') as HTMLButtonElement | null;
+  const lock = law === 'none';
+  if (slider) slider.disabled = lock;
+  if (gbox) gbox.disabled = lock;
+  if (rst) rst.disabled = lock;
+  if (lock && secGainValue() !== 1) secSyncGain('reset');
+}
+
+// -- Reset display ------------------------------------------------------------
+// Every File Viewer control that carries a DISPLAY setting. The DOM is the only
+// store for these, so each control's own HTML default (`defaultValue`,
+// `defaultChecked`, the <option> marked `selected`) IS what a freshly opened file
+// shows - reading those back is what stops this button and the initial state from
+// drifting apart. Retyping the numbers here would create a second source of
+// truth: if a literal in index.html ever disagreed, a fresh file would open on
+// the HTML value while "Reset display" jumped somewhere else. The HTML numbers
+// are themselves the core render defaults (AGC_DEFAULT_WINDOW_MS = 250,
+// AGC_DEFAULT_TYPE = rms, SCALE_DEFAULT_PERCENTILE = 95), which is exactly the
+// state the strip reports on an untouched record.
+// NOT included, on purpose: trace-health flags, first-break picks, the block size
+// and which file/block is on screen. Those are annotations and navigation, not
+// display, and throwing away picked first breaks under the word "display" would
+// destroy work the user never associated with this button.
+const SEC_DISPLAY_IDS = [
+  'secMode', 'secColor', 'secExc', 'secClip', 'secScaleMode', 'secScalePct',
+  'secGainLaw', 'secGainLawExp', 'secGain', 'secAgc', 'secAgcWin', 'secAgcType',
+  'secInvert', 'secSpacing', 'secReduce', 'secReduceVel',
+] as const;
+
+type SecDisplaySnapshot = {
+  ctl: { id: string; value: string; checked: boolean }[];
+  expMemo: Record<'tpow' | 'epow' | 'gpow', number>;
+  expFor: 'tpow' | 'epow' | 'gpow';
+  view: { t0: number; t1: number; s0: number; s1: number; fullT: number; fullS: number; init: boolean };
+};
+
+/** Current value of every display control, plus the gain-law exponent memory and
+ *  the zoom window - enough to put the viewer back exactly as it was. Used by the
+ *  Undo on the reset toast; the values are transient UI state, so this is a plain
+ *  in-memory object and NOT snapshotBackup(), which is the durable on-disk backup
+ *  for real data (picks, collected traces, the log). */
+function secDisplaySnapshot(): SecDisplaySnapshot {
+  const ctl: SecDisplaySnapshot['ctl'] = [];
+  for (const id of SEC_DISPLAY_IDS) {
+    const el = $opt(id) as HTMLInputElement | HTMLSelectElement | null;
+    if (!el) continue;
+    const cb = el instanceof HTMLInputElement && el.type === 'checkbox';
+    ctl.push({ id, value: el.value, checked: cb ? (el as HTMLInputElement).checked : false });
+  }
+  return {
+    ctl,
+    expMemo: { ...secGainLawExpMemo },
+    expFor: secGainLawExpFor,
+    view: { ...secView },
+  };
+}
+
+/** Put the display controls back - to `snap` (Undo) or, with null, to the state a
+ *  freshly opened file shows. One apply path for both, and ONE fetch at the end
+ *  rather than firing a change event on sixteen controls. */
+function secDisplayApply(snap: SecDisplaySnapshot | null) {
+  for (const id of SEC_DISPLAY_IDS) {
+    const el = $opt(id);
+    const saved = snap ? snap.ctl.find((c) => c.id === id) : null;
+    if (el instanceof HTMLSelectElement) {
+      if (saved) {
+        el.value = saved.value;
+      } else {
+        let idx = 0;
+        for (let i = 0; i < el.options.length; i++) if (el.options[i].defaultSelected) { idx = i; break; }
+        el.selectedIndex = idx;
+      }
+    } else if (el instanceof HTMLInputElement) {
+      if (el.type === 'checkbox') el.checked = saved ? saved.checked : el.defaultChecked;
+      else el.value = saved ? saved.value : el.defaultValue;
+    }
+  }
+  // The per-law exponent memory is JS state no control carries, so a reset that
+  // ignored it would hand the next law switch the user's old exponent.
+  if (snap) {
+    Object.assign(secGainLawExpMemo, snap.expMemo);
+    secGainLawExpFor = snap.expFor;
+  } else {
+    secGainLawExpMemo.tpow = SEC_GAIN_LAW_EXP.tpow.dflt;
+    secGainLawExpMemo.epow = SEC_GAIN_LAW_EXP.epow.dflt;
+    secGainLawExpMemo.gpow = SEC_GAIN_LAW_EXP.gpow.dflt;
+    // The exponent box's HTML min/max/value are written for 'tpow', which is what
+    // its declared initial value says too.
+    secGainLawExpFor = 'tpow';
+  }
+  // secSyncGainLawControls writes min/max/step onto the exponent box as ATTRIBUTES
+  // when the law changes, so there is no HTML default left to read back: after a
+  // visit to Amplitude compression the box would keep that law's 0.05-1 range while
+  // showing the time law's 2. Point the range at whichever law the box now holds.
+  const expBox = $opt('secGainLawExp') as HTMLInputElement | null;
+  if (expBox) {
+    const lim = SEC_GAIN_LAW_EXP[secGainLawExpFor];
+    expBox.min = String(lim.min); expBox.max = String(lim.max); expBox.step = String(lim.step);
+  }
+  secSyncScaleControls();
+  // Rebuilds the dB slider + the readout from the multiplier box just restored.
+  secSyncGain('box');
+  // The flip is shared with the Trace Inspector and the box-zoom viewer, so it has
+  // to go through setViewInvert or those two would stay flipped while the section
+  // strip said otherwise.
+  setViewInvert(!!($opt('secInvert') as HTMLInputElement | null)?.checked);
+  // Availability is a property of the RECORD (does it carry offsets), never of the
+  // reset, so this decides the enabled state and leaves the checkbox alone.
+  secReduceUpdateAvailability();
+  secAxisRange?.clear();
+  const v = snap?.view;
+  // A kept window only goes back onto the canvas if it is finite, ordered AND was
+  // measured on the record still open - the toast lives for a few seconds and ']'
+  // pages a folder in well under one, so an Undo can arrive on a different file.
+  const sane = !!v && [v.t0, v.t1, v.s0, v.s1, v.fullT, v.fullS].every((n) => Number.isFinite(n))
+    && v.t1 > v.t0 && v.s1 > v.s0
+    && v.fullT === (summary?.traceCount ?? -1)
+    && v.fullS === (summary?.samplesTrace ?? lastSection?.fullSamples ?? 0);
+  if (sane && v) Object.assign(secView, v);
+  else secFit();   // reset, or a window that no longer describes the record on screen
+  // AGC is applied in the WORKER, so on/off/window/statistic all have to go the
+  // same way the AGC controls themselves do: refetchSection also drops the stale
+  // hover cache and marks an open gather out of date.
+  if (summary && summary.traceCount > 0) void refetchSection();
+  else redrawSection();
+}
+
+/** "Reset display": every display setting and the zoom back to how a file opens,
+ *  with an Undo for a few seconds. No confirm dialog - the work being undone is a
+ *  set of control values, and an undoable action beats a question in front of it. */
+function secResetDisplay() {
+  const before = secDisplaySnapshot();
+  secDisplayApply(null);
+  undoToast('Display settings and zoom reset to how a file opens', () => secDisplayApply(before));
+}
 
 /** Reset the data-zoom window (called on open / AGC change / fit). For a normal
  *  file this fits the whole record; for a streamed/tape-image file it snaps to the
@@ -3004,6 +4320,57 @@ function secFit() {
     secView.t1 = secView.fullT;
   }
   secView.init = true;
+}
+
+/** A short plain-English note appended to the section label ONCE, when the view
+ *  carried over from the previous record had to be moved, trimmed or given up on.
+ *  Blank whenever the kept window landed unchanged. */
+let secKeepNote = '';
+
+/** Carry the current zoom window (and any typed axis range) onto the record just
+ *  opened with Prev/Next, instead of re-fitting.
+ *
+ *  The next record can hold FEWER traces or FEWER samples, so a window kept blind
+ *  can fall entirely outside it and paint nothing. The kept window is therefore
+ *  clamped to what this file actually contains, and when nothing usable survives
+ *  we fall back to a fit and SAY SO on the label rather than leaving an empty
+ *  panel unexplained. */
+function secKeepViewForNewFile() {
+  secKeepNote = '';
+  if (!summary) return;
+  const fT = summary.traceCount;
+  const fS = summary.samplesTrace ?? 0;
+  const want = { t0: secView.t0, t1: secView.t1, s0: secView.s0, s1: secView.s1 };
+  const sane = [want.t0, want.t1, want.s0, want.s1].every(Number.isFinite) && want.t1 > want.t0 && want.s1 > want.s0;
+  if (!(fT > 0) || !sane) {
+    secFit(); secAxisRange?.clear();
+    secKeepNote = ' · previous view does not fit this record, showing all of it';
+    return;
+  }
+  secView.fullT = fT;
+  // An unknown sample count would clamp the time axis to nothing; leave the old
+  // extent in place and let the worker echo back the range it really used.
+  if (fS > 0) secView.fullS = fS;
+  secView.init = true;
+  // The LATEST view wins. A typed range applies when it is typed and then stops
+  // overriding: whatever the user last looked at (typed, wheel-zoomed, panned or
+  // paged) is what carries onto the next record. Replaying the boxes here used to
+  // snap a wheel-zoom back to the older typed numbers.
+  secClamp();
+  if (!(secView.t1 > secView.t0) || !(secView.s1 > secView.s0)) {
+    secFit(); secAxisRange?.clear();
+    secKeepNote = ' · previous view does not fit this record, showing all of it';
+    return;
+  }
+  // `want` is now genuinely the window that was on screen (nothing is replayed on
+  // top of it), so these two comparisons describe what really happened.
+  const trimmed = (secView.t1 - secView.t0) !== (want.t1 - want.t0) || (secView.s1 - secView.s0) !== (want.s1 - want.s0);
+  const moved = secView.t0 !== want.t0 || secView.s0 !== want.s0;
+  // The boxes must describe the window actually kept, not the numbers typed some
+  // records ago; un-dirty them so the post-fetch sync fills in the real extent.
+  secAxisRange?.clear();
+  if (trimmed) secKeepNote = ' · view trimmed to this record';
+  else if (moved) secKeepNote = ' · view moved to fit this record';
 }
 
 /** Keep the visible window inside the record (never pan/zoom off the data). */
@@ -3032,23 +4399,37 @@ async function fetchSectionWindow() {
   if (!summary || summary.traceCount === 0) return;
   if (secFetchPending) return; // a fetch is in flight; it will repaint with the latest secView on completion
   secFetchPending = true;
-  const agc = ($('secAgc') as HTMLInputElement).checked;
   try {
     let again = true;
     let snap = '';
+    // The AGC settings are read INSIDE the loop and folded into `snap`: they are
+    // live display controls now, so a toggle while a fetch is in flight has to
+    // re-fetch rather than be silently dropped.
     while (again) {
       secClamp();
-      snap = `${secView.t0},${secView.t1},${secView.s0},${secView.s1}`;
+      const a = secAgcOpts();
+      const req = { t0: secView.t0, t1: secView.t1, s0: secView.s0, s1: secView.s1 };
+      snap = `${secView.t0},${secView.t1},${secView.s0},${secView.s1},${a.agc},${a.agcWindowMs},${a.agcType}`;
       const sec = await api.getSection({
         maxTraces: 2000, maxSamples: 2000,
         traceStart: secView.t0, traceEnd: secView.t1, sampStart: secView.s0, sampEnd: secView.s1,
-        agc, agcType: 'rms', agcWindowMs: 250,
+        ...a,
       });
       lastSection = sec;
+      secReduceUpdateAvailability(); // this record's offset header decides the control
       // Worker echoes the window it actually used (clamped to real trace lengths);
-      // mirror it so axis labels + interactions stay perfectly in sync.
-      secView.t0 = sec.traceStart; secView.t1 = sec.traceEnd;
-      secView.s0 = sec.sampStart; secView.s1 = sec.sampEnd;
+      // mirror it so axis labels + interactions stay perfectly in sync. Only when
+      // the view is still the one we asked for: a range typed WHILE this fetch was
+      // in flight has already moved secView, and echoing the old window back over
+      // it would strand the typed numbers in the boxes with the display ignoring
+      // them. Leaving the newer window alone makes `again` below true, so it is
+      // fetched and painted next time round the loop.
+      const asked = `${secView.t0},${secView.t1},${secView.s0},${secView.s1}`
+        === `${req.t0},${req.t1},${req.s0},${req.s1}`;
+      if (asked) {
+        secView.t0 = sec.traceStart; secView.t1 = sec.traceEnd;
+        secView.s0 = sec.sampStart; secView.s1 = sec.sampEnd;
+      }
       secView.fullT = sec.fullTraces; secView.fullS = sec.fullSamples;
       drawSection($('secCanvas') as HTMLCanvasElement, sec);
       syncSecAxisPlaceholders(); // reflect the actual window in the manual-range boxes
@@ -3056,9 +4437,13 @@ async function fetchSectionWindow() {
       const zoomed = sec.traceStart > 0 || sec.traceEnd < sec.fullTraces || sec.sampStart > 0 || sec.sampEnd < sec.fullSamples;
       $('secLabel').textContent =
         `${sec.numTraces} traces (step ${sec.traceStep}) · ${sec.colLen} samples` +
-        (zoomed ? ` · tr ${sec.traceStart}-${sec.traceEnd} · smp ${sec.sampStart}-${sec.sampEnd}` : '');
+        (zoomed ? ` · tr ${sec.traceStart}-${sec.traceEnd} · smp ${sec.sampStart}-${sec.sampEnd}` : '') +
+        secKeepNote;
+      secKeepNote = ''; // said once, for the record it was about
+
       // If the user kept interacting while we awaited, secView changed - fetch again.
-      again = `${secView.t0},${secView.t1},${secView.s0},${secView.s1}` !== snap;
+      const now = secAgcOpts();
+      again = `${secView.t0},${secView.t1},${secView.s0},${secView.s1},${now.agc},${now.agcWindowMs},${now.agcType}` !== snap;
     }
   } catch (e) {
     $('secLabel').textContent = 'Render failed: ' + errMsg(e);
@@ -3068,52 +4453,497 @@ async function fetchSectionWindow() {
 }
 
 async function refreshSection() {
+  secReduceUpdateAvailability(); // a new file may or may not carry an offset header
   secHealthUpdateButtons(); // enable/disable Health-scan controls for the current file
   fbUpdateButtons();        // enable/disable First-breaks controls for the current file
   if (!summary || summary.traceCount === 0) return;
   $('secLabel').textContent = 'Rendering…';
-  secHoverHdrCache.clear(); secHoverLastIdx = -1; // new file / re-fit ⇒ drop stale FFID suffixes
-  secFit(); // open / AGC toggle / re-open ⇒ start fitted to the whole record
-  secAxisRange?.clear(); // new file / re-fit ⇒ clear any stale manual X/Y boxes
+  secHoverHdrCache.clear(); secHoverLastIdx = -1; secHoverTrace = null; secHoverLast = null; // new file / re-fit ⇒ drop stale suffixes and samples
+  // The view survives Prev/Next and a tab switch, and resets only on a fresh Open
+  // or Clear (both of which drop secView.init). Paging a folder of 100+ records is
+  // a comparison, so re-fitting on every step threw away the zoom the comparison
+  // was being made in. The kept window is clamped to the record actually opened.
+  if (secView.init) secKeepViewForNewFile();
+  else { secFit(); secAxisRange?.clear(); secKeepNote = ''; } // open / Clear ⇒ start fitted, boxes empty
+  await fetchSectionWindow();
+}
+
+/** Re-fetch the CURRENT window after a display setting that the worker computes
+ *  (AGC on/off, window, type) changed - deliberately WITHOUT secFit(). Comparing
+ *  AGC on against AGC off over one zoomed zone is a core workflow, and the old
+ *  unconditional secFit() in refreshSection() threw the zoom (and any typed
+ *  manual axis range) away on every toggle, making that comparison impossible. */
+async function refetchSection() {
+  // AGC is applied in the WORKER, so a gather already on screen was built with the
+  // old setting. Mark it out of date here, where every AGC control already lands.
+  gatherMarkStale();
+  if (!summary || summary.traceCount === 0) return;
+  secHoverHdrCache.clear(); secHoverLastIdx = -1; secHoverTrace = null; secHoverLast = null; // amplitudes changed ⇒ stale hover cache
+  $('secLabel').textContent = 'Rendering…';
   await fetchSectionWindow();
 }
 
 function redrawSection() {
   if (lastSection) drawSection($('secCanvas') as HTMLCanvasElement, lastSection);
+  // The near-trace gather is painted with the SAME display controls, so every
+  // change that redraws the section has to redraw the gather too - one hook here
+  // rather than a second listener on each control.
+  if (gatherOpen()) drawGatherPanel();
 }
 
 function drawSection(cv: HTMLCanvasElement, sec: SectionData) {
   const mode = ($('secMode') as HTMLSelectElement).value;
   const cmap = ($('secColor') as HTMLSelectElement).value;
-  const gain = parseFloat(($('secGain') as HTMLInputElement).value) || 1;
+  const gain = secGainValue();
   const rect = paintSection(cv, sec, mode, cmap, gain);
   // Re-overlay any trace-health flags so they survive zoom/pan/redraws.
   if (rect && secHealth && secHealth.byAbs.size) secDrawHealthOverlay(cv, sec, rect);
   // First-breaks overlay (guide + ±window band + pick line) - only in that mode.
   if (rect && fbMode) secDrawFbOverlay(cv, sec, rect);
+  // Per-trace attribute profile, on its own canvas UNDER the section but built
+  // from the SAME plot rectangle and the SAME column mapping, so it cannot drift
+  // out of alignment when the section is zoomed, panned or paged.
+  //
+  // ONLY for the File Viewer's own canvas. drawSection is also the box-zoom
+  // popup's renderer (drawZoom), and letting that call through would repaint the
+  // profile from the popup's sub-window at the popup's width - a stretched
+  // picture of the wrong traces, sitting under the untouched main section.
+  if (cv === $opt('secCanvas')) secDrawAttrStrip(sec, rect);
+}
+
+// -- Colour-vision check --------------------------------------------------------
+// About one man in twelve has a colour-vision deficiency, so a QC display that
+// only communicates in full colour is a real limitation - and the two diverging
+// maps carry their meaning in the red/blue axis, which is exactly the axis a
+// red- or green-blind reader loses. This shows the section EXACTLY as it is on
+// screen, run through the Machado 2009 dichromacy simulations.
+//
+// INTERACTION, chosen deliberately: a snapshot in a modal, not a display mode.
+// The check answers "does my chosen map still work" once, and then you go back to
+// working in real colour. A persistent mode would mean every later screenshot,
+// export and reading came off a deliberately falsified picture, which is a worse
+// failure than not offering the check at all. The snapshot includes the state
+// strip and the colour bar, because those have to survive the deficiency too.
+
+const SEC_CVD_PANELS: { type: CvdType | 'none'; label: string }[] = [
+  { type: 'none', label: 'Normal colour vision' },
+  { type: 'protanopia', label: 'Red-blind (protanopia)' },
+  { type: 'deuteranopia', label: 'Green-blind (deuteranopia)' },
+  { type: 'tritanopia', label: 'Blue-blind (tritanopia)' },
+];
+
+/** Simulate one deficiency over a whole canvas image. simulateCvd does two gamma
+ *  conversions per channel, and a section canvas is half a million pixels, so the
+ *  results are memoised on the packed 24-bit colour: a seismic display draws from
+ *  a 256-entry map plus some chrome, i.e. a few hundred distinct colours, so this
+ *  turns roughly 1.7 million pow() pairs into a few hundred. Exact, not
+ *  approximate - the key IS the whole input. */
+function secCvdApply(src: ImageData, type: CvdType): ImageData {
+  const out = new ImageData(src.width, src.height);
+  const s = src.data, d = out.data;
+  const memo = new Map<number, number>();
+  for (let i = 0; i < s.length; i += 4) {
+    const key = (s[i] << 16) | (s[i + 1] << 8) | s[i + 2];
+    let packed = memo.get(key);
+    if (packed === undefined) {
+      const rgb = simulateCvd([s[i], s[i + 1], s[i + 2]] as RGB, type);
+      packed = (rgb[0] << 16) | (rgb[1] << 8) | rgb[2];
+      memo.set(key, packed);
+    }
+    d[i] = (packed >> 16) & 255;
+    d[i + 1] = (packed >> 8) & 255;
+    d[i + 2] = packed & 255;
+    d[i + 3] = s[i + 3];
+  }
+  return out;
+}
+
+/** Build and open the colour-vision check over the section as it stands now. */
+function openSecCvdCheck() {
+  const grid = $opt('secCvdGrid');
+  const src = $opt('secCanvas') as HTMLCanvasElement | null;
+  if (!grid || !src) return;
+  const w = src.width, h = src.height;
+  // Nothing drawn yet, or a degenerate canvas: say so rather than opening an
+  // empty dialog or calling getImageData with a zero dimension.
+  if (!(w > 0) || !(h > 0)) { infoToast('Open a file and draw the section first.'); return; }
+  const sctx = src.getContext('2d');
+  if (!sctx) return;
+  const base = sctx.getImageData(0, 0, w, h);
+  grid.textContent = '';
+  for (const panel of SEC_CVD_PANELS) {
+    const cell = document.createElement('div');
+    const cap = document.createElement('div');
+    cap.className = 'trace-label';
+    cap.style.marginBottom = '4px';
+    cap.textContent = panel.label;
+    const cv = document.createElement('canvas');
+    cv.width = w; cv.height = h;
+    cv.style.width = '100%';
+    cv.style.height = 'auto';
+    cv.style.border = '1px solid var(--hair)';
+    cv.style.borderRadius = '8px';
+    const cctx = cv.getContext('2d');
+    if (cctx) cctx.putImageData(panel.type === 'none' ? base : secCvdApply(base, panel.type), 0, 0);
+    cell.appendChild(cap);
+    cell.appendChild(cv);
+    grid.appendChild(cell);
+  }
+  const cmap = ($('secColor') as HTMLSelectElement).value;
+  setText('secCvdNote', `Snapshot of the section as it is on screen now, in "${SEC_MAP_LABELS[cmap] ?? 'Seismic'}". If a panel below no longer separates positive from negative, that colour map is not carrying the sign for that reader. The grey maps are unaffected by any of these deficiencies, so they are always a safe fallback.`);
+  $opt('secCvdBack')?.classList.add('open');
+}
+
+function closeSecCvdCheck() {
+  $opt('secCvdBack')?.classList.remove('open');
+  // Drop the four full-size bitmaps rather than hold them until the next open.
+  const grid = $opt('secCvdGrid');
+  if (grid) grid.textContent = '';
 }
 
 /** Paint a decimated section matrix (VD / wiggle / VA / VD+wiggle) + the time and
  *  trace-index axes onto `cv` with the given display controls. Returns the plot
  *  rectangle (so callers can map data→pixels), or null when there is nothing to
  *  draw. Used by the File Viewer (drawSection). */
-function paintSection(cv: HTMLCanvasElement, sec: SectionData, mode: string, cmap: string, gain: number): { ML: number; MT: number; pw: number; ph: number } | null {
-  const dpr = window.devicePixelRatio || 1;
-  const W = cv.clientWidth || 900;
-  const H = cv.clientHeight || 500;
-  cv.width = Math.round(W * dpr);
-  cv.height = Math.round(H * dpr);
-  const ctx = cv.getContext('2d')!;
-  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-  ctx.fillStyle = '#0d1f33';
-  ctx.fillRect(0, 0, W, H);
+// -- Permanent display-state strip (RULE 6.5 / RULE 4.3) ------------------------
+// A seismic section is evidence: someone decides at 2am whether to re-shoot on the
+// strength of it. Every transform standing between the sample on disk and the
+// pixel on screen is therefore stated ON the picture, always, never on hover - and
+// so is the file's own declared polarity convention, verbatim, including the case
+// where the file declares nothing at all.
 
-  const { numTraces, colLen, norm, data } = sec;
+const SEC_MODE_LABELS: Record<string, string> = {
+  vd: 'Variable Density',
+  wiggle: 'Wiggle',
+  va: 'Variable Area',
+  vdwig: 'VD + Wiggle',
+};
+const SEC_MAP_LABELS: Record<string, string> = {
+  seismic: 'Seismic',
+  gray: 'Gray',
+  grayL: 'Gray (perceptual)',
+  amber: 'Amber',
+  viridis: 'Viridis',
+  berlin: 'Berlin (dark centre)',
+  vik: 'Vik (light centre)',
+  grayPosBlack: 'Gray (positive black)',
+  grayLPosBlack: 'Gray L* (positive black)',
+};
+const SEC_SCALE_LABELS: Record<SecScaleMode, string> = {
+  max: 'Record max',
+  pct: 'Record pct',
+  trace: 'Per trace',
+  raw: 'None (raw)',
+};
+
+/** Compact number for the strip - keeps a huge or tiny sample value readable
+ *  without ever printing NaN/Infinity at a reader. */
+function secNum(v: number): string {
+  if (!Number.isFinite(v)) return 'n/a';
+  const a = Math.abs(v);
+  if (a === 0) return '0';
+  if (a >= 1e5 || a < 1e-3) return v.toExponential(2);
+  // Three significant figures, trailing zeros dropped: 0.75 stays "0.75" rather
+  // than becoming "0.7500", and 0.0104 keeps its digits.
+  return String(Number(v.toPrecision(3)));
+}
+
+/** Which end of each colour map a POSITIVE sample lands on. Stated on screen
+ *  because the two open toolkits disagree: Seismic Unix maps positive to BLACK,
+ *  Madagascar maps it to white, and SeisConv's grey maps map it to white. Without
+ *  this word a reader cannot tell which way round the picture is. */
+const SEC_MAP_POSITIVE: Record<string, string> = {
+  seismic: 'red',
+  gray: 'white',
+  grayL: 'white',
+  amber: 'orange',
+  viridis: 'yellow',
+  // Both diverging maps are published blue-first, and sampleLut puts index 0 at
+  // v = -1, so positive lands on the red limb - the same polarity `seismic`
+  // already uses, which is why the tables are not flipped.
+  berlin: 'light red (near-zero is the dark centre)',
+  vik: 'dark red (near-zero is the light centre)',
+  // The mirrored greys are the classic paper-section convention.
+  grayPosBlack: 'black',
+  grayLPosBlack: 'black',
+};
+
+/** The open file's declared polarity, in the SEG-Y field's OWN words.
+ *  Never "normal" / "reverse": those terms mean opposite things either side of
+ *  the North Sea and practitioners warn against them outright. A code of 0, or a
+ *  format that carries no such field, is reported as exactly that. */
+function secPolarityText(): string[] {
+  const ip = summary?.impulsePolarity;
+  const vp = summary?.vibratoryPolarity;
+  const hasVib = typeof vp === 'number' && Number.isFinite(vp);
+  const vibDeclared = hasVib && (vp as number) >= 1 && (vp as number) <= 8;
+  if (typeof ip !== 'number') {
+    // Never claim a format does not carry the field when it does - say only what
+    // is true, which is that this file did not supply a value we could read.
+    const none = /SEG-Y|SU/i.test(summary?.format ?? '')
+      ? 'No impulse polarity value was read from this file'
+      : 'This format carries no impulse polarity field';
+    return [none, ...secVibPolarityText(), ...(vibDeclared ? [SEC_DECLARED_NOTE] : [])];
+  }
+  // The all-unknown case is the COMMON one, and two full sentences to say
+  // nothing crowded the records that do declare something off the screen. One
+  // short clause carries it, still naming both bytes so it stays checkable.
+  if (ip === 0 && hasVib && vp === 0) return ['SEG-Y bytes 3257 and 3259 = 0: no polarity declared in the file header'];
+  const imp = ip === 1
+    ? 'SEG-Y byte 3257 = 1: pressure increase, or upward geophone case motion, gives a NEGATIVE number'
+    : ip === 2
+      ? 'SEG-Y byte 3257 = 2: pressure increase, or upward geophone case motion, gives a POSITIVE number'
+      : ip === 0
+        ? 'SEG-Y byte 3257 = 0: no impulse polarity declared'
+        // A value outside 0..2 is not a code this standard defines; printing it
+        // as "= 0" would put words in the file's mouth.
+        : `SEG-Y byte 3257 = ${ip}: not an impulse polarity code this program recognises`;
+  const vib = secVibPolarityText();
+  const declared = ip === 1 || ip === 2 || vibDeclared;
+  // A record that DECLARES something gets a short token first. The spelled-out
+  // sentences below are too long to survive a 1240 px window, and without this
+  // the strip would show nothing at all about a declaration that exists; the
+  // token is complete and true on its own, and the export prints the meaning.
+  const codes = declared
+    ? [`SEG-Y polarity bytes 3257 = ${ip}${hasVib ? `, 3259 = ${vp}` : ''} (declared, unverified)`]
+    : [];
+  // "declared, unverified" is one caveat over the pair, said ONCE - it rides on
+  // the short token above. Saying it per clause cost about 40 characters of
+  // width each for a fact already stated.
+  return [...codes, imp, ...vib];
+}
+
+/** The one caveat that covers every polarity clause above it. */
+const SEC_DECLARED_NOTE = 'Declared in the file header, unverified';
+
+/** The eight vibratory-polarity wedges of SEG-Y bytes 3259-3260, in degrees.
+ *  Code n says the recorded seismic signal LAGS the pilot sweep by an angle
+ *  inside wedge n; the wedges are 45° wide and code 1 straddles zero
+ *  (SEG-Y rev 1, 2002, section 3 "Binary File Header"; carried unchanged into
+ *  rev 2.0, 2017, section 5.2). Index 0 is unused so the code indexes directly. */
+const SEC_VIB_WEDGES: readonly (readonly [number, number])[] = [
+  [0, 0], [337.5, 22.5], [22.5, 67.5], [67.5, 112.5], [112.5, 157.5],
+  [157.5, 202.5], [202.5, 247.5], [247.5, 292.5], [292.5, 337.5],
+];
+
+/** What the open file declares about VIBRATORY polarity, appended to the impulse
+ *  sentence rather than given a line of its own: the two are one fact about how
+ *  the recorded numbers relate to the ground, and a reader who sees only the
+ *  impulse code on a vibrator record is missing half of it. Its own strip item,
+ *  so the narrow-canvas cut can drop it whole rather than mid-sentence. Empty when the file carries no such field at all -
+ *  a format that has no vibratory field must not be made to look silent about
+ *  one it never had. */
+function secVibPolarityText(): string[] {
+  const vp = summary?.vibratoryPolarity;
+  if (typeof vp !== 'number' || !Number.isFinite(vp)) return [];
+  const w = vp >= 1 && vp <= 8 ? SEC_VIB_WEDGES[vp] : null;
+  if (!w) {
+    return vp === 0
+      ? ['SEG-Y byte 3259 = 0: no vibratory polarity declared']
+      : [`SEG-Y byte 3259 = ${vp}: not a vibratory polarity code this program recognises`];
+  }
+  return [`SEG-Y byte 3259 = ${vp}: on a vibrator record the signal lags the pilot sweep by ${w[0]}° to ${w[1]}°`];
+}
+
+/** Paint the two-line state strip into the canvas top margin. Shrinks then
+ *  truncates rather than overflowing, so it can never collide with the plot. */
+function drawSecStateStrip(
+  ctx: CanvasRenderingContext2D,
+  W: number,
+  mode: string,
+  cmap: string,
+  basis: number,
+  clipPct: number,
+  clip: { level: number; frac: number },
+  exc: number,
+  // Items prepended to line 1 by a panel that is NOT the open file's own section
+  // (the near-trace gather says which channel and how many records it drew).
+  // Empty for the File Viewer, so its strip is unchanged.
+  lead: string[] = [],
+  // Geometry-of-the-picture items appended to line 1: reduced time and how the
+  // traces are spaced. A flattened or unevenly spaced section looks nothing like a
+  // normal one, so a screenshot without these facts would mislead.
+  geom: string[] = [],
+) {
+  const agc = secAgcOpts();
+  const sm = secScaleMode();
+  const gainMult = secGainValue();
+  const db = 20 * Math.log10(gainMult);
+  const law = secGainLaw();
+  // Kept SHORT on purpose. The strip truncates from the right on a narrow canvas,
+  // and every word spent here is a word taken off the clip and flattened items
+  // further along the line. The reasoning behind each law lives in the picker's
+  // note; the strip only has to state WHICH transform is standing in front of the
+  // data - except for Equalise, whose whole danger is that it looks fine.
+  const lawTxt = law === 'tpow'
+    ? `Gain law Time gain t^${secGainLawExp('tpow').toFixed(1)}`
+    : law === 'epow'
+      ? `Gain law Exponential time gain exp(${secGainLawExp('epow').toFixed(1)} t)`
+      : law === 'gpow'
+        ? `Gain law Amplitude compression, power ${secGainLawExp('gpow').toFixed(2)}`
+        : law === 'pbal'
+          ? 'Gain law Equalise traces (RMS), which HIDES a weak geophone'
+          : law === 'none'
+            ? 'Gain law None, true amplitude'
+            : 'Gain law Fixed gain';
+  const scaleTxt = sm === 'pct'
+    ? `Scale ${SEC_SCALE_LABELS.pct} ${secScalePct().toFixed(0)}% (basis ${secNum(basis)})`
+    : sm === 'trace'
+      ? `Scale ${SEC_SCALE_LABELS.trace} (each trace to its own level)`
+      : sm === 'raw'
+        ? `Scale ${SEC_SCALE_LABELS.raw}: full scale is the sample value ${secNum(basis)}`
+        : `Scale ${SEC_SCALE_LABELS.max} (basis ${secNum(basis)})`;
+  // The sample value that actually saturates. The mapping is
+  // v = sample x (gain / basis) / clip.level, so inverting it divides by the
+  // gain as well - leaving it out overstated the saturation level by the gain,
+  // which at +20 dB is a factor of ten.
+  const clipSample = (clip.level * (Number.isFinite(basis) ? basis : 1)) / (gainMult > 0 ? gainMult : 1);
+  // With a law active the basis, and therefore this number, is in GAINED units,
+  // not stored sample values. Saying so is the difference between a saturation
+  // level a reader can use and one that quietly misstates the data by the law.
+  const clipAt = `${secNum(clipSample)}${Number.isFinite(basis) ? '' : ' x trace level'}${law === 'none' || law === 'fixed' ? '' : ' (after the gain law)'}`;
+  const clipTxt = clipPct >= 100
+    ? `Clip none, saturates at ${clipAt}`
+    : `Clip ${clipPct.toFixed(1)}% at ${clipAt}`;
+  const flat = `${(clip.frac * 100).toFixed(clip.frac > 0 && clip.frac < 0.001 ? 3 : 1)}% flattened by the display`;
+  const line1 = [
+    ...lead,
+    SEC_MODE_LABELS[mode] ?? 'Section',
+    // Stated EARLY, not last: the strip truncates from the right on a narrow
+    // canvas, and this is the one item that must never be the one cut.
+    ...(viewInvert ? ['Polarity FLIPPED for display only (stored samples unchanged)'] : []),
+    // Also stated EARLY: a reduced or unevenly spaced section looks nothing like a
+    // normal one, so these must never be the items the narrow-canvas truncation eats.
+    ...geom,
+    `Map ${SEC_MAP_LABELS[cmap] ?? 'Seismic'}`,
+    // The rest of line 1 is in APPLICATION order, so the strip reads as the
+    // pipeline it describes: AGC, then the gain law, then the scale basis, then
+    // the dB gain, then the display clip. Nobody should have to guess which wins.
+    agc.agc ? `AGC on, ${agc.agcWindowMs.toFixed(0)} ms, ${agc.agcType.toUpperCase()}` : 'AGC off',
+    lawTxt,
+    scaleTxt,
+    `Gain ×${gainMult < 10 ? gainMult.toFixed(2) : gainMult.toFixed(1)} (${db >= 0 ? '+' : ''}${db.toFixed(1)} dB)`,
+    clipTxt,
+    `Excursion ${exc.toFixed(2)}`,
+    flat,
+  ];
+  const posEnd = SEC_MAP_POSITIVE[cmap] ?? 'the high end of the map';
+  const line2 = stripValueLine(viewInvert
+    ? `Display is inverted, so a positive sample value: deflects LEFT, unfilled side, the OPPOSITE end of this colour map from ${posEnd}`
+    : `Positive sample value: deflects RIGHT, filled side, ${posEnd} in this colour map`);
+
+  drawStateStrip(ctx, W, line1, line2);
+}
+
+/** Line 2 of every viewer's strip: what a positive number means, what the file
+ *  declares about polarity, and the quantity's honest unit. ONE wording shared
+ *  by all six panels, so the same fact reads the same everywhere. */
+function stripValueLine(valueMeans: string, opts?: { quantity?: string; polarity?: boolean }): string[] {
+  const quantity = opts?.quantity ?? 'Amplitude (sample value)';
+  // `polarity: false` is for a panel whose samples did NOT come from the file
+  // open in the File Viewer (the Sweeps signal plot), where quoting that file's
+  // declaration over foreign samples would be a false claim.
+  // The unit comes BEFORE the polarity clauses: both matter, but the narrow
+  // canvas drops from the right, and an amplitude picture read without its
+  // "no physical unit" is misread more easily than one read without the
+  // header's polarity declaration, which the export still prints in full.
+  const unit = `${quantity}, no physical unit`;
+  if (opts?.polarity === false) return [valueMeans, unit];
+  return [valueMeans, unit, ...secPolarityText()];
+}
+
+/** Line-1 items describing the GEOMETRY of the picture: reduced time (and at what
+ *  velocity) and, once trace spacing exists, how the traces are spaced. Stated on
+ *  every frame because a reduced or unevenly spaced section looks nothing like a
+ *  normal one and a screenshot without these words would mislead a reader. */
+function secGeomStripItems(red: SecReduced | null, axisInfo: SecAxisInfo | null): string[] {
+  const out: string[] = [];
+  if (axisInfo) {
+    out.push(axisInfo.axis.kind === 'header'
+      ? `Spacing ${SEC_SPACING_LABELS[axisInfo.key]} ${secAxisValTxt(axisInfo.axis.lo)} to ${secAxisValTxt(axisInfo.axis.hi)}, so a gap here is a gap in the geometry`
+      : axisInfo.fellBack
+        ? `Spacing EVEN by trace number - ${SEC_SPACING_LABELS[axisInfo.key]} unusable: ${SEC_SPACING_REASONS[axisInfo.axis.reason ?? 'no-header']}`
+        : 'Spacing even by trace number');
+  }
+  if (red) {
+    out.push(`Reduced time ON, ${red.velocityKmPerSec.toFixed(2)} km/s, offsets read as metres (time axis is REDUCED time)`);
+    if (red.blank > 0) out.push(`${grp(red.blank)} traces have no usable offset and are drawn blank`);
+    if (red.offTop > 0) out.push(`${grp(red.offTop)} traces shifted entirely off the top of this time window`);
+  }
+  return out;
+}
+
+/** The section's plot rectangle, plus the canvas width it was measured in. */
+type SecPlotRect = { ML: number; MT: number; pw: number; ph: number; W: number;
+  /** The trace axis the section was painted on. Travels WITH the rectangle so the
+   *  overlays cannot pick a different one than the pixels underneath them. */
+  axis: TraceAxis };
+
+/** Overrides for a panel that is NOT the open file's own section - currently only
+ *  the near-trace gather, whose columns are RECORDS and whose time grid belongs to
+ *  the gather rather than to the open file. Every field is optional and the
+ *  defaults reproduce the File Viewer exactly, so the section itself is unchanged. */
+type PaintSectionOpts = {
+  /** Sample interval (µs) of THIS panel's own time grid. */
+  sampleInt?: number;
+  /** Bottom-axis label for column `col`; default is '#' + absolute trace index. */
+  colLabel?: (col: number) => string;
+  /** Items prepended to line 1 of the display-state strip. */
+  stripLead?: string[];
+};
+
+/** A gather's columns are RECORDS, so a per-trace geometry header cannot position
+ *  them; it is detected by the same `colLabel` that renames its bottom axis. */
+function secPanelIsGather(opts?: PaintSectionOpts): boolean {
+  return !!opts?.colLabel;
+}
+
+function paintSection(cv: HTMLCanvasElement, secIn: SectionData, mode: string, cmap: string, gain: number, opts?: PaintSectionOpts): SecPlotRect | null {
+  const surf = beginCanvas(cv, { fallbackW: 900, fallbackH: 500 }, '#0d1f33');
+  if (!surf) return null;
+  const { ctx, W, H } = surf;
+
+  // The gain law runs FIRST, before the scale basis, so the basis, the clip level
+  // and the colour bar all describe the samples actually painted. It returns the
+  // untouched section for the identity laws, so the default display is unchanged.
+  const gained = secGainedSection(secIn);
+  // Reduced time runs AFTER the gain law on purpose: the time laws (t^n, exp) are
+  // functions of TRUE time, so gaining a section that had already been shifted
+  // would apply the law in reduced time and brighten the wrong samples.
+  // A panel that is NOT the open record - the near-trace gather - carries no
+  // per-column offsets, so secReducedSection returns null for it and the gather is
+  // untouched by this control.
+  const red = secReducedSection(gained);
+  const sec = red ? red.sec : gained;
+  if (cv === $opt('secCanvas')) {
+    secReduceState = red
+      ? { shiftSec: red.shiftSec, traceStart: sec.traceStart, traceStep: sec.traceStep, velocityKmPerSec: red.velocityKmPerSec }
+      : null;
+  }
+  const { numTraces, colLen, data } = sec;
   if (!numTraces || !colLen) return null;
-  const ML = SEC_ML, MR = SEC_MR, MT = SEC_MT, MB = SEC_MB;
+  const axisInfo = secPanelIsGather(opts)
+    ? { axis: buildTraceAxis(null, numTraces), key: 'trace' as SecSpacingKey, fellBack: false }
+    : secBuildAxis(sec, secSpacingKey());
+  const axis = axisInfo.axis;
+  if (cv === $opt('secCanvas')) { secAxis = axis; secSpacingUpdateNote(axisInfo); }
+  const ML = SEC_ML, MR = secMR(mode), MT = SEC_MT, MB = SEC_MB;
   const pw = W - ML - MR;
   const ph = H - MT - MB;
-  const g = gain / (norm || 1);
+  // Per-column gain: 'max'/'pct' fill one shared factor, 'trace' gives each trace
+  // its own. Every entry is finite (0 for a dead trace), so no NaN reaches the
+  // canvas in any scaling mode.
+  const { gf, basis } = secGainFactors(sec, gain);
+  // Display clip + excursion. `clip.level` is > 0 by construction, so dividing by
+  // it can never put a NaN or an Infinity on a canvas path.
+  const clipPct = secClipPct();
+  const clip = secClipLevel(sec, gf, clipPct);
+  const cInv = 1 / clip.level;
+  const exc = secExcursion();
+  // Display-only polarity flip. Folded into the per-trace draw gain, so the
+  // raster, the wiggles and the VA fill all turn together; clip.level stays a
+  // magnitude and is unaffected.
+  const pol = viewPolarity();
 
   if (mode === 'vd' || mode === 'vdwig') {
     const off = document.createElement('canvas');
@@ -3121,38 +4951,68 @@ function paintSection(cv: HTMLCanvasElement, sec: SectionData, mode: string, cma
     off.height = colLen;
     const octx = off.getContext('2d')!;
     const img = octx.createImageData(numTraces, colLen);
-    for (let t = 0; t < numTraces; t++) {
-      const base = t * colLen;
-      for (let s = 0; s < colLen; s++) {
-        const v = Math.max(-1, Math.min(1, data[base + s] * g));
-        const [r, gg, b] = getColor(v, cmap);
-        const idx = (s * numTraces + t) * 4;
-        img.data[idx] = r;
-        img.data[idx + 1] = gg;
-        img.data[idx + 2] = b;
-        img.data[idx + 3] = 255;
-      }
-    }
+    // data is trace-major (data[t * colLen + s]), so the raster reads 'xMajor';
+    // the per-trace gain gf[t] and the clip inverse travel in the cell transform.
+    rasterizeToRGBA(data, numTraces, colLen, sectionUnit((t) => gf[t] * pol, cInv), cmap, img.data, false, 'xMajor');
     octx.putImageData(img, 0, 0);
     ctx.imageSmoothingEnabled = false;
-    ctx.drawImage(off, ML, MT, pw, ph);
+    if (axis.kind === 'header') {
+      // One blit per column, each at its own header position and only as wide as
+      // the gap to its neighbours. A single stretched drawImage would keep the
+      // raster evenly spaced while the wiggles moved - exactly the draw-versus-
+      // hit-test drift tracex.ts exists to prevent.
+      ctx.save();
+      ctx.beginPath(); ctx.rect(ML, MT, pw, ph); ctx.clip();
+      const ord = axis.order, fr = axis.fracs;
+      for (let k = 0; k < numTraces; k++) {
+        const t = ord[k];
+        const f = fr[t];
+        const dPrev = k > 0 ? (f - fr[ord[k - 1]]) / 2 : NaN;
+        const dNext = k < numTraces - 1 ? (fr[ord[k + 1]] - f) / 2 : NaN;
+        const gapL = Number.isFinite(dPrev) ? dPrev : (Number.isFinite(dNext) ? dNext : 0.5);
+        const gapR = Number.isFinite(dNext) ? dNext : (Number.isFinite(dPrev) ? dPrev : 0.5);
+        const xl = ML + (f - gapL) * pw;
+        const xr = ML + (f + gapR) * pw;
+        if (!Number.isFinite(xl) || !Number.isFinite(xr)) continue;
+        // Duplicate header values collapse the gap to nothing; a one-pixel column
+        // still shows the trace instead of dropping it silently.
+        const w = xr - xl > 0 ? xr - xl : 1;
+        ctx.drawImage(off, t, 0, 1, colLen, xl, MT, w, ph);
+      }
+      ctx.restore();
+    } else {
+      ctx.drawImage(off, ML, MT, pw, ph);
+    }
   }
 
   if (mode === 'wiggle' || mode === 'va' || mode === 'vdwig') {
-    const tw = pw / numTraces;
-    const wsc = Math.max(tw * 0.48, 1);
+    // Excursion is a user control now (was a hardcoded 0.48 trace spacings, which
+    // made it impossible to ever gain events up into an overlapping band). It is
+    // measured against the LOCAL spacing to the nearest neighbouring trace, so
+    // 1.0 still means "just touches the neighbour" wherever the geometry put that
+    // neighbour - on an even trace-number axis and on an irregular header axis
+    // alike. The 1px floor keeps a single-pixel-wide trace column still drawable.
+    const colW = secColWidths(axis, numTraces, pw);
     // Guard the vertical scale denominator: with colLen === 1 (a genuine 1-sample
     // record or a fully-decimated trace) s/(colLen-1) would be 0/0 = NaN → lineTo
     // (x, NaN) and the wiggle/VA overlay silently fails to draw.
     const sDen = Math.max(1, colLen - 1);
+    // Excursion above 1 deliberately overruns the neighbouring trace, so confine
+    // the wiggles to the plot box - otherwise they paint over the time labels.
+    ctx.save();
+    ctx.beginPath();
+    ctx.rect(ML, MT, pw, ph);
+    ctx.clip();
     for (let t = 0; t < numTraces; t++) {
       const base = t * colLen;
-      const x0 = ML + (t + 0.5) * tw;
+      const g = gf[t] * pol;
+      const x0 = secColX(axis, t, numTraces, ML, pw);
+      const wsc = Math.max(colW[t] * exc, 1);
       if (mode === 'va') {
         ctx.beginPath();
         ctx.moveTo(x0, MT);
         for (let s = 0; s < colLen; s++) {
-          const v = Math.max(0, Math.min(1, data[base + s] * g));
+          const v = Math.max(0, Math.min(1, data[base + s] * g * cInv));
           ctx.lineTo(x0 + v * wsc, MT + (s / sDen) * ph);
         }
         ctx.lineTo(x0, MT + ph);
@@ -3162,7 +5022,7 @@ function paintSection(cv: HTMLCanvasElement, sec: SectionData, mode: string, cma
       } else {
         ctx.beginPath();
         for (let s = 0; s < colLen; s++) {
-          const v = Math.max(-1, Math.min(1, data[base + s] * g));
+          const v = Math.max(-1, Math.min(1, data[base + s] * g * cInv));
           const x = x0 + v * wsc;
           const y = MT + (s / sDen) * ph;
           if (s === 0) ctx.moveTo(x, y);
@@ -3172,33 +5032,412 @@ function paintSection(cv: HTMLCanvasElement, sec: SectionData, mode: string, cma
         ctx.lineWidth = 0.7;
         ctx.stroke();
       }
+      // Second pass: re-stroke only the runs the DISPLAY flattened against the
+      // clip level, in a deliberately neutral pale ink. It must never be the
+      // alarm red the health scanner uses for a genuinely overdriven recording
+      // (HEALTH_COLORS.clipped) - one is a rendering choice, the other destroyed
+      // the sample in the field.
+      if (clip.frac > 0) {
+        ctx.beginPath();
+        let run = false;
+        for (let s = 0; s < colLen; s++) {
+          const u = data[base + s] * g;
+          const hit = Number.isFinite(u) && Math.abs(u) > clip.level * (1 + 1e-9) && (mode !== 'va' || u > 0);
+          if (!hit) { run = false; continue; }
+          const x = x0 + (u > 0 ? wsc : -wsc);
+          const y = MT + (s / sDen) * ph;
+          if (!run) { ctx.moveTo(x, y); run = true; } else ctx.lineTo(x, y);
+        }
+        ctx.strokeStyle = '#e8eef6';
+        ctx.lineWidth = 1.4;
+        ctx.stroke();
+      }
     }
+    ctx.restore();
   }
 
   // Axes reflect the VISIBLE data-zoom window (worker echoes it on `sec`):
   //   time  ← sample window [sampStart, sampEnd) × sampleInt
   //   trace ← trace  window [traceStart, traceEnd)
+  // Colour bar for the Variable Density panels. The display maps
+  // sample x gain / clip.level onto [-1,1] of the colour map, so a bar tick at
+  // unit u stands for u * clip.level * basis in stored sample values. In
+  // 'Per trace' mode there is no single basis, so the bar is labelled in trace
+  // levels rather than inventing a number. The span is guarded finite and > 0,
+  // and drawColorbar itself refuses a degenerate range.
+  if (mode === 'vd' || mode === 'vdwig') {
+    // In 'Per trace' mode every trace has its own basis, so there is no single
+    // number a colour stands for: the bar then shows high/low and says nothing
+    // it cannot back up. The strip beside it already names the mode.
+    // Same inverse as the strip's saturation level: the gain is part of the
+    // mapping, so the bar's numbers must divide by it or the bar and the strip
+    // would contradict each other on one canvas.
+    const g = secGainValue();
+    const span = (clip.level * basis) / (g > 0 ? g : 1);
+    drawColorbar(
+      ctx, { x: ML, y: MT, w: pw, h: ph }, W, 'Amplitude',
+      // The display flip turns the map over, so the bar's numbers turn with it:
+      // without `pol` the bar would still claim red is positive while the picture
+      // painted positive blue.
+      Number.isFinite(span) && span > 0 ? (t) => (t * 2 - 1) * span * pol : undefined,
+      cmap,
+    );
+  }
+  drawSecStateStrip(ctx, W, mode, cmap, basis, clipPct, clip, exc, opts?.stripLead,
+    secGeomStripItems(red, secPanelIsGather(opts) ? null : axisInfo));
+
   ctx.fillStyle = '#7e93ac';
   ctx.font = '10px Consolas, monospace';
-  const siUs = summary?.sampleInt ?? sec.sampleInt; // µs/sample
+  // The File Viewer's section belongs to the open file, so its axis keeps using
+  // that file's interval. A gather sits on its OWN reference grid and passes it
+  // in - without that the time axis would be the wrong file's.
+  const siUs = opts?.sampleInt ?? summary?.sampleInt ?? sec.sampleInt; // µs/sample
   const t0ms = (sec.sampStart * siUs) / 1000;
   const t1ms = (sec.sampEnd * siUs) / 1000;
   ctx.textAlign = 'left';
-  for (let k = 0; k <= 5; k++) {
-    const y = MT + (ph * k) / 5;
-    const ms = t0ms + ((t1ms - t0ms) * k) / 5;
-    ctx.fillText(ms.toFixed(0) + ' ms', 6, y + 3);
-  }
-  // Trace-index axis along the bottom edge of the plot.
+  drawMsTimeAxis(ctx, { ML, MT, pw, ph, t0Ms: t0ms, t1Ms: t1ms, target: 5, grid: null });
+  // Bottom axis. For the section this is the trace index; the gather passes a
+  // colLabel so its columns are named by RECORD instead, since a gather column is
+  // a whole shot record and a trace number would be meaningless there.
   ctx.textAlign = 'center';
   const tr0 = sec.traceStart, tr1 = sec.traceEnd;
   for (let k = 0; k <= 5; k++) {
     const x = ML + (pw * k) / 5;
-    const tr = Math.round(tr0 + ((tr1 - tr0) * k) / 5);
-    ctx.fillText('#' + tr, Math.max(ML + 10, Math.min(W - MR - 10, x)), H - 4);
+    let txt: string;
+    if (axis.kind === 'header' && !opts?.colLabel) {
+      // The bottom axis is in HEADER UNITS now, read back through the axis' own
+      // inverse so the labels cannot disagree with where the traces were drawn.
+      const v = xToValue(axis, x, ML, pw);
+      txt = Number.isFinite(v) ? secAxisValTxt(v) : '';
+    } else if (opts?.colLabel) {
+      // Ticks name a real column, so clamp into [0, numTraces-1] and never index
+      // past the end when k is the last tick.
+      const col = Math.max(0, Math.min(numTraces - 1, Math.round(((numTraces - 1) * k) / 5)));
+      txt = opts.colLabel(col);
+    } else {
+      txt = '#' + Math.round(tr0 + ((tr1 - tr0) * k) / 5);
+    }
+    ctx.fillText(txt, Math.max(ML + 10, Math.min(W - MR - 10, x)), H - 4);
+  }
+  if (axis.kind === 'header' && !opts?.colLabel) {
+    ctx.textAlign = 'left';
+    ctx.fillText(SEC_SPACING_LABELS[axisInfo.key], ML, H - 14);
   }
   ctx.textAlign = 'left';
-  return { ML, MT, pw, ph };
+  // W travels with the rectangle so a panel drawn ALONGSIDE the section (the
+  // per-trace attribute profile) can size itself to the section's own width and
+  // therefore reuse ML and pw literally, instead of recomputing them.
+  return { ML, MT, pw, ph, W, axis };
+}
+
+// -- Near-trace (common-offset) gather ------------------------------------------
+// Every other viewer in SeisConv shows ONE record, so a source degrading slowly
+// down the line is invisible. This panel takes ONE chosen channel out of EVERY
+// record in the open file's folder and stands them side by side, which is the
+// standard shot-to-shot QC window on a field instrument's own screen.
+//
+// WHERE IT LIVES, and why: a modal off the File Viewer, not a tab of its own. The
+// gather is drawn by paintSection and obeys the File Viewer's display mode, colour
+// map, gain law, scale basis, clip, excursion, polarity flip and AGC - the SAME
+// controls, read live. A tab of its own would have to duplicate that whole toolbar
+// (two sources of truth for one display state) or reach across tabs for it. Its
+// record list is likewise the File Viewer's own folder list, the very one file
+// Prev/Next steps. The VIEW is new; the controls and the folder are the File
+// Viewer's, and a modal is the only placement that keeps one of each. It also
+// costs the File Viewer no toolbar row: the launcher sits in the EXISTING file-nav
+// row, so #secCanvas keeps its measured top of about 257 at 1240x860.
+
+let gatherData: NearGatherData | null = null;
+/** Column index -> record name, for the bottom axis. Built from records[] where
+ *  `ok` is true. The NAME is the label, never the FFID: a real SEG-D folder
+ *  reports ffid 1 for every record, so FFID is not unique and cannot identify a
+ *  column. */
+let gatherColNames: string[] = [];
+/** A gather is in flight. The worker is single threaded, so requests queue and
+ *  there is no cancel - file Prev/Next stays disabled while this is true. */
+let gatherPending = false;
+/** The AGC controls moved after the gather ran, so the samples on screen are no
+ *  longer the ones the current controls describe. Said out loud, never swallowed. */
+let gatherStale = false;
+/** Items prepended to line 1 of the display-state strip (which channel or offset,
+ *  how many records, and any resampling). Rebuilt on every successful run. */
+let gatherStripLead: string[] = [];
+let gatherResizeObs: ResizeObserver | null = null;
+/** Longest record name printed on the bottom axis before it is shortened. */
+const GATHER_LABEL_MAX = 16;
+
+function gatherOpen(): boolean { return !!$opt('gatherBack')?.classList.contains('open'); }
+
+function gatherSelectBy(): 'channel' | 'offset' | 'index' {
+  const v = ($opt('gatherSelectBy') as HTMLSelectElement | null)?.value;
+  return v === 'offset' || v === 'index' ? v : 'channel';
+}
+
+/** Read one of the gather's number boxes, finite-guarded, so a blank or half-typed
+ *  box can never reach the worker or a canvas as NaN. */
+function gatherNum(id: string, fb: number): number {
+  const el = $opt(id) as HTMLInputElement | null;
+  const v = el ? Number(el.value) : NaN;
+  return Number.isFinite(v) ? v : fb;
+}
+
+/** Only the selector actually in use is on screen. */
+function gatherSyncControls() {
+  const by = gatherSelectBy();
+  const show = (id: string, on: boolean) => { const el = $opt(id); if (el) el.style.display = on ? '' : 'none'; };
+  show('gatherChannelWrap', by === 'channel');
+  show('gatherOffsetWrap', by === 'offset');
+  show('gatherIndexWrap', by === 'index');
+}
+
+function gatherSetNote(msg: string, kind = '') { setStatus('gatherNote', msg, kind); }
+
+/** Disable the gather's own controls while a request is queued in the worker. */
+function gatherSetRunning(on: boolean) {
+  for (const id of ['gatherRun', 'gatherSelectBy', 'gatherChannel', 'gatherOffset', 'gatherIndex']) {
+    const el = $opt(id) as HTMLButtonElement | HTMLInputElement | HTMLSelectElement | null;
+    if (el) el.disabled = on;
+  }
+}
+
+/** A record name short enough for the bottom axis. The extension carries nothing,
+ *  and the part that tells records apart is at the END of a field file name, so an
+ *  over-long name keeps its tail. */
+function gatherShortName(name: string): string {
+  const base = fileBase(name);
+  return base.length <= GATHER_LABEL_MAX ? base : '…' + base.slice(base.length - GATHER_LABEL_MAX);
+}
+
+/** The distinct sample intervals seen, in the records' own words. */
+function gatherIntervalList(g: NearGatherData): string {
+  const seen: number[] = [];
+  for (const v of g.sampleInts) if (Number.isFinite(v) && v > 0 && !seen.includes(v)) seen.push(v);
+  const head = seen.slice(0, 6).map((v) => `${v} µs`).join(', ');
+  return seen.length > 6 ? `${head} and ${grp(seen.length - 6)} more` : head;
+}
+
+/** Line-1 lead for the state strip. Kept SHORT: the strip truncates from the
+ *  right, and the resampling warning is the one item that must survive, so it is
+ *  placed before the display settings rather than after them. */
+function gatherBuildStrip(g: NearGatherData): string[] {
+  const chosen = g.selectBy === 'offset'
+    ? `Offset nearest ${secNum(gatherNum('gatherOffset', 0))}`
+    : g.selectBy === 'index'
+      ? `Trace position ${grp(Math.max(0, Math.round(gatherNum('gatherIndex', 0))))}`
+      : `Channel ${grp(Math.round(gatherNum('gatherChannel', 1)))}`;
+  const lead = [
+    'Near-trace gather, one column per RECORD',
+    chosen,
+    `${grp(g.numTraces)} of ${grp(g.offered)} records`,
+  ];
+  // The two warnings go in FRONT of everything else, and the resampling one goes
+  // first of all. The strip truncates from the right on a narrow canvas, and these
+  // are the two items that must never be the ones cut: a silently resampled panel
+  // and a silently shortened record list both misstate the data.
+  if (g.mixedSampleInt) {
+    // TWO items, so a narrow window keeps the warning itself: the whole sentence
+    // needs about 1100 px and would be dropped entire on a laptop screen.
+    lead.unshift(
+      `RESAMPLED to ${fmtRate(g.sampleInt)}, the FIRST contributing record's grid`,
+      `these records do not share one sample interval (${gatherIntervalList(g)})`,
+    );
+  }
+  if (g.truncated || g.droppedByCap > 0) {
+    lead.unshift(`${grp(g.droppedByCap)} further records were NOT read (display cap)`);
+  }
+  return lead;
+}
+
+/** The plain-English summary under the controls. Repeats the same facts as the
+ *  strip because the strip lives on the picture and this survives a screenshot of
+ *  the panel alone. */
+function gatherRenderNote(g: NearGatherData) {
+  const bits: string[] = [
+    `${grp(g.numTraces)} of ${grp(g.offered)} records drawn`,
+    `time grid ${fmtRate(g.sampleInt)}`,
+  ];
+  let kind = '';
+  if (g.truncated || g.droppedByCap > 0) {
+    bits.push(`showing ${grp(g.numTraces)} of ${grp(g.offered)} records - ${grp(g.droppedByCap)} were not read because the display cap was reached`);
+    kind = 'warn';
+  }
+  if (g.mixedSampleInt) {
+    bits.push(`these records do NOT share one sample interval (${gatherIntervalList(g)}). Every column was resampled onto ${fmtRate(g.sampleInt)}, which is the FIRST contributing record's interval - so if that record is the odd one out, everything else on screen was resampled`);
+    kind = 'warn';
+  }
+  const skipped = g.records.filter((r) => !r.ok).length;
+  if (skipped > 0) {
+    bits.push(`${grp(skipped)} record${skipped === 1 ? '' : 's'} contributed no column (listed below)`);
+    if (!kind) kind = 'warn';
+  }
+  const ambiguous = g.records.filter((r) => r.ok && r.ambiguous).length;
+  if (ambiguous > 0) {
+    bits.push(`${grp(ambiguous)} record${ambiguous === 1 ? ' matched' : 's matched'} the request more than once; the first match was used`);
+  }
+  if (gatherStale) {
+    bits.push('the AGC setting changed after this gather ran, so press Run again to apply it');
+    kind = 'warn';
+  }
+  // Each bit is written as its own sentence, so capitalise it rather than let the
+  // join produce "records drawn. time grid ...".
+  gatherSetNote(bits.map((s) => (s ? s[0].toUpperCase() + s.slice(1) : s)).join('. ') + '.', kind);
+}
+
+/** The skipped records, in the worker's own already-readable English. Shown, never
+ *  swallowed: a missing column has to be explained or the panel lies by omission. */
+function gatherRenderSkips(g: NearGatherData) {
+  const box = $opt('gatherSkips');
+  if (!box) return;
+  box.textContent = '';
+  const lines = g.skipped.filter((s) => typeof s === 'string' && s.length > 0);
+  if (!lines.length) { box.style.display = 'none'; return; }
+  box.style.display = '';
+  const head = document.createElement('p');
+  head.className = 'health-adv-note';
+  head.textContent = `${grp(lines.length)} record${lines.length === 1 ? '' : 's'} contributed no column:`;
+  box.appendChild(head);
+  const ul = document.createElement('ul');
+  ul.className = 'gather-skips';
+  // Capped so a folder of thousands of unreadable files cannot build a list long
+  // enough to stall the renderer; the count above always states the real total.
+  const shown = lines.slice(0, 200);
+  for (const s of shown) {
+    const li = document.createElement('li');
+    li.textContent = s;
+    ul.appendChild(li);
+  }
+  if (lines.length > shown.length) {
+    const li = document.createElement('li');
+    li.textContent = `and ${grp(lines.length - shown.length)} more.`;
+    ul.appendChild(li);
+  }
+  box.appendChild(ul);
+}
+
+/** Draw the gather through the SECTION renderer: the same display modes, colour
+ *  maps, gain law, scale basis, clip, excursion, polarity flip and per-column
+ *  norms. There is deliberately no second drawing path. */
+function drawGatherPanel() {
+  const cv = $opt('gatherCanvas') as HTMLCanvasElement | null;
+  const g = gatherData;
+  if (!cv || !g) return;
+  // No NaN and no degenerate matrix reaches the canvas.
+  if (!Number.isFinite(g.numTraces) || !Number.isFinite(g.colLen) || g.numTraces <= 0 || g.colLen <= 0) return;
+  if (!Number.isFinite(g.sampleInt) || g.sampleInt <= 0) return;
+  const sec: SectionData = {
+    numTraces: g.numTraces, colLen: g.colLen, norm: g.norm, norms: g.norms,
+    sampleInt: g.sampleInt, traceStep: 1, data: g.data,
+    traceStart: 0, traceEnd: g.numTraces, sampStart: 0, sampEnd: g.colLen,
+    fullTraces: g.numTraces, fullSamples: g.colLen,
+  };
+  const mode = ($('secMode') as HTMLSelectElement).value;
+  const cmap = ($('secColor') as HTMLSelectElement).value;
+  const lead = gatherStale
+    ? [...gatherStripLead, 'AGC changed since this gather ran - press Run again to apply it']
+    : gatherStripLead;
+  paintSection(cv, sec, mode, cmap, secGainValue(), {
+    sampleInt: g.sampleInt,
+    colLabel: (col) => gatherColNames[col] || `column ${col + 1}`,
+    stripLead: lead,
+  });
+}
+
+async function runGather() {
+  if (gatherPending) return;
+  if (!summary) { gatherSetNote('Open a seismic file first.', 'err'); return; }
+  const by = gatherSelectBy();
+  const opts: NearGatherOpts = { selectBy: by, ...secAgcOpts() };
+  // `paths` is deliberately omitted: the main process fills it from the sibling
+  // list file Prev/Next already steps, and any path the renderer invented would be
+  // rejected as unauthorized.
+  if (by === 'channel') opts.channel = Math.round(gatherNum('gatherChannel', 1));
+  else if (by === 'offset') opts.offsetTarget = gatherNum('gatherOffset', 0);
+  else opts.index = Math.max(0, Math.round(gatherNum('gatherIndex', 0)));
+  gatherPending = true;
+  updateFileNav();     // lock file Prev/Next while the worker is busy
+  gatherSetRunning(true);
+  gatherSetNote('Reading every record in this folder…');
+  showProgress('Building the near-trace gather…');
+  try {
+    const g = await api.getNearGather(opts);
+    // A format that carries no offset header returns an EMPTY panel by design.
+    // Say what happened and name the way out, rather than showing an empty box.
+    const allNoOffset = g.records.length > 0 && g.records.every((r) => !r.ok && r.reason === 'noOffsetHeader');
+    if (by === 'offset' && g.numTraces === 0 && allNoOffset) {
+      gatherData = null; gatherColNames = []; gatherStripLead = [];
+      gatherRenderSkips(g);
+      gatherSetNote('None of these records carries a usable offset header (the field is absent or reads zero everywhere), so no trace can be matched by offset. Set "Choose the trace by" to Channel number and run again.', 'err');
+      return;
+    }
+    if (!g.numTraces || !g.colLen) {
+      gatherData = null; gatherColNames = []; gatherStripLead = [];
+      gatherRenderSkips(g);
+      gatherSetNote('No record in this folder supplied a matching trace, so there is nothing to draw. The reasons are listed below.', 'err');
+      return;
+    }
+    gatherData = g;
+    gatherStale = false;
+    gatherColNames = new Array(g.numTraces).fill('');
+    for (const r of g.records) {
+      if (r.ok && r.column >= 0 && r.column < g.numTraces) gatherColNames[r.column] = gatherShortName(r.name);
+    }
+    gatherStripLead = gatherBuildStrip(g);
+    gatherRenderNote(g);
+    gatherRenderSkips(g);
+    drawGatherPanel();
+  } catch (e) {
+    gatherSetNote('Gather failed: ' + errMsg(e), 'err');
+  } finally {
+    gatherPending = false;
+    hideProgress();
+    gatherSetRunning(false);
+    updateFileNav();
+  }
+}
+
+function openGather() {
+  const back = $opt('gatherBack');
+  if (!back) return;
+  gatherSyncControls();
+  back.classList.add('open');
+  gatherEnsureResizeObserver();
+  if (!summary) { gatherSetNote('Open a seismic file first - the gather reads the folder that file is in.', 'err'); return; }
+  if (gatherData) requestAnimationFrame(() => drawGatherPanel());
+  else if (!gatherPending) {
+    gatherSetNote(`Pick a channel and press Run. Every seismic file in this folder becomes one column (${grp(summary.count)} file${summary.count === 1 ? '' : 's'} to read).`);
+  }
+}
+
+function closeGather() { $opt('gatherBack')?.classList.remove('open'); }
+
+/** Drop the gather when the open file goes away - its folder went with it. */
+function gatherReset() {
+  gatherData = null;
+  gatherColNames = [];
+  gatherStripLead = [];
+  gatherStale = false;
+  const sk = $opt('gatherSkips');
+  if (sk) { sk.textContent = ''; sk.style.display = 'none'; }
+  if ($opt('gatherNote')) gatherSetNote('');
+  closeGather();
+}
+
+/** AGC changes the SAMPLES, and the gather's samples came from the worker at run
+ *  time, so a gather already on screen is now out of date. Flagged rather than
+ *  silently re-run: re-reading the whole folder is a real cost, and a panel that
+ *  disagrees with its own strip would be worse than either. */
+function gatherMarkStale() {
+  if (!gatherData || gatherStale) return;
+  gatherStale = true;
+  if (gatherOpen()) { gatherRenderNote(gatherData); drawGatherPanel(); }
+}
+
+function gatherEnsureResizeObserver() {
+  if (gatherResizeObs || typeof ResizeObserver === 'undefined') return;
+  const modal = $opt('gatherModal');
+  if (!modal) return;
+  gatherResizeObs = new ResizeObserver(() => { if (gatherOpen()) drawGatherPanel(); });
+  gatherResizeObs.observe(modal);
 }
 
 // -- Trace-health QC (File Viewer) ----------------------------------------------
@@ -3276,6 +5515,7 @@ function secHealthUpdateButtons() {
   if (sens) sens.disabled = !has;
   if (clr) clr.disabled = !has;
   if (exp) exp.disabled = !has;
+  secAttrUpdateButton();
 }
 
 /** Drop the trace-health overlay + findings (new/closed file, or Clear flags). */
@@ -3298,6 +5538,20 @@ function secHealthReset() {
   setText('secHealthLiveCount', '-');
   setText('secHealthSummary', 'Run a health scan to flag bad traces.');
   secHealthUpdateButtons();
+}
+
+/** Show/hide one of the File Viewer's collapsed toolbar sections (the Display
+ *  panel, the Health tools) and keep its button's aria-expanded honest. Folding
+ *  these away is what keeps the section canvas high on the screen: the display
+ *  settings are all reported permanently on the in-canvas state strip, so hiding
+ *  their controls hides no information. Returns nothing; safe if the panel is
+ *  absent. */
+function secTogglePanel(panelId: string, btnId: string) {
+  const panel = $opt(panelId) as HTMLElement | null;
+  if (!panel) return;
+  const hidden = panel.style.display === 'none' || panel.style.display === '';
+  panel.style.display = hidden ? 'block' : 'none';
+  $opt(btnId)?.setAttribute('aria-expanded', hidden ? 'true' : 'false');
 }
 
 /** Show/hide the per-detector sensitivity panel. */
@@ -3542,6 +5796,7 @@ function secHealthLocate(abs: number) {
     const w = Math.max(2, secView.t1 - secView.t0);
     let t0 = Math.round(abs - w / 2);
     if (t0 < 0) t0 = 0;
+    secReleaseTypedAxis(); // locating a flagged trace moves the view; boxes follow
     secView.t0 = t0;
     secView.t1 = t0 + w;
     void fetchSectionWindow(); // clamps, re-fetches + redraws (overlay included)
@@ -3555,14 +5810,15 @@ function secHealthLocate(abs: number) {
  *  line in the worst-detector colour (SOLID = strong / confident, DASHED = marginal)
  *  clipped to the plot rect, plus a stacked tick per fired detector at the top. Every
  *  coordinate is finite-guarded. */
-function secDrawHealthOverlay(cv: HTMLCanvasElement, sec: SectionData, rect: { ML: number; MT: number; pw: number; ph: number }) {
+function secDrawHealthOverlay(cv: HTMLCanvasElement, sec: SectionData, rect: SecPlotRect) {
   if (!secHealth || secHealth.byAbs.size === 0) return;
   const { ML, MT, pw, ph } = rect;
-  const ctx = cv.getContext('2d'); if (!ctx) return;
-  const dpr = window.devicePixelRatio || 1;
-  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  const ctx = attachOverlay(cv); if (!ctx) return;
   const numTraces = sec.numTraces;
   if (!(numTraces > 0) || !(pw > 0) || !(ph > 0) || !(sec.traceStep > 0)) return;
+  // `tw` is the MARKER size only (how wide a flag triangle may be); the flag's
+  // POSITION comes from the section's own axis, so it follows the trace wherever
+  // the header put it.
   const tw = pw / numTraces;
   const half = Math.max(2.5, Math.min(tw * 0.55, 6));
   ctx.save();
@@ -3570,7 +5826,7 @@ function secDrawHealthOverlay(cv: HTMLCanvasElement, sec: SectionData, rect: { M
     const abs = sec.traceStart + c * sec.traceStep;
     const f = secHealth.byAbs.get(abs);
     if (!f) continue;
-    const x = ML + (c + 0.5) * tw;
+    const x = secColX(rect.axis, c, numTraces, ML, pw);
     if (!Number.isFinite(x)) continue;
     const strong = f.confidence >= 0.5;
     // Faint full-height tint line in the dominant colour (clipped to the plot rect).
@@ -3610,7 +5866,7 @@ function secDrawHealthOverlay(cv: HTMLCanvasElement, sec: SectionData, rect: { M
   if (secHealthSel >= 0) {
     const c = Math.round((secHealthSel - sec.traceStart) / sec.traceStep);
     if (c >= 0 && c < numTraces) {
-      const x = ML + (c + 0.5) * tw;
+      const x = secColX(rect.axis, c, numTraces, ML, pw);
       if (Number.isFinite(x)) {
         ctx.save();
         ctx.beginPath(); ctx.rect(ML, MT, pw, ph); ctx.clip();
@@ -3621,6 +5877,276 @@ function secDrawHealthOverlay(cv: HTMLCanvasElement, sec: SectionData, rect: { M
     }
   }
   ctx.restore();
+}
+
+// -- Per-trace attribute profile (File Viewer) ----------------------------------
+// A line profile beside the section, on the SAME trace axis, showing each trace's
+// peak, its RMS, and a SEPARATE pre-first-break noise RMS. The point is that these
+// are NUMBERS that do not depend on the display normalisation, which is exactly
+// what per-trace scaling and AGC hide: under 'Per trace' a dead-quiet geophone and
+// a healthy one are painted at the same brightness, and this profile is where the
+// difference stays visible.
+//
+// The numbers are the trace-health scan's OWN evidence (rms / peak / rmsPre),
+// read back out of the cached buffer - not a second computation. Two sources of
+// truth for one quantity would be a bug here, not a convenience.
+//
+// ALIGNMENT is structural, not re-derived: the profile canvas is sized from the
+// section's own measured width and uses the ML / pw the section was just painted
+// with, and its column mapping is the SAME `sec.traceStart + c * sec.traceStep`
+// the health overlay uses. Zoom, pan and paging therefore move both together
+// because there is only one calculation.
+
+/** Height of the profile canvas in CSS px - matches .sec-attr in index.html. */
+const SEC_ATTR_H = 172;
+/** Top margin: the two-line state strip sits here, as on every other panel. */
+const SEC_ATTR_MT = 30;
+/** Bottom margin: the legend line. */
+const SEC_ATTR_MB = 18;
+// The axis is LOGARITHMIC because peak dwarfs a noise RMS by orders of magnitude
+// and a linear axis would flatten both quiet series onto the floor. Its span is
+// fitted to the data between these two bounds: never fewer than 2 decades, so a
+// flat profile still gets a readable scale, and never more than 6, so one dead
+// trace six orders down cannot squash every healthy trace into the top pixel.
+const SEC_ATTR_MIN_DECADES = 2;
+const SEC_ATTR_MAX_DECADES = 6;
+/** Deliberately NOT any HEALTH_COLORS value: these are measurements, not flags,
+ *  and nobody should read a profile line as a detector firing. */
+const SEC_ATTR_COLORS = { peak: '#7ee787', rms: '#34dbd0', noise: '#ff9ecb' };
+
+/** Is the profile showing? Off by default; the toggle lives beside Health scan. */
+let secAttrOn = false;
+
+function secAttrUpdateButton() {
+  const btn = $opt('secAttrToggle') as HTMLButtonElement | null;
+  if (!btn) return;
+  const hasFile = !!summary && summary.traceCount > 0;
+  btn.disabled = !hasFile || !!summary?.streamed || secHealthPending;
+  btn.setAttribute('aria-pressed', secAttrOn ? 'true' : 'false');
+  btn.classList.toggle('on', secAttrOn);
+}
+
+/** Turn the profile on or off. Turning it ON with no scan yet runs the health
+ *  scan first, because that scan IS where the numbers come from. */
+async function secToggleAttr() {
+  secAttrOn = !secAttrOn;
+  secAttrUpdateButton();
+  if (secAttrOn && !secHealth && summary && summary.traceCount > 0 && !summary.streamed) {
+    await secRunHealth();   // redraws the section (and therefore this profile) itself
+    secAttrUpdateButton();
+    return;
+  }
+  redrawSection();
+  if (!lastSection) secDrawAttrStrip(null, null);
+}
+
+/** Turn the profile off and hide it - the file it described is gone. */
+function secAttrReset() {
+  secAttrOn = false;
+  const wrap = $opt('secAttrWrap');
+  if (wrap) (wrap as HTMLElement).style.display = 'none';
+  secAttrUpdateButton();
+}
+
+/** Paint the per-trace attribute profile. Called from drawSection with the
+ *  section's own plot rectangle; every numeric that reaches the canvas is
+ *  finite-guarded, and a degenerate axis draws a sentence instead of a plot. */
+function secDrawAttrStrip(sec: SectionData | null, rect: SecPlotRect | null) {
+  const wrap = $opt('secAttrWrap') as HTMLElement | null;
+  const cv = $opt('secAttrCanvas') as HTMLCanvasElement | null;
+  if (!wrap || !cv) return;
+  if (!secAttrOn) { wrap.style.display = 'none'; return; }
+  wrap.style.display = '';
+
+  const say = (line1: string, line2: string | string[]) => {
+    const surf = beginCanvas(cv, { W: rect?.W ?? (cv.clientWidth || 900), H: SEC_ATTR_H }, '#0d1f33');
+    if (surf) drawStateStrip(surf.ctx, surf.W, line1, line2);
+  };
+
+  if (!sec || !rect) {
+    say('Per-trace attributes: no section on screen yet.',
+      ['Open a seismic file',
+        'This profile reads the trace-health scan of that file, on the same trace axis as the section']);
+    return;
+  }
+  const surf = beginCanvas(cv, { W: rect.W, H: SEC_ATTR_H }, '#0d1f33');
+  if (!surf) return;
+  const { ctx, W, H } = surf;
+  const ML = rect.ML, pw = rect.pw;
+  const MT = SEC_ATTR_MT, ph = H - MT - SEC_ATTR_MB;
+  const n = sec.numTraces;
+  if (!(pw > 0) || !(ph > 0) || !(n > 0) || !(sec.traceStep > 0)) return;
+
+  if (!secHealth || secHealth.data.traceIndex.length === 0) {
+    drawStateStrip(ctx, W, 'Per-trace attributes: this file has not been scanned yet.',
+      ['Press Health scan',
+        'This profile shows the SAME per-trace numbers that scan already computes, so there is only ever one set of them']);
+    return;
+  }
+
+  // Pull the three series for the columns actually on screen. The column-to-trace
+  // mapping is the health overlay's, so the two cannot disagree.
+  const d = secHealth.data;
+  const peak = new Float64Array(n).fill(NaN);
+  const rms = new Float64Array(n).fill(NaN);
+  const noise = new Float64Array(n).fill(NaN);
+  let scanned = 0, noPick = 0;
+  for (let c = 0; c < n; c++) {
+    const abs = sec.traceStart + c * sec.traceStep;
+    const m = secHealth.meta.get(abs);
+    if (!m) continue;
+    const ev = readEvidence(d.evidence, m.row);
+    scanned++;
+    if (Number.isFinite(ev.peak)) peak[c] = ev.peak;
+    if (Number.isFinite(ev.rms)) rms[c] = ev.rms;
+    if (Number.isFinite(ev.rmsPre)) noise[c] = ev.rmsPre; else noPick++;
+  }
+
+  const cov = d.coverage;
+  const covTxt = `${grp(scanned)} of ${grp(n)} traces on screen were scanned${cov.stride > 1 ? `, 1-in-${cov.stride} sampling` : ''}`;
+  if (scanned === 0) {
+    drawStateStrip(ctx, W, `Per-trace attributes: none of the ${grp(n)} traces on screen was covered by the scan.`,
+      `The scan sampled ${grp(cov.scanned)} of ${grp(cov.total)} traces. Zoom out, or run Health scan again on this window.`);
+    return;
+  }
+
+  // Log axis. `top` is the largest finite POSITIVE value across all three series,
+  // and the floor is five decades below it, so the axis can never be degenerate:
+  // floor > 0 and floor < top hold by construction. A value at or under the floor
+  // is pinned to the bottom line, which is exactly where a dead trace belongs.
+  let top = 0, bot = Infinity;
+  for (const arr of [peak, rms, noise]) {
+    for (let c = 0; c < n; c++) {
+      const v = arr[c];
+      if (!Number.isFinite(v) || v <= 0) continue;
+      if (v > top) top = v;
+      if (v < bot) bot = v;
+    }
+  }
+  if (!(top > 0)) {
+    drawStateStrip(ctx, W, 'Per-trace attributes: every scanned trace on screen reads zero.',
+      'There is no positive amplitude to put on a log axis. That is itself the finding: this window is dead.');
+    return;
+  }
+  if (!(bot > 0) || !Number.isFinite(bot)) bot = top;
+  const decades = Math.min(SEC_ATTR_MAX_DECADES,
+    Math.max(SEC_ATTR_MIN_DECADES, Math.ceil(Math.log10(top / bot) + 1e-9)));
+  // floor > 0 and floor < top hold by construction, so the axis can never be
+  // degenerate and no NaN can reach a canvas coordinate below.
+  const floor = top / Math.pow(10, decades);
+  const yFor = (v: number): number => {
+    const u = Math.log10(Math.max(floor, v) / floor) / decades;
+    return MT + ph - hClamp01(u) * ph;
+  };
+  // The SAME forward map the section itself drew with, so the profile cannot
+  // drift off the trace it describes when the traces are header-positioned.
+  const xFor = (c: number): number => secColX(rect.axis, c, n, ML, pw);
+
+  // Frame + decade gridlines.
+  ctx.strokeStyle = 'rgba(126,147,172,0.28)';
+  ctx.lineWidth = 1;
+  ctx.strokeRect(ML + 0.5, MT + 0.5, pw - 1, ph - 1);
+  ctx.fillStyle = '#7e93ac';
+  ctx.font = '9px Consolas, monospace';
+  ctx.textAlign = 'right';
+  for (let k = 0; k <= decades; k++) {
+    const y = MT + ph - (k / decades) * ph;
+    if (!Number.isFinite(y)) continue;
+    if (k > 0 && k < decades) {
+      ctx.beginPath();
+      ctx.strokeStyle = 'rgba(126,147,172,0.14)';
+      ctx.moveTo(ML, y); ctx.lineTo(ML + pw, y); ctx.stroke();
+    }
+    ctx.fillText(secNum(floor * Math.pow(10, k)), ML - 4, Math.min(MT + ph, Math.max(MT + 7, y + 3)));
+  }
+  ctx.textAlign = 'left';
+
+  // The three series. A gap in a series BREAKS its line rather than being bridged:
+  // a strided scan leaves real holes, and joining across them would draw a profile
+  // through traces nobody measured. Isolated points get a dot so they still show.
+  const dots = pw / n >= 2.5;
+  const drawSeries = (vals: Float64Array, color: string) => {
+    ctx.save();
+    ctx.beginPath(); ctx.rect(ML, MT, pw, ph); ctx.clip();
+    ctx.strokeStyle = color;
+    ctx.lineWidth = 1.2;
+    ctx.beginPath();
+    let pen = false;
+    for (let c = 0; c < n; c++) {
+      const v = vals[c];
+      if (!Number.isFinite(v)) { pen = false; continue; }
+      const x = xFor(c), y = yFor(v);
+      if (!Number.isFinite(x) || !Number.isFinite(y)) { pen = false; continue; }
+      if (pen) ctx.lineTo(x, y); else { ctx.moveTo(x, y); pen = true; }
+    }
+    ctx.stroke();
+    if (dots) {
+      ctx.fillStyle = color;
+      for (let c = 0; c < n; c++) {
+        const v = vals[c];
+        if (!Number.isFinite(v)) continue;
+        const x = xFor(c), y = yFor(v);
+        if (!Number.isFinite(x) || !Number.isFinite(y)) continue;
+        ctx.fillRect(x - 0.9, y - 0.9, 1.8, 1.8);
+      }
+    }
+    ctx.restore();
+  };
+  drawSeries(peak, SEC_ATTR_COLORS.peak);
+  drawSeries(rms, SEC_ATTR_COLORS.rms);
+  drawSeries(noise, SEC_ATTR_COLORS.noise);
+
+  // The located trace, drawn exactly as the section's own overlay draws it, so a
+  // clicked finding is marked in BOTH pictures at the same x.
+  if (secHealthSel >= 0) {
+    const c = Math.round((secHealthSel - sec.traceStart) / sec.traceStep);
+    if (c >= 0 && c < n) {
+      const x = xFor(c);
+      if (Number.isFinite(x)) {
+        ctx.save();
+        ctx.beginPath(); ctx.rect(ML, MT, pw, ph); ctx.clip();
+        ctx.strokeStyle = 'rgba(255,255,255,0.7)'; ctx.lineWidth = 1.3;
+        ctx.beginPath(); ctx.moveTo(x, MT); ctx.lineTo(x, MT + ph); ctx.stroke();
+        ctx.restore();
+      }
+    }
+  }
+
+  // Legend, in the series' own colours.
+  ctx.font = '10px Consolas, monospace';
+  ctx.textAlign = 'left';
+  let lx = ML;
+  const keys: [string, string][] = [
+    ['Peak', SEC_ATTR_COLORS.peak],
+    ['RMS', SEC_ATTR_COLORS.rms],
+    [`Noise RMS (before the first break)${noPick > 0 ? ` - missing on ${grp(noPick)} trace${noPick === 1 ? '' : 's'} with no pick` : ''}`, SEC_ATTR_COLORS.noise],
+  ];
+  for (const [label, color] of keys) {
+    if (lx > W - 60) break;
+    ctx.strokeStyle = color; ctx.lineWidth = 2;
+    ctx.beginPath(); ctx.moveTo(lx, H - 8); ctx.lineTo(lx + 14, H - 8); ctx.stroke();
+    ctx.fillStyle = color;
+    ctx.fillText(label, lx + 18, H - 4);
+    lx += 18 + ctx.measureText(label).width + 16;
+  }
+
+  drawStateStrip(ctx, W,
+    [
+      'Per-trace attributes from the trace-health scan',
+      'Peak · RMS · Noise RMS before the first break',
+      `Log scale, ${decades} decade${decades === 1 ? '' : 's'} from ${secNum(floor)} to ${secNum(top)}`,
+      covTxt,
+      ...(noPick > 0 ? [`${grp(noPick)} trace${noPick === 1 ? ' has' : 's have'} no confident first-break pick, so no noise value is drawn for ${noPick === 1 ? 'it' : 'them'}`] : []),
+    ],
+    // Three items, not one sentence: this canvas has no Save image button, so
+    // whatever the width cannot hold is simply not readable anywhere - each fact
+    // has to be able to stand, or fall, on its own.
+    [
+      'Measured on the STORED samples',
+      'No display gain, AGC, gain law, scale basis or clip affects these lines',
+      `The noise window is time zero to ${NOISE_GUARD_MS} ms before the scan's own first-break pick`,
+      'Amplitude (sample value), no physical unit',
+    ]);
 }
 
 /** CSV cell with quoting for commas/quotes/newlines. */
@@ -3885,27 +6411,45 @@ function fbPickColor(p: FbPick): string {
 }
 
 // Pixel mapping for the overlay/hit-test (mirror paintSection's axes exactly).
-function fbXForAbs(abs: number, sec: SectionData, ML: number, pw: number): number {
+// The axis is a PARAMETER, never the module's own: drawSection is also the
+// box-zoom popup's renderer, and reading the main canvas' axis while drawing the
+// popup's sub-window would index one section's fracs with another's column
+// number - the draw-versus-hit-test drift this whole module exists to prevent.
+function fbXForAbs(abs: number, sec: SectionData, ML: number, pw: number, axis: TraceAxis): number {
+  if (!(pw > 0)) return NaN;
+  // Header-positioned traces: go via the column, through THIS section's axis. A
+  // pick whose trace is not a drawn column has no x at all, and NaN is filtered by
+  // every caller - better than parking it on a trace it does not belong to.
+  if (axis.kind === 'header' && sec.traceStep > 0) {
+    const c = Math.round((abs - sec.traceStart) / sec.traceStep);
+    if (!(c >= 0 && c < axis.count)) return NaN;
+    return secColX(axis, c, sec.numTraces, ML, pw);
+  }
   const span = sec.traceEnd - sec.traceStart;
-  if (!(span > 0) || !(pw > 0)) return NaN;
+  if (!(span > 0)) return NaN;
   return ML + ((abs - sec.traceStart) / span) * pw;
 }
-function fbYForMs(tMs: number, sec: SectionData, siUs: number, MT: number, ph: number): number {
+// Picks are stored in TRUE time. When the section is drawn in reduced time the y
+// axis is reduced time, so a pick must be plotted at trueTime - thatTrace'sShift
+// or it would sit off the flattened breaks it describes. `shiftMs` is that number
+// (0 in true time), and fbCursorTraceTime adds it back so a click still STORES
+// true time. One number, used in both directions.
+function fbYForMs(tMs: number, sec: SectionData, siUs: number, MT: number, ph: number, shiftMs = 0): number {
   const t0 = (sec.sampStart * siUs) / 1000, t1 = (sec.sampEnd * siUs) / 1000;
   const span = t1 - t0;
+  const sh = Number.isFinite(shiftMs) ? shiftMs : 0;
   if (!(span > 0) || !(ph > 0) || !Number.isFinite(tMs)) return NaN;
-  return MT + ((tMs - t0) / span) * ph;
+  return MT + ((tMs - sh - t0) / span) * ph;
 }
 
 /** Overlay the moveout guide (dashed) + shaded ±search-window band + the pick line
  *  (colour-coded dots ∝ confidence, gaps at dead/no-pick) onto the painted section.
  *  Every coordinate is finite-guarded and clipped to the plot rect. */
-function secDrawFbOverlay(cv: HTMLCanvasElement, sec: SectionData, rect: { ML: number; MT: number; pw: number; ph: number }) {
+function secDrawFbOverlay(cv: HTMLCanvasElement, sec: SectionData, rect: SecPlotRect) {
   const { ML, MT, pw, ph } = rect;
+  const axis = rect.axis;
   if (!(pw > 0) || !(ph > 0) || !(sec.traceEnd > sec.traceStart)) return;
-  const ctx = cv.getContext('2d'); if (!ctx) return;
-  const dpr = window.devicePixelRatio || 1;
-  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  const ctx = attachOverlay(cv); if (!ctx) return;
   const siUs = summary?.sampleInt ?? sec.sampleInt ?? 0;
   if (!(siUs > 0)) return;
   const seeds = fbSeedsSorted();
@@ -3921,10 +6465,11 @@ function secDrawFbOverlay(cv: HTMLCanvasElement, sec: SectionData, rect: { ML: n
       const abs = sec.traceStart + c * sec.traceStep;
       const g = fbGuideAt(abs, seeds);
       if (!Number.isFinite(g)) continue;
-      const x = fbXForAbs(abs, sec, ML, pw);
-      const ym = fbYForMs(g, sec, siUs, MT, ph);
-      const yt = fbYForMs(g - fbWindowMs, sec, siUs, MT, ph);
-      const yb = fbYForMs(g + fbWindowMs, sec, siUs, MT, ph);
+      const x = fbXForAbs(abs, sec, ML, pw, axis);
+      const sh = secReduceShiftMsForAbs(abs) ?? 0;
+      const ym = fbYForMs(g, sec, siUs, MT, ph, sh);
+      const yt = fbYForMs(g - fbWindowMs, sec, siUs, MT, ph, sh);
+      const yb = fbYForMs(g + fbWindowMs, sec, siUs, MT, ph, sh);
       if (!Number.isFinite(x) || !Number.isFinite(ym)) continue;
       xs.push(x); yMid.push(ym); yTop.push(Number.isFinite(yt) ? yt : ym); yBot.push(Number.isFinite(yb) ? yb : ym);
     }
@@ -3957,8 +6502,8 @@ function secDrawFbOverlay(cv: HTMLCanvasElement, sec: SectionData, rect: { ML: n
     ctx.beginPath();
     let started = false;
     for (const [a, p] of vis) {
-      const x = fbXForAbs(a, sec, ML, pw);
-      const y = fbYForMs(p.tMs, sec, siUs, MT, ph);
+      const x = fbXForAbs(a, sec, ML, pw, axis);
+      const y = fbYForMs(p.tMs, sec, siUs, MT, ph, secReduceShiftMsForAbs(a) ?? 0);
       if (!Number.isFinite(x) || !Number.isFinite(y)) { started = false; continue; }
       if (!started) { ctx.moveTo(x, y); started = true; } else ctx.lineTo(x, y);
     }
@@ -3969,8 +6514,8 @@ function secDrawFbOverlay(cv: HTMLCanvasElement, sec: SectionData, rect: { ML: n
 
   // 3. Dots - colour by source/flag, radius + opacity ∝ confidence.
   for (const [a, p] of vis) {
-    const x = fbXForAbs(a, sec, ML, pw);
-    const y = fbYForMs(p.tMs, sec, siUs, MT, ph);
+    const x = fbXForAbs(a, sec, ML, pw, axis);
+    const y = fbYForMs(p.tMs, sec, siUs, MT, ph, secReduceShiftMsForAbs(a) ?? 0);
     if (!Number.isFinite(x) || !Number.isFinite(y)) continue;
     const conf = fbClamp01(p.source === 'seed' ? 1 : p.confidence);
     const r = p.source === 'seed' ? 3.6 : 2 + 2.4 * conf;
@@ -3985,8 +6530,8 @@ function secDrawFbOverlay(cv: HTMLCanvasElement, sec: SectionData, rect: { ML: n
   if (fbSel >= 0) {
     const p = fbPicks.get(fbSel);
     if (p && Number.isFinite(p.tMs)) {
-      const x = fbXForAbs(fbSel, sec, ML, pw);
-      const y = fbYForMs(p.tMs, sec, siUs, MT, ph);
+      const x = fbXForAbs(fbSel, sec, ML, pw, axis);
+      const y = fbYForMs(p.tMs, sec, siUs, MT, ph, secReduceShiftMsForAbs(fbSel) ?? 0);
       if (Number.isFinite(x) && Number.isFinite(y)) {
         ctx.strokeStyle = 'rgba(255,255,255,0.85)'; ctx.lineWidth = 1.4;
         ctx.beginPath(); ctx.arc(x, y, 6, 0, Math.PI * 2); ctx.stroke();
@@ -4002,16 +6547,19 @@ function fbHitPick(cv: HTMLCanvasElement, e: MouseEvent): number {
   if (!lastSection || fbPicks.size === 0) return -1;
   const sec = lastSection;
   const W = cv.clientWidth || 900, H = cv.clientHeight || 500;
-  const pw = W - SEC_ML - SEC_MR, ph = H - SEC_MT - SEC_MB;
+  const pw = W - SEC_ML - secMR(), ph = H - SEC_MT - SEC_MB;
   const siUs = summary?.sampleInt ?? sec.sampleInt ?? 0;
   if (!(siUs > 0)) return -1;
   const r = cv.getBoundingClientRect();
   const px = e.clientX - r.left, py = e.clientY - r.top;
+  // Hit-testing is only ever done on the File Viewer's own canvas, so its axis is
+  // the right one; the fallback keeps the mapping defined before the first paint.
+  const hitAxis = secAxis ?? buildTraceAxis(null, sec.numTraces);
   let best = -1, bestD = 9 * 9;
   for (const [a, p] of fbPicks) {
     if (!Number.isFinite(p.tMs) || a < sec.traceStart || a > sec.traceEnd) continue;
-    const x = fbXForAbs(a, sec, SEC_ML, pw);
-    const y = fbYForMs(p.tMs, sec, siUs, SEC_MT, ph);
+    const x = fbXForAbs(a, sec, SEC_ML, pw, hitAxis);
+    const y = fbYForMs(p.tMs, sec, siUs, SEC_MT, ph, secReduceShiftMsForAbs(a) ?? 0);
     if (!Number.isFinite(x) || !Number.isFinite(y)) continue;
     const d = (x - px) * (x - px) + (y - py) * (y - py);
     if (d < bestD) { bestD = d; best = a; }
@@ -4023,9 +6571,11 @@ function fbHitPick(cv: HTMLCanvasElement, e: MouseEvent): number {
 function fbCursorTraceTime(cv: HTMLCanvasElement, e: MouseEvent): { abs: number; tMs: number } | null {
   if (!summary || summary.traceCount === 0 || !secView.init) return null;
   const { fx, fy } = secPlotFrac(cv, e);
-  const abs = Math.max(0, Math.min(summary.traceCount - 1, Math.round(secView.t0 + fx * (secView.t1 - secView.t0))));
+  const abs = Math.max(0, Math.min(summary.traceCount - 1, secAbsTraceAtFrac(fx)));
   const siUs = summary.sampleInt ?? lastSection?.sampleInt ?? 0;
-  const tMs = ((secView.s0 + fy * (secView.s1 - secView.s0)) * siUs) / 1000;
+  // The cursor reads the axis on screen, which is REDUCED time when reduced time
+  // is on; picks are stored in TRUE time, so the trace's own shift goes back in.
+  const tMs = ((secView.s0 + fy * (secView.s1 - secView.s0)) * siUs) / 1000 + (secReduceShiftMsForAbs(abs) ?? 0);
   if (!Number.isFinite(tMs)) return null;
   return { abs, tMs };
 }
@@ -4053,7 +6603,9 @@ function fbDragPick(cv: HTMLCanvasElement, e: MouseEvent) {
   const ph = H - SEC_MT - SEC_MB;
   const fy = Math.max(0, Math.min(1, (e.clientY - r.top - SEC_MT) / ph));
   const siUs = summary.sampleInt ?? lastSection?.sampleInt ?? 0;
-  const tMs = ((secView.s0 + fy * (secView.s1 - secView.s0)) * siUs) / 1000;
+  // Same reduced-to-true conversion as fbCursorTraceTime: a dragged pick is stored
+  // in true time however the axis is drawn.
+  const tMs = ((secView.s0 + fy * (secView.s1 - secView.s0)) * siUs) / 1000 + (secReduceShiftMsForAbs(fbDragAbs) ?? 0);
   if (!Number.isFinite(tMs)) return;
   p.tMs = tMs;
   if (p.source === 'seed') { fbWorkerGuide = new Map(); }
@@ -4109,7 +6661,7 @@ function fbRenderReadout(abs: number, msg?: string) {
 function secPlotFrac(cv: HTMLCanvasElement, e: MouseEvent): { fx: number; fy: number } {
   const r = cv.getBoundingClientRect();
   const W = cv.clientWidth || 900, H = cv.clientHeight || 500;
-  const pw = W - SEC_ML - SEC_MR, ph = H - SEC_MT - SEC_MB;
+  const pw = W - SEC_ML - secMR(), ph = H - SEC_MT - SEC_MB;
   const px = e.clientX - r.left - SEC_ML, py = e.clientY - r.top - SEC_MT;
   return { fx: Math.max(0, Math.min(1, px / pw)), fy: Math.max(0, Math.min(1, py / ph)) };
 }
@@ -4117,13 +6669,12 @@ function secPlotFrac(cv: HTMLCanvasElement, e: MouseEvent): { fx: number; fy: nu
 /** Zoom the visible window toward the cursor by `factor` (<1 zooms in). */
 function secZoomAt(fx: number, fy: number, factor: number) {
   if (!secView.init) secFit();
-  // Data index under the cursor (anchor point that stays put).
-  const at = secView.t0 + fx * (secView.t1 - secView.t0);
-  const as = secView.s0 + fy * (secView.s1 - secView.s0);
-  const wt = (secView.t1 - secView.t0) * factor;
-  const ws = (secView.s1 - secView.s0) * factor;
-  secView.t0 = at - fx * wt; secView.t1 = at + (1 - fx) * wt;
-  secView.s0 = as - fy * ws; secView.s1 = as + (1 - fy) * ws;
+  secReleaseTypedAxis(); // the wheel is now the view; the boxes follow it
+  // The data index under the cursor is the anchor point that stays put.
+  const zt = anchorZoom(secView.t0, secView.t1, fx, factor);
+  const zs = anchorZoom(secView.s0, secView.s1, fy, factor);
+  secView.t0 = zt.lo; secView.t1 = zt.hi;
+  secView.s0 = zs.lo; secView.s1 = zs.hi;
 }
 
 /** Zoom both axes toward the canvas centre (toolbar +/- buttons). */
@@ -4140,9 +6691,10 @@ function secZoomButton(factor: number) {
 async function secAddTraceFromClick(cv: HTMLCanvasElement, e: MouseEvent) {
   if (!summary || summary.traceCount === 0) return;
   const { fx } = secPlotFrac(cv, e);
-  // Fractional x across the visible window → absolute trace index in the file.
-  const idx = Math.round(secView.t0 + fx * (secView.t1 - secView.t0));
-  const index = Math.max(0, Math.min(summary.traceCount - 1, idx));
+  // Fractional x across the plot → absolute trace index, through the SAME axis the
+  // section was painted on, so a header-positioned click adds the trace under the
+  // cursor and not the one uniform spacing would have put there.
+  const index = Math.max(0, Math.min(summary.traceCount - 1, secAbsTraceAtFrac(fx)));
   try {
     $('secLabel').textContent = `Adding trace ${index + 1} to Workbench…`;
     const tr = await api.getTrace(index); // the open file is the active 'current' file
@@ -4161,7 +6713,26 @@ async function secAddTraceFromClick(cv: HTMLCanvasElement, e: MouseEvent) {
  *  from the ms boxes via the file's sample interval - never feeding NaN to the
  *  view-state or the canvas. */
 function applySecAxisRange() {
-  if (!summary || summary.traceCount === 0 || !secAxisRange) return;
+  if (!secApplySecAxisOverrides()) return;
+  void fetchSectionWindow(); // secClamp() inside re-orders/limits to the record
+}
+
+/** A typed axis range applies WHEN IT IS TYPED and stops overriding afterwards:
+ *  the moment the user zooms, pans or pages, that gesture is the new view and the
+ *  boxes must follow it instead of pinning the older numbers. Called by every
+ *  gesture that moves secView itself; the post-fetch placeholder sync then refills
+ *  the boxes with the window actually painted, so they never show a range the
+ *  display does not honour. No-op when nothing was typed (so no blank flicker). */
+function secReleaseTypedAxis() {
+  if (!secAxisRange) return;
+  const v = secAxisRange.value();
+  if (v.xMin !== null || v.yMin !== null) secAxisRange.clear();
+}
+
+/** The override maths on their own, WITHOUT the re-fetch, so a typed range can be
+ *  applied and clamped in one step. Returns false when there is nothing to apply to. */
+function secApplySecAxisOverrides(): boolean {
+  if (!summary || summary.traceCount === 0 || !secAxisRange) return false;
   if (!secView.init) secFit();
   const v = secAxisRange.value();
   // X axis = trace index (direct).
@@ -4179,7 +6750,7 @@ function applySecAxisRange() {
       secView.s1 = s1;
     }
   }
-  void fetchSectionWindow(); // secClamp() inside re-orders/limits to the record
+  return true;
 }
 
 /** Show the current visible window as placeholders in the manual-range boxes so
@@ -4194,64 +6765,59 @@ function syncSecAxisPlaceholders() {
 
 function sectionInteractions() {
   const cv = $('secCanvas') as HTMLCanvasElement;
-  let dragging = false, lx = 0, ly = 0;
-  // Click-vs-drag guard (mirrors the SPS grid canvas): a click that moved the
-  // cursor more than a few pixels is treated as a pan, not an add.
-  let downX = 0, downY = 0, moved = 0;
-  cv.addEventListener('wheel', (e) => {
-    if ($('panel-section').style.display === 'none' || !summary || summary.traceCount === 0) return;
-    e.preventDefault();
-    const { fx, fy } = secPlotFrac(cv, e);
-    secZoomAt(fx, fy, e.deltaY < 0 ? 1 / 1.15 : 1.15);
-    void fetchSectionWindow();
-  }, { passive: false });
-  cv.addEventListener('mousedown', (e) => {
-    if ($('panel-section').style.display === 'none' || !summary) return;
-    if (secBoxMode) { startSecBoxDrag(cv, e); return; } // magnifier owns the drag
-    // First-breaks mode: pressing on an existing pick starts a live drag (no pan);
-    // pressing elsewhere falls through to pan, and a click without movement seeds.
-    if (fbMode && e.button === 0) {
-      const hit = fbHitPick(cv, e);
-      if (hit >= 0) { fbDragAbs = hit; cv.style.cursor = 'ns-resize'; return; }
-    }
-    dragging = true; lx = e.clientX; ly = e.clientY;
-    downX = e.clientX; downY = e.clientY; moved = 0;
-    cv.style.cursor = 'grabbing';
-  });
-  window.addEventListener('mouseup', () => {
-    dragging = false;
-    if (fbDragAbs >= 0) { fbDragAbs = -1; fbUpdateButtons(); }
-    if (!secBoxMode) cv.style.cursor = fbMode ? 'crosshair' : '';
+  const active = () => $('panel-section').style.display !== 'none' && !!summary && summary.traceCount > 0;
+  // Shared plumbing (wheel zoom about the cursor, drag pan, double-click fit).
+  // The section's own zoom maths, clamp and fit stay exactly where they were.
+  attachPlotInteraction(cv, {
+    enabled: active,
+    frac: (e) => secPlotFrac(cv, e),
+    zoomAt: (fx, fy, factor) => secZoomAt(fx, fy, factor),
+    panPx: (dx, dy) => {
+      if (!secView.init) return;
+      const W = cv.clientWidth || 900, H = cv.clientHeight || 500;
+      const pw = W - SEC_ML - secMR(), ph = H - SEC_MT - SEC_MB;
+      if (!(pw > 0) || !(ph > 0)) return;
+      // Pixel drag -> index drag (drag right, the window moves left, like
+      // grabbing the image).
+      const dt = (dx / pw) * (secView.t1 - secView.t0);
+      const ds = (dy / ph) * (secView.s1 - secView.s0);
+      if (!Number.isFinite(dt) || !Number.isFinite(ds)) return;
+      secReleaseTypedAxis(); // the drag is now the view; the boxes follow it
+      secView.t0 -= dt; secView.t1 -= dt;
+      secView.s0 -= ds; secView.s1 -= ds;
+    },
+    fit: () => { secAxisRange?.clear(); secFit(); void fetchSectionWindow(); },
+    after: () => { void fetchSectionWindow(); },
+    claimDown: (e) => {
+      if (secBoxMode) { startSecBoxDrag(cv, e); return true; } // magnifier owns the drag
+      // First-breaks mode: pressing on an existing pick starts a live drag (no
+      // pan); pressing elsewhere falls through to pan, and a click without
+      // movement seeds.
+      if (fbMode && e.button === 0) {
+        const hit = fbHitPick(cv, e);
+        if (hit >= 0) { fbDragAbs = hit; cv.style.cursor = 'ns-resize'; return true; }
+      }
+      return false;
+    },
+    // A press and release without a real drag adds the trace under the cursor
+    // when the "+ Workbench" toggle is active; otherwise it behaves as today.
+    click: (e) => {
+      // First-breaks mode: click an existing pick to SELECT it (read-out), else drop a seed.
+      if (fbMode) {
+        const hit = fbHitPick(cv, e);
+        if (hit >= 0) { fbSel = hit; fbRenderReadout(hit); if (lastSection) drawSection($('secCanvas') as HTMLCanvasElement, lastSection); }
+        else fbPlaceSeed(cv, e);
+        return;
+      }
+      if (!secToWb) return;
+      void secAddTraceFromClick(cv, e);
+    },
+    restCursor: () => (secBoxMode ? 'crosshair' : fbMode ? 'crosshair' : secToWb ? 'copy' : ''),
   });
   // First-breaks live pick-drag (a global listener so the drag survives leaving cv).
   window.addEventListener('mousemove', (e) => { if (fbMode && fbDragAbs >= 0) fbDragPick(cv, e); });
-  cv.addEventListener('mousemove', (e) => {
-    if (!dragging || !secView.init) return;
-    moved += Math.abs(e.clientX - lx) + Math.abs(e.clientY - ly);
-    const W = cv.clientWidth || 900, H = cv.clientHeight || 500;
-    const pw = W - SEC_ML - SEC_MR, ph = H - SEC_MT - SEC_MB;
-    // Pixel drag → index drag (drag right ⇒ window moves left, like grabbing the image).
-    const dt = ((e.clientX - lx) / pw) * (secView.t1 - secView.t0);
-    const ds = ((e.clientY - ly) / ph) * (secView.s1 - secView.s0);
-    secView.t0 -= dt; secView.t1 -= dt;
-    secView.s0 -= ds; secView.s1 -= ds;
-    lx = e.clientX; ly = e.clientY;
-    void fetchSectionWindow();
-  });
-  // A click (press + release without a real drag) adds the trace under the cursor
-  // when the "+ Workbench" toggle is active; otherwise it behaves as today (no-op).
-  cv.addEventListener('click', (e) => {
-    if ($('panel-section').style.display === 'none' || !summary || summary.traceCount === 0) return;
-    if (moved > 4 || Math.abs(e.clientX - downX) + Math.abs(e.clientY - downY) > 4) return; // a pan, not a click
-    // First-breaks mode: click an existing pick to SELECT it (read-out), else drop a seed.
-    if (fbMode) {
-      const hit = fbHitPick(cv, e);
-      if (hit >= 0) { fbSel = hit; fbRenderReadout(hit); if (lastSection) drawSection($('secCanvas') as HTMLCanvasElement, lastSection); }
-      else fbPlaceSeed(cv, e);
-      return;
-    }
-    if (!secToWb) return;
-    void secAddTraceFromClick(cv, e);
+  window.addEventListener('mouseup', () => {
+    if (fbDragAbs >= 0) { fbDragAbs = -1; fbUpdateButtons(); }
   });
   // First-breaks mode: right-click deletes the nearest pick.
   cv.addEventListener('contextmenu', (e) => {
@@ -4259,13 +6825,9 @@ function sectionInteractions() {
     e.preventDefault();
     fbDeletePickAt(cv, e);
   });
-  cv.addEventListener('dblclick', () => {
-    if ($('panel-section').style.display === 'none' || !summary) return;
-    secAxisRange?.clear(); secFit(); void fetchSectionWindow();
-  });
   // Toolbar buttons (added in index.html alongside the section controls).
-  $opt('secZoomIn')?.addEventListener('click', () => secZoomButton(1 / 1.4));
-  $opt('secZoomOut')?.addEventListener('click', () => secZoomButton(1.4));
+  $opt('secZoomIn')?.addEventListener('click', () => secZoomButton(1 / PLOT_ZOOM_STEP));
+  $opt('secZoomOut')?.addEventListener('click', () => secZoomButton(PLOT_ZOOM_STEP));
   $opt('secZoomFit')?.addEventListener('click', () => { secAxisRange?.clear(); secFit(); void fetchSectionWindow(); });
   // Manual X (trace index) / Y (time, ms) range boxes - complement wheel/drag zoom.
   const axHost = $opt('secAxisRange');
@@ -4276,6 +6838,15 @@ function sectionInteractions() {
       onChange: () => applySecAxisRange(),
     });
   }
+  $opt('secInvert')?.addEventListener('change', (e) => setViewInvert((e.target as HTMLInputElement).checked));
+  // Reduced time is a pure RENDERER transform of the matrix already on screen, so
+  // both controls redraw and neither refetches.
+  $opt('secReduce')?.addEventListener('change', () => { secReduceUpdateAvailability(); redrawSection(); });
+  $opt('secReduceVel')?.addEventListener('change', () => redrawSection());
+  $opt('secReduceVel')?.addEventListener('input', () => redrawSection());
+  // Trace spacing is a pure RENDERER re-layout of the matrix already on screen:
+  // the header values arrived with it, so this redraws and never refetches.
+  $opt('secSpacing')?.addEventListener('change', () => redrawSection());
   // "+ Workbench" toggle: arm/disarm click-to-add on the section canvas.
   const wbToggle = $opt('secToWb') as HTMLButtonElement | null;
   wbToggle?.addEventListener('click', () => {
@@ -4315,25 +6886,53 @@ function disarmSecToWb() {
 
 /** Section hover: trace # · time (ms) · amplitude (sample value), plus an async
  *  per-trace header suffix (FFID / CDP, and the SEG-D node serial when present). */
+// -- Hover read-outs: ONE vocabulary for every viewer ------------------------
+// Six panels used to say the same things three different ways (or not at all).
+// Every read-out is now built from these helpers, so 'time' is always ms to two
+// decimals, an amplitude is always the stored sample value with no invented
+// unit, and the separator is the same everywhere.
+
+const HOVER_SEP = '   ·   ';
+
+/** Join the non-empty parts of a read-out with the shared separator. */
+function hoverJoin(parts: Array<string | null | undefined>): string {
+  return parts.filter((p): p is string => !!p).join(HOVER_SEP);
+}
+
+/** "time 123.45 ms", or nothing at all when the number is not finite. */
+function hoverMs(ms: number): string | null {
+  return Number.isFinite(ms) ? `time ${ms.toFixed(2)} ms` : null;
+}
+
+/** A stored sample value. SEG-Y / SEG-D samples carry NO physical unit, so the
+ *  label never invents one. `transformed` marks a number the display changed
+ *  (gain, AGC, decimation), which is not the sample and must not read like it. */
+function hoverAmp(v: number, transformed = false): string | null {
+  if (!Number.isFinite(v)) return null;
+  return transformed
+    ? `display value ${fmtAmpVal(v)} (after gain, AGC and decimation)`
+    : `Amplitude (sample value) ${fmtAmpVal(v)}`;
+}
+
+/** A named quantity with no physical unit (semblance, magnitude, frequency). */
+function hoverVal(name: string, v: number, unit = '', digits = 3): string | null {
+  if (!Number.isFinite(v)) return null;
+  const a = Math.abs(v);
+  const txt = v === 0 ? '0' : (a >= 1e5 || a < 1e-3) ? v.toExponential(2) : v.toPrecision(digits + 1);
+  return `${name} ${txt}${unit ? ' ' + unit : ''}`;
+}
+
 function updateSecHover(cv: HTMLCanvasElement, e: MouseEvent) {
   const el = $opt('secHover');
   if (!el || !summary || !lastSection) return;
   if ($('panel-section').style.display === 'none') return;
   const { fx, fy } = secPlotFrac(cv, e);
   const t0 = secView.t0, t1 = secView.t1, s0 = secView.s0, s1 = secView.s1;
-  const idx = Math.max(0, Math.min(summary.traceCount - 1, Math.round(t0 + fx * (t1 - t0))));
+  const idx = Math.max(0, Math.min(summary.traceCount - 1, secAbsTraceAtFrac(fx)));
   const siUs = summary.sampleInt ?? lastSection.sampleInt ?? 0;
   const ms = ((s0 + fy * (s1 - s0)) * siUs) / 1000;
-  let base = `trace ${grp(idx + 1)}`;
-  if (Number.isFinite(ms)) base += `   ·   time ${ms.toFixed(1)} ms`;
-  // Amplitude under the cursor from the decimated section matrix (row = trace).
-  const { numTraces, colLen, data } = lastSection;
-  if (numTraces > 0 && colLen > 0 && data.length >= numTraces * colLen) {
-    const dc = Math.max(0, Math.min(numTraces - 1, Math.floor(fx * numTraces)));
-    const dr = Math.max(0, Math.min(colLen - 1, Math.floor(fy * colLen)));
-    const a = data[dc * colLen + dr];
-    if (Number.isFinite(a)) base += `   ·   Amplitude (sample value) ${fmtAmpVal(a)}`;
-  }
+  secHoverLast = { idx, ms, fx, fy };
+  const base = secHoverBaseFor(idx, ms, fx, fy);
   secHoverBaseText = base;
   secHoverLastIdx = idx;
   const suffix = secHoverHdrCache.get(idx);
@@ -4343,6 +6942,71 @@ function updateSecHover(cv: HTMLCanvasElement, e: MouseEvent) {
   // · offset · ms · source · confidence) when one exists; status otherwise.
   if (fbMode && fbDragAbs < 0 && fbPicks.has(idx)) fbRenderReadout(idx);
 }
+
+/** The section read-out's base line: trace, time and the amplitude there.
+ *
+ *
+ *  `lastSection.data` is what the panel PAINTED: post-AGC when AGC is on, and
+ *  min/max decimated on both axes. Printing that under the label
+ *  "Amplitude (sample value)" claimed it was the number on disk, which it is
+ *  not: an AGC'd value is a ratio to a sliding window, and a decimated one is
+ *  whichever extreme survived the column. For field QC the question is what the
+ *  geophone actually recorded, so the read-out quotes the RAW stored sample from
+ *  the trace the hover already fetches for its FFID / CDP suffix, and falls back
+ *  to the painted value only while that fetch is in flight - where it is
+ *  labelled a display value, never a sample. */
+function secHoverBaseFor(idx: number, ms: number, fx: number, fy: number): string {
+  if (!lastSection) return '';
+  let amp: string | null = null;
+  // Under reduced time the cursor's y is REDUCED time, so the stored sample it
+  // stands for sits at reduced time + this trace's own shift. Reading the raw
+  // trace at the reduced time would quote a sample from the wrong depth.
+  const shiftMs = secReduceShiftMsForAbs(idx);
+  const trueMs = shiftMs === null ? ms : ms + shiftMs;
+  const timeTxt = shiftMs === null
+    ? hoverMs(ms)
+    : (Number.isFinite(ms) && Number.isFinite(trueMs)
+      ? `reduced time ${ms.toFixed(2)} ms (true time ${trueMs.toFixed(2)} ms)`
+      : null);
+  const raw = secHoverTrace && secHoverTrace.idx === idx ? secHoverTrace : null;
+  if (raw && raw.sampleInt > 0 && Number.isFinite(trueMs)) {
+    const si = Math.round((trueMs * 1000) / raw.sampleInt);
+    if (si >= 0 && si < raw.samples.length) amp = hoverAmp(raw.samples[si]);
+  }
+  if (!amp) {
+    const { numTraces, colLen, data } = lastSection;
+    if (numTraces > 0 && colLen > 0 && data.length >= numTraces * colLen) {
+      const c0 = secColAtFrac(fx);
+      const dc = Math.max(0, Math.min(numTraces - 1, c0 >= 0 ? c0 : Math.floor(fx * numTraces)));
+      const dr = Math.max(0, Math.min(colLen - 1, Math.floor(fy * colLen)));
+      amp = hoverAmp(data[dc * colLen + dr], true);
+    }
+  }
+  return hoverJoin([`trace ${grp(idx + 1)}`, timeTxt, amp, secAttrHoverSuffix(idx)]);
+}
+
+/** The hovered trace's own attribute numbers, so the profile can be read as
+ *  VALUES and not only as a shape. Empty unless the profile is showing and that
+ *  trace was actually scanned - it never guesses a number it does not have. */
+function secAttrHoverSuffix(idx: number): string | null {
+  if (!secAttrOn || !secHealth) return null;
+  const m = secHealth.meta.get(idx);
+  if (!m) return null;
+  const ev = readEvidence(secHealth.data.evidence, m.row);
+  const bits: string[] = [];
+  if (Number.isFinite(ev.peak)) bits.push(`peak ${secNum(ev.peak)}`);
+  if (Number.isFinite(ev.rms)) bits.push(`RMS ${secNum(ev.rms)}`);
+  bits.push(Number.isFinite(ev.rmsPre) ? `noise RMS ${secNum(ev.rmsPre)}` : 'noise RMS n/a (no first-break pick)');
+  return bits.length ? bits.join(' · ') : null;
+}
+
+/** The one trace whose STORED samples the section read-out can quote, kept
+ *  alongside the header cache that fetched it. */
+let secHoverTrace: { idx: number; samples: Float32Array; sampleInt: number } | null = null;
+
+/** Where the cursor last was, so the read-out can be rebuilt when the stored
+ *  samples arrive rather than waiting for the next mouse move. */
+let secHoverLast: { idx: number; ms: number; fx: number; fy: number } | null = null;
 
 function clearSecHover() {
   if (secHoverHdrTimer) { window.clearTimeout(secHoverHdrTimer); secHoverHdrTimer = 0; }
@@ -4366,6 +7030,16 @@ async function fetchSecHoverHdr(idx: number) {
   secHoverHdrBusy = true;
   try {
     const tr = await api.getTrace(idx);
+    // Keep THIS trace's stored samples (the last one only - one trace, not a
+    // cache of 600) so the read-out can quote the number on disk rather than the
+    // painted one. api.getTrace returns the stored samples, no AGC, no decimation.
+    secHoverTrace = { idx, samples: tr.samples, sampleInt: tr.sampleInt };
+    // The stored samples have arrived, so the cursor's amplitude can stop being
+    // the painted value and become the number on disk, with no further movement
+    // required from the user.
+    if (secHoverLast && secHoverLast.idx === idx) {
+      secHoverBaseText = secHoverBaseFor(idx, secHoverLast.ms, secHoverLast.fx, secHoverLast.fy);
+    }
     const suffix = secHoverHdrSuffix(tr.hdr);
     if (secHoverHdrCache.size > 600) secHoverHdrCache.clear(); // bound the cache
     secHoverHdrCache.set(idx, suffix);
@@ -4489,10 +7163,8 @@ function updateTraceHover(cv: HTMLCanvasElement, e: MouseEvent) {
   const s1 = traceView.init ? traceView.s1 : t.nSamples;
   const sample = s0 + fy * (s1 - s0);
   const ms = (sample * t.sampleInt) / 1000;
-  let txt = Number.isFinite(ms) ? `time ${ms.toFixed(2)} ms` : '';
   const si = Math.max(0, Math.min(t.nSamples - 1, Math.round(sample)));
-  const a = t.samples[si];
-  if (Number.isFinite(a)) txt += `${txt ? '   ·   ' : ''}Amplitude (sample value) ${fmtAmpVal(a)}`;
+  const txt = hoverJoin([hoverMs(ms), hoverAmp(t.samples[si])]);
   el.textContent = txt || 'Hover the trace to read time · amplitude.';
 }
 
@@ -4572,7 +7244,7 @@ function finishSecBoxDrag(cv: HTMLCanvasElement) {
   if (!box || !summary || !lastSection) return;
   if (Math.abs(box.x1 - box.x0) < 6 || Math.abs(box.y1 - box.y0) < 6) return; // ignore a click
   const W = cv.clientWidth || 900, H = cv.clientHeight || 500;
-  const pw = W - SEC_ML - SEC_MR, ph = H - SEC_MT - SEC_MB;
+  const pw = W - SEC_ML - secMR(), ph = H - SEC_MT - SEC_MB;
   if (pw <= 0 || ph <= 0) return;
   const fracX = (px: number) => Math.max(0, Math.min(1, (px - SEC_ML) / pw));
   const fracY = (py: number) => Math.max(0, Math.min(1, (py - SEC_MT) / ph));
@@ -4580,6 +7252,21 @@ function finishSecBoxDrag(cv: HTMLCanvasElement) {
   const fy0 = Math.min(fracY(box.y0), fracY(box.y1)), fy1 = Math.max(fracY(box.y0), fracY(box.y1));
   const t0 = secView.t0, t1 = secView.t1, s0 = secView.s0, s1 = secView.s1;
   let nt0 = Math.round(t0 + fx0 * (t1 - t0)), nt1 = Math.round(t0 + fx1 * (t1 - t0));
+  // Header-positioned traces: the dragged pixels select a SET of columns, which is
+  // index-contiguous only when the header happens to run in index order. Zoom to
+  // the HULL of the selected traces - the smallest index window that contains
+  // everything the box covered - since the fetch window is an index range.
+  if (secAxis && secAxis.kind === 'header' && lastSection.traceStep > 0) {
+    let lo = Infinity, hi = -Infinity;
+    for (let c = 0; c < secAxis.count; c++) {
+      const f = secAxis.fracs[c];
+      if (!(f >= fx0 && f <= fx1)) continue;
+      const abs = lastSection.traceStart + c * lastSection.traceStep;
+      if (abs < lo) lo = abs;
+      if (abs > hi) hi = abs;
+    }
+    if (Number.isFinite(lo) && Number.isFinite(hi) && hi >= lo) { nt0 = lo; nt1 = hi + 1; }
+  }
   let ns0 = Math.round(s0 + fy0 * (s1 - s0)), ns1 = Math.round(s0 + fy1 * (s1 - s0));
   if (![nt0, nt1, ns0, ns1].every(Number.isFinite)) return;
   const fT = secView.fullT || summary.traceCount;
@@ -4620,7 +7307,7 @@ function finishTraceBoxDrag(cv: HTMLCanvasElement) {
   ns0 = Math.max(0, Math.min(t.nSamples - 1, ns0)); ns1 = Math.max(ns0 + 4, Math.min(t.nSamples, ns1));
   if (!Number.isFinite(ns0) || !Number.isFinite(ns1) || !(ns1 > ns0)) return;
   // Amplitude window from the box x-extent: invert drawTraceCore's xOfAmp.
-  const nf = normFactorPercentile(t.samples.subarray(s0v, Math.max(s0v + 1, s1v)), 0.95) || 1;
+  const nf = trcNormFactor(t, s0v, s1v, { mode: trcScaleMode(), pct: trcScalePct() });
   const useAmp = traceAmpRange !== null;
   const aMin = traceAmpRange ? traceAmpRange.min : 0;
   const aSpan = traceAmpRange ? (traceAmpRange.max - traceAmpRange.min) : 1;
@@ -4641,13 +7328,13 @@ function finishTraceBoxDrag(cv: HTMLCanvasElement) {
 // -- Zoom viewer (in-app draggable / resizable modal) ------------------------
 async function openSectionZoom(t0: number, t1: number, s0: number, s1: number) {
   if (!summary) return;
-  const agc = ($('secAgc') as HTMLInputElement).checked;
+  const agcOpts = secAgcOpts();
   setText('secLabel', 'Opening zoom…');
   try {
     const sec = await api.getSection({
       maxTraces: 2000, maxSamples: 2000,
       traceStart: t0, traceEnd: t1, sampStart: s0, sampEnd: s1,
-      agc, agcType: 'rms', agcWindowMs: 250,
+      ...agcOpts,
     });
     zoomKind = 'section'; zoomSection = sec; zoomTrace = null;
     // Seed the in-popup magnifier at 1× over the selected region (echoed window,
@@ -4697,7 +7384,9 @@ function drawZoom() {
   const cv = $opt('zoomCanvas') as HTMLCanvasElement | null;
   if (!cv) return;
   if (zoomKind === 'section' && zoomSection) drawSection(cv, zoomSection);
-  else if (zoomKind === 'trace' && zoomTrace) drawTraceCore(cv, zoomTrace.t, zoomTrace.s0, zoomTrace.s1, zoomTrace.amp);
+  // The magnifier inherits the Inspector's basis, so the popup and the panel
+  // behind it are the same measurement.
+  else if (zoomKind === 'trace' && zoomTrace) drawTraceCore(cv, zoomTrace.t, zoomTrace.s0, zoomTrace.s1, zoomTrace.amp, undefined, { mode: trcScaleMode(), pct: trcScalePct() });
 }
 
 function ensureZoomResizeObserver() {
@@ -4734,40 +7423,34 @@ function initZoomViewer() {
   // +/-/Reset buttons, and drag-to-pan over the zoom canvas itself.
   const cv = $opt('zoomCanvas') as HTMLCanvasElement | null;
   if (cv) {
-    cv.addEventListener('wheel', (e) => {
-      if (!zoomViewerOpen() || !zoomKind) return;
-      e.preventDefault();
-      const { fx, fy } = zoomPlotFrac(cv, e);
-      zoomMagZoomAt(fx, fy, e.deltaY < 0 ? 1.15 : 1 / 1.15);
-    }, { passive: false });
-    let panning = false, plx = 0, ply = 0;
     cv.style.cursor = 'grab';
-    cv.addEventListener('mousedown', (e) => {
-      if (!zoomViewerOpen() || !zoomKind) return;
-      panning = true; plx = e.clientX; ply = e.clientY;
-      cv.style.cursor = 'grabbing'; e.preventDefault();
+    // Shared plumbing. NOTE the inverted convention here: zoomMagZoomAt takes a
+    // MAGNIFICATION, so wheel up must pass the step itself, not its reciprocal.
+    attachPlotInteraction(cv, {
+      enabled: () => zoomViewerOpen() && !!zoomKind,
+      frac: (e) => zoomPlotFrac(cv, e),
+      zoomAt: (fx, fy, factor) => zoomMagZoomAt(fx, fy, 1 / factor),
+      panPx: (dx, dy) => {
+        const w = zoomMagWindow();
+        const W = cv.clientWidth || 900, H = cv.clientHeight || 500;
+        const ML = zoomKind === 'trace' ? TRC_ML : SEC_ML;
+        const MR = zoomKind === 'trace' ? TRC_MR : secMR();
+        const MT = zoomKind === 'trace' ? TRC_MT : SEC_MT;
+        const MB = zoomKind === 'trace' ? TRC_MB : SEC_MB;
+        const pw = W - ML - MR, ph = H - MT - MB;
+        const b = zoomMag.base;
+        const spanT0 = b.t1 - b.t0, spanS0 = b.s1 - b.s0;
+        // Drag right, the window moves left (grab the image), like the section viewer.
+        if (pw > 0 && spanT0 > 0) zoomMag.cx -= (dx / pw) * (w.t1 - w.t0) / spanT0;
+        if (ph > 0 && spanS0 > 0) zoomMag.cy -= (dy / ph) * (w.s1 - w.s0) / spanS0;
+        zoomMagCommit();
+      },
+      fit: () => zoomMagReset(),
+      restCursor: () => 'grab',
     });
-    window.addEventListener('mousemove', (e) => {
-      if (!panning || !zoomViewerOpen()) return;
-      const w = zoomMagWindow();
-      const W = cv.clientWidth || 900, H = cv.clientHeight || 500;
-      const ML = zoomKind === 'trace' ? TRC_ML : SEC_ML;
-      const MR = zoomKind === 'trace' ? TRC_MR : SEC_MR;
-      const MT = zoomKind === 'trace' ? TRC_MT : SEC_MT;
-      const MB = zoomKind === 'trace' ? TRC_MB : SEC_MB;
-      const pw = W - ML - MR, ph = H - MT - MB;
-      const b = zoomMag.base;
-      const spanT0 = b.t1 - b.t0, spanS0 = b.s1 - b.s0;
-      // Drag right ⇒ window moves left (grab the image), like the section viewer.
-      if (pw > 0 && spanT0 > 0) zoomMag.cx -= ((e.clientX - plx) / pw) * (w.t1 - w.t0) / spanT0;
-      if (ph > 0 && spanS0 > 0) zoomMag.cy -= ((e.clientY - ply) / ph) * (w.s1 - w.s0) / spanS0;
-      plx = e.clientX; ply = e.clientY;
-      zoomMagCommit();
-    });
-    window.addEventListener('mouseup', () => { if (panning) { panning = false; cv.style.cursor = 'grab'; } });
   }
-  $opt('zoomMagIn')?.addEventListener('click', () => zoomMagBtn(1.4));
-  $opt('zoomMagOut')?.addEventListener('click', () => zoomMagBtn(1 / 1.4));
+  $opt('zoomMagIn')?.addEventListener('click', () => zoomMagBtn(PLOT_ZOOM_STEP));
+  $opt('zoomMagOut')?.addEventListener('click', () => zoomMagBtn(1 / PLOT_ZOOM_STEP));
   $opt('zoomMagReset')?.addEventListener('click', zoomMagReset);
 }
 
@@ -4881,7 +7564,7 @@ async function zoomMagFetchSection() {
   if (zoomKind !== 'section' || !summary) return;
   if (zoomMagFetchPending) return; // a fetch is in flight; it repaints with the latest state
   zoomMagFetchPending = true;
-  const agc = ($('secAgc') as HTMLInputElement).checked;
+  const agcOpts = secAgcOpts();
   try {
     let again = true, snap = '';
     while (again) {
@@ -4890,7 +7573,7 @@ async function zoomMagFetchSection() {
       const sec = await api.getSection({
         maxTraces: 2000, maxSamples: 2000,
         traceStart: w.t0, traceEnd: w.t1, sampStart: w.s0, sampEnd: w.s1,
-        agc, agcType: 'rms', agcWindowMs: 250,
+        ...agcOpts,
       });
       if (zoomKind !== 'section') return; // popup closed / switched mid-flight
       zoomSection = sec;
@@ -4914,7 +7597,7 @@ function zoomPlotFrac(cv: HTMLCanvasElement, e: MouseEvent): { fx: number; fy: n
   const r = cv.getBoundingClientRect();
   const W = cv.clientWidth || 900, H = cv.clientHeight || 500;
   const ML = zoomKind === 'trace' ? TRC_ML : SEC_ML;
-  const MR = zoomKind === 'trace' ? TRC_MR : SEC_MR;
+  const MR = zoomKind === 'trace' ? TRC_MR : secMR();
   const MT = zoomKind === 'trace' ? TRC_MT : SEC_MT;
   const MB = zoomKind === 'trace' ? TRC_MB : SEC_MB;
   const pw = W - ML - MR, ph = H - MT - MB;
@@ -4942,9 +7625,62 @@ function updateZoomMagReadout() {
 /** Reset the visible window to the whole trace ("fit"). */
 function traceFit(t: TraceData) {
   traceView.fullS = t.nSamples;
+  traceView.siUs = t.sampleInt;
   traceView.s0 = 0;
   traceView.s1 = t.nSamples;
   traceView.init = true;
+}
+
+/** A short plain-English note appended to the trace label ONCE, when the time
+ *  window carried over from the previous trace had to be trimmed or given up on.
+ *  Blank whenever the kept window landed unchanged. */
+let trcKeepNote = '';
+
+/** Carry the visible TIME window onto the trace just stepped to, instead of
+ *  re-fitting. Stepping trace to trace is a comparison - the same window on the
+ *  next channel is the whole point - so the window survives, exactly as the File
+ *  Viewer's does when paging records.
+ *
+ *  The window is kept in MILLISECONDS, not sample numbers, so it still means the
+ *  same time on a trace recorded at a different sample interval, and it is then
+ *  clamped to what this trace actually contains. Nothing usable left (a much
+ *  shorter trace) falls back to a fit and SAYS SO rather than painting nothing.
+ *
+ *  AMPLITUDE is deliberately NOT carried: the Scale control (Record max / Record
+ *  pct / Visible window) is what makes amplitude comparable across traces and it
+ *  does persist, whereas a raw amplitude window pinned on one trace would clip a
+ *  stronger neighbour silently, and the Amp boxes could not honestly show it once
+ *  they revert to the auto swing. */
+function traceKeepView(t: TraceData) {
+  trcKeepNote = '';
+  const oldSi = traceView.siUs > 0 ? traceView.siUs : t.sampleInt;
+  const ms0 = (traceView.s0 * oldSi) / 1000;
+  const ms1 = (traceView.s1 * oldSi) / 1000;
+  const si = t.sampleInt > 0 ? t.sampleInt : oldSi;
+  const s0 = (ms0 * 1000) / si;
+  const s1 = (ms1 * 1000) / si;
+  const wholeBefore = traceView.s1 - traceView.s0 >= traceView.fullS;
+  traceView.fullS = t.nSamples;
+  traceView.siUs = t.sampleInt;
+  traceView.init = true;
+  if (!(si > 0) || ![s0, s1].every(Number.isFinite) || !(s1 > s0) || !(t.nSamples > 0)) {
+    traceFit(t);
+    trcKeepNote = '  ·  previous time window does not fit this trace, showing all of it';
+    return;
+  }
+  traceView.s0 = s0;
+  traceView.s1 = s1;
+  traceClamp(); // pulls the window back inside this trace, minimum a few samples
+  if (!(traceView.s1 > traceView.s0)) {
+    traceFit(t);
+    trcKeepNote = '  ·  previous time window does not fit this trace, showing all of it';
+    return;
+  }
+  // Only worth saying when a real window (not a full-trace fit) had to be cut.
+  if (!wholeBefore) {
+    if (traceView.s1 - traceView.s0 < Math.round(s1 - s0)) trcKeepNote = '  ·  time window trimmed to this trace';
+    else if (traceView.s0 !== Math.round(s0)) trcKeepNote = '  ·  time window moved to fit this trace';
+  }
 }
 
 /** Keep the visible window inside the trace (never pan/zoom off the data). */
@@ -4965,7 +7701,7 @@ function traceClamp() {
 function tracePlotFrac(cv: HTMLCanvasElement, e: MouseEvent): number {
   const r = cv.getBoundingClientRect();
   const H = cv.clientHeight || 460;
-  const MT = 14, MB = 26, ph = H - MT - MB;
+  const MT = TRC_MARGINS.MT, ph = plotHeight(H, TRC_MARGINS);
   const py = e.clientY - r.top - MT;
   return ph > 0 ? Math.max(0, Math.min(1, py / ph)) : 0;
 }
@@ -4975,10 +7711,9 @@ function tracePlotFrac(cv: HTMLCanvasElement, e: MouseEvent): number {
 function traceZoomAt(fy: number, factor: number) {
   if (!lastTrace) return;
   if (!traceView.init || traceView.fullS !== lastTrace.nSamples) traceFit(lastTrace);
-  const as = traceView.s0 + fy * (traceView.s1 - traceView.s0); // anchor sample
-  const ws = (traceView.s1 - traceView.s0) * factor;
-  traceView.s0 = as - fy * ws;
-  traceView.s1 = as + (1 - fy) * ws;
+  const zs = anchorZoom(traceView.s0, traceView.s1, fy, factor); // anchor sample stays put
+  traceView.s0 = zs.lo;
+  traceView.s1 = zs.hi;
   traceClamp();
 }
 
@@ -5016,8 +7751,16 @@ function applyTraceAxisRange() {
     traceFit(t);
     traceManualX = false;
   }
-  // Y axis = amplitude (raw sample units); null ⇒ auto-normalized.
-  traceAmpRange = (v.yMin !== null && v.yMax !== null) ? { min: v.yMin, max: v.yMax } : null;
+  // Y axis = amplitude (raw sample units); null ⇒ auto-normalized. Symmetric with
+  // X above: a blank pair only drops the pin when one was actually set, so an
+  // X-only edit cannot silently wipe a manual amplitude window.
+  if (v.yMin !== null && v.yMax !== null) {
+    traceAmpRange = { min: v.yMin, max: v.yMax };
+    traceManualY = true;
+  } else if (traceManualY) {
+    traceAmpRange = null;
+    traceManualY = false;
+  }
   renderTrace();
 }
 
@@ -5029,8 +7772,9 @@ function syncTraceAxisPlaceholders() {
   const msPerSample = t.sampleInt / 1000;
   const s0 = traceView.init ? traceView.s0 : 0;
   const s1 = traceView.init ? traceView.s1 : t.nSamples;
-  // Auto amplitude swing is the ±95th-percentile normalization factor.
-  const nf = normFactorPercentile(t.samples.subarray(s0, Math.max(s0 + 1, s1)), 0.95) || 1;
+  // Auto amplitude swing: the SAME basis the canvas drew with, so the placeholder
+  // never states a level the picture did not use.
+  const nf = trcNormFactor(t, s0, s1, { mode: trcScaleMode(), pct: trcScalePct() });
   traceAxisRange.setPlaceholders(s0 * msPerSample, s1 * msPerSample, -nf, nf);
 }
 
@@ -5040,41 +7784,41 @@ function traceInteractions() {
   const cv = $('traceCanvas') as HTMLCanvasElement;
   const active = () =>
     $('panel-trace').style.display !== 'none' && !!lastTrace && traceMode === 'wave';
-  let dragging = false, ly = 0;
-  cv.addEventListener('wheel', (e) => {
-    if (!active()) return;
-    e.preventDefault();
-    const fy = tracePlotFrac(cv, e);
-    traceZoomAt(fy, e.deltaY < 0 ? 1 / 1.15 : 1.15); // wheel up ⇒ zoom in
-    renderTrace();
-  }, { passive: false });
-  cv.addEventListener('mousedown', (e) => {
-    if (!active()) return;
-    if (traceBoxMode) { startTraceBoxDrag(cv, e); return; } // magnifier owns the drag
-    dragging = true; ly = e.clientY; cv.style.cursor = 'grabbing';
+  // Shared plumbing (wheel zoom about the cursor, drag pan, double-click fit);
+  // the Inspector's own time-window maths and clamp stay where they were.
+  attachPlotInteraction(cv, {
+    enabled: active,
+    frac: (e) => ({ fx: 0.5, fy: tracePlotFrac(cv, e) }),
+    zoomAt: (_fx, fy, factor) => traceZoomAt(fy, factor), // wheel up = zoom in
+    panPx: (_dx, dy) => {
+      if (!traceView.init) return;
+      const H = cv.clientHeight || 460;
+      const MT = TRC_MARGINS.MT, MB = TRC_MARGINS.MB, ph = H - MT - MB;
+      if (!(ph > 0)) return;
+      // Pixel drag -> sample drag (drag down, the window moves up, like
+      // grabbing the trace).
+      const ds = (dy / ph) * (traceView.s1 - traceView.s0);
+      if (!Number.isFinite(ds)) return;
+      traceView.s0 -= ds; traceView.s1 -= ds;
+      traceClamp();
+    },
+    fit: () => { traceAxisRange?.clear(); traceAmpRange = null; traceManualX = traceManualY = false; traceFit(lastTrace!); renderTrace(); },
+    after: () => renderTrace(),
+    claimDown: (e) => { if (traceBoxMode) { startTraceBoxDrag(cv, e); return true; } return false; }, // magnifier owns the drag
+    restCursor: () => (traceBoxMode ? 'crosshair' : ''),
   });
-  window.addEventListener('mouseup', () => { dragging = false; if (!traceBoxMode) cv.style.cursor = ''; });
-  cv.addEventListener('mousemove', (e) => {
-    if (!dragging || !traceView.init || !active()) return;
-    const H = cv.clientHeight || 460;
-    const MT = 14, MB = 26, ph = H - MT - MB;
-    if (ph <= 0) return;
-    // Pixel drag → sample drag (drag down ⇒ window moves up, like grabbing the trace).
-    const ds = ((e.clientY - ly) / ph) * (traceView.s1 - traceView.s0);
-    traceView.s0 -= ds; traceView.s1 -= ds;
-    traceClamp();
-    ly = e.clientY;
-    renderTrace();
-  });
-  cv.addEventListener('dblclick', () => {
-    if (!active()) return;
-    traceAxisRange?.clear(); traceAmpRange = null; traceFit(lastTrace!); renderTrace();
-  });
+  $opt('traceInvert')?.addEventListener('change', (e) => setViewInvert((e.target as HTMLInputElement).checked));
+  // Amplitude scale basis (P2-9): the same vocabulary the File Viewer uses, so a
+  // zoom no longer rescales the wiggle under the user.
+  $opt('traceScaleMode')?.addEventListener('change', () => { trcSyncScaleControls(); renderTrace(); });
+  $opt('traceScalePct')?.addEventListener('change', () => renderTrace());
+  $opt('traceScalePct')?.addEventListener('input', () => renderTrace());
+  trcSyncScaleControls();
   // Toolbar buttons (added in index.html alongside the Waveform/Spectrum toggle).
-  $opt('traceZoomIn')?.addEventListener('click', () => traceZoomButton(1 / 1.4));
-  $opt('traceZoomOut')?.addEventListener('click', () => traceZoomButton(1.4));
+  $opt('traceZoomIn')?.addEventListener('click', () => traceZoomButton(1 / PLOT_ZOOM_STEP));
+  $opt('traceZoomOut')?.addEventListener('click', () => traceZoomButton(PLOT_ZOOM_STEP));
   $opt('traceZoomFit')?.addEventListener('click', () => {
-    if (lastTrace) { traceAxisRange?.clear(); traceAmpRange = null; traceFit(lastTrace); renderTrace(); }
+    if (lastTrace) { traceAxisRange?.clear(); traceAmpRange = null; traceManualX = traceManualY = false; traceFit(lastTrace); renderTrace(); }
   });
   // Manual X (time, ms) / Y (amplitude) range boxes - complement wheel/drag zoom.
   const axHost = $opt('traceAxisRange');
@@ -5099,14 +7843,144 @@ function traceInteractions() {
 // shared time axis. Wiggle drawing reuses drawTrace's centre-axis mapping; the
 // shared wbView mirrors the inspector's traceView so the interactions match.
 
-/** Longest trace in the collection (samples), or 0 when empty - the time extent. */
+// The shared window wbView.s0/s1 is measured in REFERENCE samples: samples of the
+// first collected trace's interval. Every other trace is placed by TIME, so a 1 ms
+// and a 2 ms trace stay aligned instead of drifting apart by half the elapsed time.
+
+/** ms per sample of the first collected trace (the reference), or 0 when it is
+ *  unknown - in which case every trace falls back to plain sample-index mapping. */
+function wbRefMs(): number {
+  const ms = (wbTraces[0]?.sampleInt ?? 0) / 1000;
+  return Number.isFinite(ms) && ms > 0 ? ms : 0;
+}
+
+/** ms per sample of one trace, falling back to the reference when it is unknown. */
+function wbTraceMs(t: WbTrace, msRef: number): number {
+  const ms = (Number.isFinite(t.sampleInt) ? t.sampleInt : 0) / 1000;
+  return ms > 0 ? ms : msRef;
+}
+
+/** How many samples of `t` span ONE reference sample. 1 when either interval is
+ *  unknown, so the mapping degrades to the old index-for-index behaviour. */
+function wbScale(t: WbTrace, msRef: number): number {
+  const msT = wbTraceMs(t, msRef);
+  const k = msRef > 0 && msT > 0 ? msRef / msT : 1;
+  return Number.isFinite(k) && k > 0 ? k : 1;
+}
+
+/** The slice of `t` that falls inside the shared window [s0,s1) in reference
+ *  samples. Used for drawing AND for normalization, so a trace at a different
+ *  interval is never scaled from the wrong part of itself. */
+function wbSampleWindow(t: WbTrace, s0: number, s1: number, msRef: number): { lo: number; hi: number; k: number } {
+  const k = wbScale(t, msRef);
+  const lo = Math.max(0, Math.ceil(s0 * k));
+  const hi = Math.min(t.nSamples, Math.ceil(s1 * k));
+  return { lo, hi, k };
+}
+
+/** Longest trace in the collection expressed in REFERENCE samples (0 when empty)
+ *  - i.e. the longest recording TIME, not the largest sample count. */
 function wbMaxSamples(): number {
+  const msRef = wbRefMs();
   let m = 0;
-  for (const t of wbTraces) if (t.nSamples > m) m = t.nSamples;
+  for (const t of wbTraces) {
+    const n = Math.ceil(t.nSamples / wbScale(t, msRef));
+    if (Number.isFinite(n) && n > m) m = n;
+  }
   return m;
 }
 
+/** True when the collection mixes sample intervals, so the traces are being
+ *  aligned by time rather than sample for sample. */
+function wbMixedIntervals(): boolean {
+  const first = wbTraces[0]?.sampleInt;
+  return wbTraces.length > 1 && wbTraces.some((t) => t.sampleInt !== first);
+}
+
+/** The distinct sample intervals in the collection, as "1 ms, 2 ms". */
+function wbIntervalList(): string {
+  const seen: number[] = [];
+  for (const t of wbTraces) {
+    const ms = (Number.isFinite(t.sampleInt) ? t.sampleInt : 0) / 1000;
+    if (ms > 0 && !seen.includes(ms)) seen.push(ms);
+  }
+  return seen.map((ms) => `${+ms.toFixed(3)} ms`).join(', ');
+}
+
 /** Reset the shared time window to the full extent ("fit"). */
+/** The Workbench's normalisation basis, in the File Viewer's OWN vocabulary
+ *  (`Record max` / `Record pct` / `Per trace`, ids wbScaleMode / wbScalePct
+ *  mirroring secScaleMode / secScalePct). Unknown or absent control falls back
+ *  to 'pct', the same default the section carries. */
+function wbScaleMode(): SecScaleMode {
+  const v = ($opt('wbScaleMode') as HTMLSelectElement | null)?.value;
+  return v === 'max' || v === 'trace' ? v : 'pct';
+}
+
+/** Across-trace percentile for 'Record pct', clamped to [1,100]. */
+function wbScalePct(): number {
+  const v = parseFloat(($opt('wbScalePct') as HTMLInputElement | null)?.value ?? '');
+  return Number.isFinite(v) ? Math.min(100, Math.max(1, v)) : SCALE_DEFAULT_PERCENTILE;
+}
+
+/** Show the percentile box only where it means something, exactly as the File
+ *  Viewer does for its own Scale control. */
+function wbSyncScaleControls() {
+  const wrap = $opt('wbScalePctWrap');
+  if (wrap) wrap.style.display = wbScaleMode() === 'pct' ? '' : 'none';
+}
+
+/** Per-trace levels over the visible window, and the level each trace is drawn
+ *  against under the active Scale mode.
+ *
+ *  Naming this is the whole point: 'Per trace' balances every trace to itself,
+ *  which is legitimate and is also exactly what makes a weak or dead geophone
+ *  look healthy. The other two modes share ONE level across the collection, so a
+ *  quiet trace stays visibly quiet. Every returned level is finite and > 0, so
+ *  no NaN can reach the wiggle path. */
+// Single-slot memo for the per-trace window levels. Unlike the Inspector's whole
+// -trace basis these DO move with the window, so the window is part of the key and
+// a pan still recomputes - that is the honest picture. What it does remove is the
+// duplicate: one draw calls wbScaleLevels once for the canvas and again from
+// syncWbAxisPlaceholders with the identical arguments, so every pan tick sorted
+// every collected trace twice. Keyed on the collection's sample-array identities
+// (a fresh transferable per fetch, never written in place) plus the window and
+// mode, so adding, removing or reordering a trace misses the slot.
+let wbLevelsSrc: Float32Array[] = [];
+let wbLevelsKey = '';
+let wbLevelsOwn: number[] = [];
+
+function wbLevelsHit(key: string): boolean {
+  if (wbLevelsKey !== key || wbLevelsSrc.length !== wbTraces.length) return false;
+  for (let i = 0; i < wbTraces.length; i++) if (wbLevelsSrc[i] !== wbTraces[i].samples) return false;
+  return true;
+}
+
+function wbScaleLevels(s0: number, s1: number, msRef: number): { level: (i: number) => number; basis: number; mode: SecScaleMode } {
+  const mode = wbScaleMode();
+  const key = `${mode}|${s0}|${s1}|${msRef}|${wbScalePct()}`;
+  if (wbLevelsHit(key)) {
+    const cached = wbLevelsOwn;
+    if (mode === 'trace') return { level: (i) => cached[i] || 1, basis: NaN, mode };
+    let b = mode === 'pct' ? normAcrossTraces(cached, wbScalePct()) : 0;
+    if (mode !== 'pct') for (const f of cached) if (f > b) b = f;
+    if (!Number.isFinite(b) || b <= 0) b = 1;
+    return { level: () => b, basis: b, mode };
+  }
+  const own = wbTraces.map((t) => {
+    const { lo, hi } = wbSampleWindow(t, s0, s1, msRef);
+    const f = hi > lo ? normFactorPercentile(t.samples.subarray(lo, hi), 0.95) : 0;
+    return Number.isFinite(f) && f > 0 ? f : 0;
+  });
+  wbLevelsSrc = wbTraces.map((t) => t.samples); wbLevelsKey = key; wbLevelsOwn = own;
+  if (mode === 'trace') return { level: (i) => own[i] || 1, basis: NaN, mode };
+  let basis: number;
+  if (mode === 'pct') basis = normAcrossTraces(own, wbScalePct());
+  else { basis = 0; for (const f of own) if (f > basis) basis = f; }
+  if (!Number.isFinite(basis) || basis <= 0) basis = 1;
+  return { level: () => basis, basis, mode };
+}
+
 function wbFit() {
   const full = wbMaxSamples();
   wbView.fullS = full;
@@ -5132,19 +8006,55 @@ function wbClamp() {
 function wbPlotFrac(cv: HTMLCanvasElement, e: MouseEvent): number {
   const r = cv.getBoundingClientRect();
   const H = cv.clientHeight || 460;
-  const MT = 14, MB = 26, ph = H - MT - MB;
+  // Same margins the main workbench canvas draws with, strip included, so the
+  // cursor maps to the sample the renderer actually painted there.
+  const MT = WB_MAIN_MARGINS.MT, MB = WB_MAIN_MARGINS.MB, ph = H - MT - MB;
   const py = e.clientY - r.top - MT;
   return ph > 0 ? Math.max(0, Math.min(1, py / ph)) : 0;
 }
 
 /** Zoom the shared window toward fractional anchor `fy` by `factor` (<1 zooms in). */
+/** Read the traces under the cursor: shared time, plus (side-by-side) the trace
+ *  in that column and its STORED sample there. The workbench applies no gain and
+ *  no AGC, so the number IS the collected sample. */
+function updateWbHover(cv: HTMLCanvasElement, e: MouseEvent) {
+  const el = $opt('wbHover');
+  if (!el) return;
+  if ($('panel-workbench').style.display === 'none' || !wbTraces.length || !wbView.init) return;
+  const fy = wbPlotFrac(cv, e);
+  const msRef = wbRefMs();
+  const ms = (wbView.s0 + fy * (wbView.s1 - wbView.s0)) * msRef;
+  const parts: Array<string | null> = [hoverMs(ms)];
+  if (wbMode === 'side') {
+    const r = cv.getBoundingClientRect();
+    const W = cv.clientWidth || 800;
+    const pw = W - WB_MAIN_MARGINS.ML - WB_MAIN_MARGINS.MR;
+    const fx = pw > 0 ? (e.clientX - r.left - WB_MAIN_MARGINS.ML) / pw : -1;
+    const j = Math.floor(fx * wbTraces.length);
+    if (fx >= 0 && fx <= 1 && j >= 0 && j < wbTraces.length) {
+      const t = wbTraces[j];
+      parts.push(`trace ${t.sourceName} · ${t.traceIndex + 1}`);
+      if (t.sampleInt > 0) {
+        const si = Math.round((ms * 1000) / t.sampleInt);
+        if (si >= 0 && si < t.samples.length) parts.push(hoverAmp(t.samples[si]));
+      }
+    }
+  } else {
+    parts.push(`${wbTraces.length} trace${wbTraces.length === 1 ? '' : 's'} overlaid`);
+  }
+  el.textContent = hoverJoin(parts) || 'Hover the traces to read time · trace · amplitude.';
+}
+
+function clearWbHover() {
+  setText('wbHover', 'Hover the traces to read time · trace · amplitude.');
+}
+
 function wbZoomAt(fy: number, factor: number) {
   if (!wbTraces.length) return;
   if (!wbView.init || wbView.fullS !== wbMaxSamples()) wbFit();
-  const as = wbView.s0 + fy * (wbView.s1 - wbView.s0);
-  const ws = (wbView.s1 - wbView.s0) * factor;
-  wbView.s0 = as - fy * ws;
-  wbView.s1 = as + (1 - fy) * ws;
+  const zs = anchorZoom(wbView.s0, wbView.s1, fy, factor);
+  wbView.s0 = zs.lo;
+  wbView.s1 = zs.hi;
   wbClamp();
 }
 
@@ -5243,10 +8153,7 @@ function wbRenderPreview() {
       drawPreviewTrace(cv, t, '#34dbd0');
     } else {
       // Clear to the canvas background so a failed read shows an empty plot.
-      const dpr = window.devicePixelRatio || 1;
-      const W = cv.clientWidth || 800, H = cv.clientHeight || 240;
-      cv.width = Math.round(W * dpr); cv.height = Math.round(H * dpr);
-      const ctx = cv.getContext('2d'); if (ctx) { ctx.setTransform(dpr, 0, 0, dpr, 0, 0); ctx.fillStyle = '#0d1f33'; ctx.fillRect(0, 0, W, H); }
+      beginCanvas(cv, { fallbackW: 800, fallbackH: 240 }, '#0d1f33');
     }
   }
 }
@@ -5256,17 +8163,13 @@ function wbRenderPreview() {
  *  window (full trace) so it never disturbs the Inspector's shared traceView.
  *  Every numeric is guarded so NaN can't reach the canvas. */
 function drawPreviewTrace(cv: HTMLCanvasElement, t: TraceData, color: string) {
-  const dpr = window.devicePixelRatio || 1;
-  const W = cv.clientWidth || 800, H = cv.clientHeight || 240;
-  cv.width = Math.round(W * dpr); cv.height = Math.round(H * dpr);
-  const ctx = cv.getContext('2d'); if (!ctx) return;
-  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-  ctx.fillStyle = '#0d1f33';
-  ctx.fillRect(0, 0, W, H);
+  const surf = beginCanvas(cv, { fallbackW: 800, fallbackH: 240 }, '#0d1f33');
+  if (!surf) return;
+  const { ctx, W, H } = surf;
   const n = t.nSamples;
   if (!n || !t.samples.length) return;
-  const ML = 60, MR = 14, MT = 14, MB = 26;
-  const pw = W - ML - MR, ph = H - MT - MB;
+  const { ML, MR, MT, MB } = WB_MARGINS;
+  const { w: pw, h: ph } = plotRect(W, H, WB_MARGINS);
   if (pw < 4 || ph < 4) return;
   const cx = ML + pw / 2;
   const nf = normFactorPercentile(t.samples.subarray(0, n), 0.95) || 1;
@@ -5292,7 +8195,7 @@ function drawPreviewTrace(cv: HTMLCanvasElement, t: TraceData, color: string) {
   // time axis (ms down)
   ctx.fillStyle = '#7e93ac'; ctx.font = '10px Consolas, monospace';
   const msPerSample = (Number.isFinite(t.sampleInt) ? t.sampleInt : 0) / 1000;
-  drawMsTimeGrid(ctx, ML, MT, pw, ph, 0, denom, msPerSample);
+  drawMsTimeAxis(ctx, { ML, MT, pw, ph, t0Ms: 0, t1Ms: denom * msPerSample, target: 5, grid: '#173049' });
   // amplitude caption (dimensionless sample value)
   ctx.fillStyle = '#5f7793'; ctx.textAlign = 'center';
   ctx.fillText('Amplitude (sample value)', ML + pw / 2, MT + ph - 4);
@@ -5380,7 +8283,6 @@ function wbSetMode(m: 'side' | 'overlay') {
 
 /** Render the collected-trace list (source · trace # · colour swatch + remove). */
 function renderWorkbenchList() {
-  updateHeaderClear();   // workbench contents changed → refresh header Clear state
   const list = $opt('wbList');
   if (!list) return;
   if (!wbTraces.length) {
@@ -5409,12 +8311,15 @@ function renderWorkbenchList() {
 
 /** Draw one trace's wiggle in a vertical band centred at `cx`, half-width `hw`,
  *  over the shared time window [s0,s1) - reuses drawTrace's centre-axis mapping.
- *  `nf` is the normalization factor (per-trace in side mode, shared in overlay). */
-function wbDrawWiggle(ctx: CanvasRenderingContext2D, t: WbTrace, cx: number, hw: number, MT: number, ph: number, s0: number, s1: number, nf: number, color: string, amp: { min: number; max: number } | null = null) {
+ *  `nf` is the normalization factor (per-trace in side mode, shared in overlay).
+ *  `msRef` is the ms-per-sample the window is measured in; each sample of `t` is
+ *  placed at its OWN time, so a trace recorded at a different interval lands at
+ *  the right moment instead of the right sample number. 0 ⇒ map by sample index. */
+function wbDrawWiggle(ctx: CanvasRenderingContext2D, t: WbTrace, cx: number, hw: number, MT: number, ph: number, s0: number, s1: number, nf: number, color: string, amp: { min: number; max: number } | null = null, msRef = 0) {
   const span = s1 - s0;
   if (span < 1) return;
   const denom = span > 1 ? span - 1 : 1;
-  const lo = Math.max(0, s0), hi = Math.min(t.nSamples, s1);
+  const { lo, hi, k } = wbSampleWindow(t, s0, s1, msRef);
   // Amplitude → x. Default: auto, centred at cx with ±(hw-2) full-swing. Manual:
   // map the raw [min,max] window across the column band [cx-hw, cx+hw] (left=min),
   // clamped so an out-of-window sample can't draw outside the column. The manual
@@ -5433,7 +8338,9 @@ function wbDrawWiggle(ctx: CanvasRenderingContext2D, t: WbTrace, cx: number, hw:
     // Polarity flip is applied to the VALUE, so it works identically under the
     // auto mapping and under a manual amplitude window.
     const x = xOf(wbInvert ? -t.samples[i] : t.samples[i]);
-    const y = MT + ((i - s0) / denom) * ph;
+    // i / k is this sample's position in reference samples (= its time / msRef).
+    const y = MT + ((i / k - s0) / denom) * ph;
+    if (!Number.isFinite(x) || !Number.isFinite(y)) continue;
     if (!started) { ctx.moveTo(x, y); started = true; }
     else ctx.lineTo(x, y);
   }
@@ -5446,15 +8353,9 @@ function wbDrawWiggle(ctx: CanvasRenderingContext2D, t: WbTrace, cx: number, hw:
 function drawWorkbench() {
   const cv = $opt('wbCanvas') as HTMLCanvasElement | null;
   if (!cv) return;
-  const dpr = window.devicePixelRatio || 1;
-  const W = cv.clientWidth || 800;
-  const H = cv.clientHeight || 460;
-  cv.width = Math.round(W * dpr);
-  cv.height = Math.round(H * dpr);
-  const ctx = cv.getContext('2d')!;
-  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-  ctx.fillStyle = '#0d1f33';
-  ctx.fillRect(0, 0, W, H);
+  const surf = beginCanvas(cv, { fallbackW: 800, fallbackH: 460 }, '#0d1f33');
+  if (!surf) return;
+  const { ctx, W, H } = surf;
 
   if (!wbTraces.length) {
     ctx.fillStyle = '#5e7186';
@@ -5469,26 +8370,39 @@ function drawWorkbench() {
   const s0 = wbView.s0, s1 = wbView.s1;
   if (s1 - s0 < 1) return;
 
-  const ML = 60, MR = 14, MT = 14, MB = 26;
-  const pw = W - ML - MR, ph = H - MT - MB;
+  const { ML, MR, MT, MB } = WB_MAIN_MARGINS;
+  const { w: pw, h: ph } = plotRect(W, H, WB_MAIN_MARGINS);
 
   ctx.strokeStyle = '#214564';
   ctx.lineWidth = 1;
   ctx.strokeRect(ML, MT, pw, ph);
 
-  // Time axis (ms down) - labelled from the longest trace's sample interval, or
-  // the first trace's if they differ. Mapping is the SAME for every trace so the
-  // side-by-side columns and the overlay all line up in time.
+  // Time axis (ms down), labelled from the FIRST collected trace's sample
+  // interval - the reference the shared window is measured in. Every trace is
+  // then placed by its own time, so columns and overlay line up in time even
+  // when the collection mixes sample intervals.
+  const msRef = wbRefMs();
   const si = wbTraces[0].sampleInt || 0;
   const denom = s1 - s0 > 1 ? s1 - s0 - 1 : 1;
   ctx.fillStyle = '#7e93ac';
   ctx.font = '10px Consolas, monospace';
   const msPerSample = si / 1000;
-  drawMsTimeGrid(ctx, ML, MT, pw, ph, s0, denom, msPerSample);
+  drawMsTimeAxis(ctx, { ML, MT, pw, ph, t0Ms: s0 * msPerSample, t1Ms: (s0 + denom) * msPerSample, target: 5, grid: '#173049' });
 
+  // ONE normalisation basis for BOTH layouts, chosen by the Scale control and
+  // named in the strip - the layout no longer decides silently what the picture
+  // means (it used to: side-by-side was always per trace, overlay always the
+  // collection maximum).
+  const lv = wbScaleLevels(s0, s1, msRef);
+  const nTr = wbTraces.length;
+  const scaleTxt = lv.mode === 'trace'
+    ? `Scale ${SEC_SCALE_LABELS.trace} (each trace to its own level)`
+    : lv.mode === 'pct'
+      ? `Scale ${SEC_SCALE_LABELS.pct} ${wbScalePct().toFixed(0)}% across ${nTr} collected trace${nTr === 1 ? '' : 's'} (basis ${secNum(lv.basis)})`
+      : `Scale ${SEC_SCALE_LABELS.max} across ${nTr} collected trace${nTr === 1 ? '' : 's'} (basis ${secNum(lv.basis)})`;
   if (wbMode === 'side') {
     // Split the plot width into N equal columns; each trace's wiggle is centred
-    // in its column and normalized over its OWN visible window (independent gain).
+    // in its column and drawn against the level the Scale control chose.
     const n = wbTraces.length;
     const colW = pw / n;
     for (let j = 0; j < n; j++) {
@@ -5502,9 +8416,7 @@ function drawWorkbench() {
       }
       ctx.strokeStyle = '#264a68';
       ctx.beginPath(); ctx.moveTo(cx, MT); ctx.lineTo(cx, MT + ph); ctx.stroke();
-      const lo = Math.max(0, s0), hi = Math.min(t.nSamples, s1);
-      const nf = (hi > lo ? normFactorPercentile(t.samples.subarray(lo, hi), 0.95) : 0) || 1;
-      wbDrawWiggle(ctx, t, cx, hw, MT, ph, s0, s1, nf, t.color, wbAmp);
+      wbDrawWiggle(ctx, t, cx, hw, MT, ph, s0, s1, lv.level(j), t.color, wbAmp, msRef);
       // per-column label
       ctx.fillStyle = t.color;
       ctx.font = '10px Consolas, monospace';
@@ -5514,22 +8426,20 @@ function drawWorkbench() {
       ctx.textAlign = 'left';
     }
   } else {
-    // Overlay: all traces on ONE shared centre axis with a SHARED normalization
-    // (max percentile over the visible window across the collection) so relative
-    // amplitudes are comparable and aligned in time.
+    // Overlay: all traces on ONE shared centre axis, each drawn against the level
+    // the Scale control chose, aligned in time.
     const cx = ML + pw / 2;
     ctx.strokeStyle = '#264a68';
     ctx.beginPath(); ctx.moveTo(cx, MT); ctx.lineTo(cx, MT + ph); ctx.stroke();
-    let nf = 0;
-    for (const t of wbTraces) {
-      const lo = Math.max(0, s0), hi = Math.min(t.nSamples, s1);
-      if (hi <= lo) continue;
-      const f = normFactorPercentile(t.samples.subarray(lo, hi), 0.95);
-      if (f > nf) nf = f;
+    for (let j = 0; j < wbTraces.length; j++) {
+      wbDrawWiggle(ctx, wbTraces[j], cx, pw / 2, MT, ph, s0, s1, lv.level(j), wbTraces[j].color, wbAmp, msRef);
     }
-    if (nf <= 0) nf = 1;
-    for (const t of wbTraces) wbDrawWiggle(ctx, t, cx, pw / 2, MT, ph, s0, s1, nf, t.color, wbAmp);
   }
+  // A manual amplitude window overrides the basis entirely (wbDrawWiggle maps to
+  // it instead of to the full swing), so say that rather than the mode.
+  const scaleLine = wbAmp
+    ? `Scale manual ${secNum(wbAmp.min)} to ${secNum(wbAmp.max)}`
+    : scaleTxt;
 
   // Legend (source · trace #) top-right, one row per colour.
   ctx.font = '10px Consolas, monospace';
@@ -5547,7 +8457,34 @@ function drawWorkbench() {
 
   // status label
   const lab = $opt('wbLabel');
-  if (lab) lab.textContent = `${wbTraces.length} trace${wbTraces.length === 1 ? '' : 's'} · ${wbMode === 'side' ? 'side-by-side' : 'overlay'} · ${s0}-${s1} samples`;
+  const mixed = wbMixedIntervals();
+  // Display-state strip: the workbench applies no gain, no AGC and no display
+  // clip, so the only thing standing between the stored samples and the picture
+  // is the normalisation basis - which is exactly why it is named here.
+  drawStateStrip(ctx, W,
+    [
+      `Trace Workbench · ${wbTraces.length} trace${wbTraces.length === 1 ? '' : 's'}`,
+      wbMode === 'side' ? 'Side-by-side' : 'Overlay',
+      scaleLine,
+      'Gain ×1.00 (0.0 dB)',
+      'AGC off',
+      'Clip none',
+      wbInvert ? 'Polarity FLIPPED for display only (stored samples unchanged)' : 'Polarity as stored',
+      mixed ? `Sample intervals differ (${wbIntervalList()}), traces aligned by time` : 'One sample interval',
+    ],
+    stripValueLine(wbInvert
+      ? 'Display is inverted, so a positive stored sample deflects LEFT of its centre axis'
+      : 'Positive sample value deflects RIGHT of its centre axis')
+      // Its own item, not glued to the end of the last one: the polarity
+      // caveat has to survive, or be dropped, as a whole statement.
+      .concat(['The polarity above is declared by the open file only']));
+  // When the intervals differ, a sample count is only true for the first trace,
+  // so report the window in time and say plainly what the picture is doing.
+  const win = mixed && msRef > 0
+    ? `${+(s0 * msRef).toFixed(1)}-${+(s1 * msRef).toFixed(1)} ms`
+    : `${s0}-${s1} samples`;
+  const note = mixed ? ` · sample intervals differ (${wbIntervalList()}) · traces aligned by time` : '';
+  if (lab) lab.textContent = `${wbTraces.length} trace${wbTraces.length === 1 ? '' : 's'} · ${wbMode === 'side' ? 'side-by-side' : 'overlay'} · ${win}${note}`;
   syncWbAxisPlaceholders();
 }
 
@@ -5559,13 +8496,15 @@ function syncWbAxisPlaceholders() {
   const msPerSample = si / 1000;
   const s0 = wbView.init ? wbView.s0 : 0;
   const s1 = wbView.init ? wbView.s1 : wbMaxSamples();
-  // Auto amplitude swing: max ±95th-percentile over the visible window across traces.
-  let nf = 0;
-  for (const t of wbTraces) {
-    const lo = Math.max(0, s0), hi = Math.min(t.nSamples, s1);
-    if (hi <= lo) continue;
-    const f = normFactorPercentile(t.samples.subarray(lo, hi), 0.95);
-    if (f > nf) nf = f;
+  // Auto amplitude swing: the SAME basis the panel drew with, so the placeholder
+  // never states a level the picture did not use. In 'Per trace' mode there is no
+  // single basis, so fall back to the loudest trace's own level - which is the
+  // widest swing on the canvas, and the strip names the mode beside it.
+  const lv = wbScaleLevels(s0, s1, wbRefMs());
+  let nf = lv.basis;
+  if (!(Number.isFinite(nf) && nf > 0)) {
+    nf = 0;
+    for (let j = 0; j < wbTraces.length; j++) { const f = lv.level(j); if (f > nf) nf = f; }
   }
   if (!(nf > 0)) nf = 1;
   wbAxisRange.setPlaceholders(s0 * msPerSample, s1 * msPerSample, wbAmp ? wbAmp.min : -nf, wbAmp ? wbAmp.max : nf);
@@ -5647,15 +8586,9 @@ function wbFillAnalysisSelects() {
 function wbDrawCorr(cc: { lags: Float32Array; corr: Float32Array; bestLagMs: number; bestCoef: number }) {
   const cv = $opt('wbCorrCanvas') as HTMLCanvasElement | null;
   if (!cv) return;
-  const dpr = window.devicePixelRatio || 1;
-  const W = cv.clientWidth || 800;
-  const H = cv.clientHeight || 160;
-  cv.width = Math.round(W * dpr);
-  cv.height = Math.round(H * dpr);
-  const ctx = cv.getContext('2d')!;
-  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-  ctx.fillStyle = '#0d1f33';
-  ctx.fillRect(0, 0, W, H);
+  const surf = beginCanvas(cv, { fallbackW: 800, fallbackH: 160 }, '#0d1f33');
+  if (!surf) return;
+  const { ctx, W, H } = surf;
 
   const ML = 44, MR = 12, MT = 10, MB = 22;
   const pw = W - ML - MR, ph = H - MT - MB;
@@ -5720,18 +8653,12 @@ function wbDrawCorr(cc: { lags: Float32Array; corr: Float32Array; bestLagMs: num
 function wbDrawDiff(diff: Float32Array, sampleInt: number) {
   const cv = $opt('wbDiffCanvas') as HTMLCanvasElement | null;
   if (!cv) return;
-  const dpr = window.devicePixelRatio || 1;
-  const W = cv.clientWidth || 800;
-  const H = cv.clientHeight || 200;
-  cv.width = Math.round(W * dpr);
-  cv.height = Math.round(H * dpr);
-  const ctx = cv.getContext('2d')!;
-  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-  ctx.fillStyle = '#0d1f33';
-  ctx.fillRect(0, 0, W, H);
+  const surf = beginCanvas(cv, { fallbackW: 800, fallbackH: 200 }, '#0d1f33');
+  if (!surf) return;
+  const { ctx, W, H } = surf;
 
-  const ML = 60, MR = 14, MT = 14, MB = 26;
-  const pw = W - ML - MR, ph = H - MT - MB;
+  const { ML, MR, MT, MB } = WB_MARGINS;
+  const { w: pw, h: ph } = plotRect(W, H, WB_MARGINS);
   ctx.strokeStyle = '#214564';
   ctx.lineWidth = 1;
   ctx.strokeRect(ML, MT, pw, ph);
@@ -5745,7 +8672,7 @@ function wbDrawDiff(diff: Float32Array, sampleInt: number) {
   ctx.fillStyle = '#7e93ac';
   ctx.font = '10px Consolas, monospace';
   const msPerSample = (sampleInt || 0) / 1000;
-  drawMsTimeGrid(ctx, ML, MT, pw, ph, s0, denom, msPerSample);
+  drawMsTimeAxis(ctx, { ML, MT, pw, ph, t0Ms: s0 * msPerSample, t1Ms: (s0 + denom) * msPerSample, target: 5, grid: '#173049' });
 
   const cx = ML + pw / 2;
   ctx.strokeStyle = '#264a68';
@@ -5822,9 +8749,7 @@ function wbUpdateExport() {
   if (btn) btn.disabled = wbTraces.length === 0;
   const note = $opt('wbExportSiNote');
   if (note) {
-    const first = wbTraces[0]?.sampleInt;
-    const mixed = wbTraces.length > 1 && wbTraces.some((t) => t.sampleInt !== first);
-    (note as HTMLElement).style.display = mixed ? '' : 'none';
+    (note as HTMLElement).style.display = wbMixedIntervals() ? '' : 'none';
   }
 }
 
@@ -5857,33 +8782,25 @@ function workbenchInteractions() {
   const cv = $opt('wbCanvas') as HTMLCanvasElement | null;
   if (!cv) return;
   const active = () => $('panel-workbench').style.display !== 'none' && !!wbTraces.length;
-  let dragging = false, ly = 0;
-  cv.addEventListener('wheel', (e) => {
-    if (!active()) return;
-    e.preventDefault();
-    const fy = wbPlotFrac(cv, e);
-    wbZoomAt(fy, e.deltaY < 0 ? 1 / 1.15 : 1.15);
-    drawWorkbench();
-  }, { passive: false });
-  cv.addEventListener('mousedown', (e) => {
-    if (!active()) return;
-    dragging = true; ly = e.clientY; cv.style.cursor = 'grabbing';
-  });
-  window.addEventListener('mouseup', () => { dragging = false; cv.style.cursor = ''; });
-  cv.addEventListener('mousemove', (e) => {
-    if (!dragging || !wbView.init || !active()) return;
-    const H = cv.clientHeight || 460;
-    const MT = 14, MB = 26, ph = H - MT - MB;
-    if (ph <= 0) return;
-    const ds = ((e.clientY - ly) / ph) * (wbView.s1 - wbView.s0);
-    wbView.s0 -= ds; wbView.s1 -= ds;
-    wbClamp();
-    ly = e.clientY;
-    drawWorkbench();
-  });
-  cv.addEventListener('dblclick', () => {
-    if (!active()) return;
-    wbAxisRange?.clear(); wbAmp = null; wbFit(); drawWorkbench();
+  cv.addEventListener('mouseleave', () => clearWbHover());
+  cv.addEventListener('mousemove', (e) => updateWbHover(cv, e));
+  // Shared plumbing (wheel zoom about the cursor, drag pan, double-click fit).
+  attachPlotInteraction(cv, {
+    enabled: active,
+    frac: (e) => ({ fx: 0.5, fy: wbPlotFrac(cv, e) }),
+    zoomAt: (_fx, fy, factor) => wbZoomAt(fy, factor),
+    panPx: (_dx, dy) => {
+      if (!wbView.init) return;
+      const H = cv.clientHeight || 460;
+      const MT = WB_MAIN_MARGINS.MT, MB = WB_MAIN_MARGINS.MB, ph = H - MT - MB;
+      if (!(ph > 0)) return;
+      const ds = (dy / ph) * (wbView.s1 - wbView.s0);
+      if (!Number.isFinite(ds)) return;
+      wbView.s0 -= ds; wbView.s1 -= ds;
+      wbClamp();
+    },
+    fit: () => { wbAxisRange?.clear(); wbAmp = null; wbFit(); drawWorkbench(); },
+    after: () => drawWorkbench(),
   });
   $opt('wbPickBtn')?.addEventListener('click', () => void wbPickFile());
   $opt('wbPrevBtn')?.addEventListener('click', () => wbStepPreview(-1));
@@ -5896,6 +8813,10 @@ function workbenchInteractions() {
   });
   $opt('wbAddOpenBtn')?.addEventListener('click', wbAddOpenTrace);
   $opt('wbClearBtn')?.addEventListener('click', wbClear);
+  $opt('wbScaleMode')?.addEventListener('change', () => { wbSyncScaleControls(); drawWorkbench(); });
+  $opt('wbScalePct')?.addEventListener('change', () => drawWorkbench());
+  $opt('wbScalePct')?.addEventListener('input', () => drawWorkbench());
+  wbSyncScaleControls();
   $opt('wbModeSide')?.addEventListener('click', () => wbSetMode('side'));
   $opt('wbModeOverlay')?.addEventListener('click', () => wbSetMode('overlay'));
   $opt('wbInvertBtn')?.addEventListener('click', () => {
@@ -5903,8 +8824,8 @@ function workbenchInteractions() {
     $opt('wbInvertBtn')?.classList.toggle('on', wbInvert);
     drawWorkbench();
   });
-  $opt('wbZoomIn')?.addEventListener('click', () => wbZoomButton(1 / 1.4));
-  $opt('wbZoomOut')?.addEventListener('click', () => wbZoomButton(1.4));
+  $opt('wbZoomIn')?.addEventListener('click', () => wbZoomButton(1 / PLOT_ZOOM_STEP));
+  $opt('wbZoomOut')?.addEventListener('click', () => wbZoomButton(PLOT_ZOOM_STEP));
   $opt('wbZoomFit')?.addEventListener('click', () => { wbAxisRange?.clear(); wbAmp = null; wbFit(); drawWorkbench(); });
   // Manual X (time, ms) / Y (amplitude) range boxes - complement the shared zoom.
   const axHost = $opt('wbAxisRange');
@@ -5960,7 +8881,6 @@ function spsLabel(s: SpsSummary): string {
 /** Paint the dedicated SPS stats element (counts + line totals). Lives apart
  *  from #spsLabel, which hoverGrid overwrites. Line counts come from geometry. */
 function updateSpsStats() {
-  updateHeaderClear();   // SPS survey loaded/cleared → refresh header Clear state
   updateGeomqcReadout(); // …and the Geometry QC tab's loaded-survey readout
   updateGlobalLoaded();  // …and the global header "Loaded" readout
   const el = $opt('spsStats');
@@ -6538,18 +9458,13 @@ function gridFit() {
   gridView.init = true;
 }
 
-function niceStep(range: number, target: number): number {
-  const raw = range / Math.max(1, target);
-  if (!isFinite(raw) || raw <= 0) return 1;
-  const mag = Math.pow(10, Math.floor(Math.log10(raw)));
-  const n = raw / mag;
-  return (n < 1.5 ? 1 : n < 3 ? 2 : n < 7 ? 5 : 10) * mag;
-}
-
 function drawSurveyGrid() {
   if (!spsGeom) return;
   const cv = $('spsCanvas') as HTMLCanvasElement;
-  const dpr = window.devicePixelRatio || 1;
+  // renderScale(), not devicePixelRatio: the image export raises the backing
+  // resolution for ONE redraw, and a grid reading the display ratio directly
+  // would export at screen resolution while every other viewer exports at 3x.
+  const dpr = renderScale();
   const W = cv.clientWidth || 900, H = cv.clientHeight || 500;
   cv.width = Math.round(W * dpr); cv.height = Math.round(H * dpr);
   const ctx = cv.getContext('2d')!;
@@ -6585,14 +9500,17 @@ function drawSurveyGrid() {
     // grid is rotated we drop them (the rotated frame + north arrow carry orientation)
     // and the points stay the priority - see the rotated-frame block below.
     const sx = niceStep(e1 - e0, 8);
-    for (let e = Math.ceil(e0 / sx) * sx; e <= e1; e += sx) {
+    // Endpoint-inclusive with a step-relative slack, the same rule as every
+    // other tick loop: the accumulator drifts, so a bare `<=` drops a tick that
+    // sits exactly on the bound.
+    for (let e = Math.ceil(e0 / sx) * sx; e <= e1 + sx * 1e-6; e += sx) {
       const x = X(e); if (x < 42 || x > W - 2) continue;
       ctx.strokeStyle = 'rgba(33,69,100,0.45)';
       ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, H - 16); ctx.stroke();
       ctx.fillStyle = '#5e7186'; ctx.fillText(e.toFixed(pr), x + 2, H - 5);
     }
     const sy = niceStep(nTop - nBot, 6);
-    for (let n = Math.ceil(nBot / sy) * sy; n <= nTop; n += sy) {
+    for (let n = Math.ceil(nBot / sy) * sy; n <= nTop + sy * 1e-6; n += sy) {
       const y = Yf(n); if (y < 2 || y > H - 16) continue;
       ctx.strokeStyle = 'rgba(33,69,100,0.45)';
       ctx.beginPath(); ctx.moveTo(42, y); ctx.lineTo(W, y); ctx.stroke();
@@ -6807,42 +9725,59 @@ function drawFoldColorbar(ctx: CanvasRenderingContext2D, H: number, maxFold: num
 /** Attach wheel-zoom / drag-pan / hover to the grid canvas (once, at init). */
 function gridInteractions() {
   const cv = $('spsCanvas') as HTMLCanvasElement;
-  let dragging = false, lx = 0, ly = 0;
-  // Track drag distance so a pan (press-move-release) doesn't open the inspector;
-  // only a near-stationary press counts as a station click.
-  let downX = 0, downY = 0, moved = 0;
-  cv.addEventListener('wheel', (e) => {
-    if (spsView !== 'grid' || !spsGeom) return;
-    e.preventDefault();
-    if (!gridView.init) gridFit();
-    const r = cv.getBoundingClientRect();
-    const px = e.clientX - r.left, py = e.clientY - r.top;
-    const ex = (px - gridView.ox) / gridView.sc, ny = (gridView.oy - py) / gridView.sc;
-    gridView.sc *= e.deltaY < 0 ? 1.15 : 1 / 1.15;
-    gridView.ox = px - ex * gridView.sc;
-    gridView.oy = py + ny * gridView.sc;
-    drawSurveyGrid();
-  }, { passive: false });
-  cv.addEventListener('mousedown', (e) => { if (spsView !== 'grid') return; dragging = true; lx = e.clientX; ly = e.clientY; downX = e.clientX; downY = e.clientY; moved = 0; });
-  window.addEventListener('mouseup', () => { dragging = false; });
-  cv.addEventListener('mousemove', (e) => {
-    if (spsView !== 'grid' || !spsGeom) return;
-    if (dragging) {
-      moved += Math.abs(e.clientX - lx) + Math.abs(e.clientY - ly);
-      gridView.ox += e.clientX - lx; gridView.oy += e.clientY - ly;
-      lx = e.clientX; ly = e.clientY;
-      drawSurveyGrid();
-    } else {
-      hoverGrid(e);
-    }
+  // The grid was the last canvas with its own pan/zoom listeners. It now shares
+  // the plumbing in render/interaction, so it gets the same factor-2 step, the
+  // same click-versus-drag guard and - the bug this fixes - a click that is held
+  // for one double-click interval, so a double-click FITS instead of opening the
+  // station inspector on the way. Only the plumbing is shared: the grid keeps its
+  // own sc/ox/oy transform (x_px = ox + e*sc, y_px = oy - n*sc), which is an
+  // origin + scale rather than the t0/t1 window every seismic panel uses, so the
+  // adapters below convert at the boundary. Zoom stays UNIFORM in x and y on
+  // purpose: this is a map of ground positions, and an anisotropic zoom would
+  // stretch the survey out of shape.
+  let panning = false;
+  const enabled = () => spsView === 'grid' && !!spsGeom;
+  attachPlotInteraction(cv, {
+    enabled,
+    frac: (e) => {
+      const r = cv.getBoundingClientRect();
+      const W = cv.clientWidth, H = cv.clientHeight;
+      if (!(W > 0) || !(H > 0)) return null;
+      // The whole canvas is the plot rect here (gridlines, points and the fold
+      // heatmap all run edge to edge), so there are no margins to subtract.
+      const fx = (e.clientX - r.left) / W, fy = (e.clientY - r.top) / H;
+      if (fx < 0 || fx > 1 || fy < 0 || fy > 1) return null;
+      return { fx, fy };
+    },
+    zoomAt: (fx, fy, factor) => {
+      if (!gridView.init) gridFit();
+      const W = cv.clientWidth, H = cv.clientHeight;
+      const px = fx * W, py = fy * H;
+      const { sc, ox, oy } = gridView;
+      if (!(sc > 0) || !isFinite(ox) || !isFinite(oy)) return;
+      // factor < 1 narrows the window, i.e. magnifies, i.e. sc grows.
+      const sc2 = sc / factor;
+      if (!isFinite(sc2) || sc2 <= 0) return;
+      const ex = (px - ox) / sc, ny = (oy - py) / sc;
+      const ox2 = px - ex * sc2, oy2 = py + ny * sc2;
+      if (!isFinite(ox2) || !isFinite(oy2)) return;
+      gridView.sc = sc2; gridView.ox = ox2; gridView.oy = oy2;
+    },
+    // The origin moves with the cursor one to one - no window arithmetic needed.
+    panPx: (dx, dy) => { panning = true; gridView.ox += dx; gridView.oy += dy; },
+    fit: () => { gridFit(); drawSurveyGrid(); },
+    after: () => drawSurveyGrid(),
+    restCursor: () => { panning = false; return ''; },
+    click: (e) => clickGrid(e),
   });
-  // A click (press + release without a real drag) opens the station inspector.
-  cv.addEventListener('click', (e) => {
-    if (moved > 4 || Math.abs(e.clientX - downX) + Math.abs(e.clientY - downY) > 4) return;
-    clickGrid(e);
+  cv.addEventListener('mousemove', (e) => {
+    if (!enabled()) return;
+    // Pan now runs on the window, so this fires mid-drag too; a tooltip chasing
+    // the cursor while panning is noise, so hide it until the drag ends.
+    if (panning) { hideGridHoverTip(); return; }
+    hoverGrid(e);
   });
   cv.addEventListener('mouseleave', () => hideGridHoverTip());
-  cv.addEventListener('dblclick', () => { if (spsView === 'grid' && spsGeom) { gridFit(); drawSurveyGrid(); } });
   // Keep the active SPS view correct after a window resize (the cached grid
   // transform would otherwise go stale; Leaflet needs invalidateSize).
   window.addEventListener('resize', () => {
@@ -9500,7 +12435,6 @@ function createClear() {
   createCrsAuto = true;
   updateCreateCrsBtn();
   planRepaintAll();
-  updateHeaderClear();
   setText('spsCreateLabel', 'Click the map to pick line vertices');
   undoToast('Cleared the survey plan', planUndo);
 }
@@ -9535,7 +12469,6 @@ function planUndo() {
   planInvalidate();
   clearCreateRubberband();
   planRepaintAll();
-  updateHeaderClear();
   setText('spsCreateLabel', `Undid: ${s.label}`);
 }
 
@@ -10171,7 +13104,6 @@ function planRowAction(lineId: number, idx: number, action: string) {
     if (!ln.points.length) planSetLines(createLines.filter((l) => l.id !== lineId));
     planSel = null;
     planRepaintAll();
-    updateHeaderClear();
     return;
   }
   const ni = action === 'up' ? idx - 1 : idx + 1;
@@ -10411,7 +13343,6 @@ function planAnnounceDraft() {
     planSel = null;
     planTargetLineId = null;
     planRepaintAll();
-    updateHeaderClear();
     setText('spsCreateLabel', 'Click the map to pick line vertices');
   }, 'Discard');
 }
@@ -10867,7 +13798,6 @@ async function piDoImport() {
   planInvalidate();
   planFit();
   planRepaintAll();
-  updateHeaderClear();
   closePlanImport();
 
   const n = built.reduce((a, l) => a + l.points.length, 0);
@@ -11487,7 +14417,9 @@ let planTblScrollRaf = 0;
 
 // -- Velocity / semblance --
 function velGeom(cv: HTMLCanvasElement) {
-  return { W: cv.clientWidth || 900, H: cv.clientHeight || 460, ML: 56, MR: 12, MT: 12, MB: 28 };
+  // MR leaves room for the semblance colour bar and its numeric ticks; the top
+  // margin carries the display-state strip (drawn inside the canvas).
+  return { W: cv.clientWidth || 900, H: cv.clientHeight || 460, ...withStrip(VEL_MARGINS) };
 }
 
 async function computeVelocity() {
@@ -11499,9 +14431,23 @@ async function computeVelocity() {
   showProgress('Computing velocity scan…');
   try {
     velResult = await api.semblance({ velMin: numVal('velMin') || 1000, velMax: numVal('velMax') || 5000, velStep: numVal('velStep') || 50 });
-    $('velLabel').textContent = `${velResult.vels.length} velocities · ${velResult.offNote}`;
-    velFit(); // new scan ⇒ auto-fit (clears any stale manual window) + draw
-    updateHeaderClear();   // semblance result now present → enable header Clear
+    // New scan ⇒ KEEP the window being looked at, clamped to what this scan covers.
+    // Velocity (m/s) and time (ms) mean the same thing on the next record, so
+    // holding one fan while paging a folder is exactly the comparison being made;
+    // it resets on Clear or a fresh Open. A window with nothing left inside falls
+    // back to the full scan and says so.
+    const vLast = velResult.vels.length - 1;
+    const dataVLo = velResult.vels[0], dataVHi = velResult.vels[vLast >= 0 ? vLast : 0];
+    const dataTHi = velResult.nT * velResult.dt * 1000;
+    const had = velView.v0 !== null || velView.t0 !== null;
+    const [v0, v1] = keptAxis(velView.v0, velView.v1, dataVLo, dataVHi);
+    const [t0, t1] = keptAxis(velView.t0, velView.t1, 0, dataTHi);
+    const lost = had && ((velView.v0 !== null && v0 === null) || (velView.t0 !== null && t0 === null));
+    velView.v0 = v0; velView.v1 = v1; velView.t0 = t0; velView.t1 = t1;
+    velAxisRange?.clear(); // boxes re-report the window actually painted
+    $('velLabel').textContent = `${velResult.vels.length} velocities · ${velResult.offNote}`
+      + (lost ? ' · previous view does not fit this scan, showing all of it' : '');
+    drawVelocity();
   } catch (e) {
     $('velLabel').textContent = 'Failed: ' + errMsg(e);
   } finally {
@@ -11511,14 +14457,12 @@ async function computeVelocity() {
 
 function drawVelocity() {
   const cv = $('velCanvas') as HTMLCanvasElement;
-  const dpr = window.devicePixelRatio || 1;
+  // Size comes from velGeom, which is ALSO the hit-test side, so the sizing
+  // stays there and is handed to the helper already computed.
   const { W, H, ML, MR, MT, MB } = velGeom(cv);
-  cv.width = Math.round(W * dpr);
-  cv.height = Math.round(H * dpr);
-  const ctx = cv.getContext('2d')!;
-  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-  ctx.fillStyle = '#0d1f33';
-  ctx.fillRect(0, 0, W, H);
+  const surf = beginCanvas(cv, { W, H }, '#0d1f33');
+  if (!surf) return;
+  const ctx = surf.ctx;
   if (!velResult) return;
   const { semb, vels, nT, dt } = velResult;
   const nV = vels.length;
@@ -11530,16 +14474,8 @@ function drawVelocity() {
   off.height = nT;
   const octx = off.getContext('2d')!;
   const img = octx.createImageData(nV, nT);
-  for (let vi = 0; vi < nV; vi++) {
-    for (let ti = 0; ti < nT; ti++) {
-      const [r, g, b] = getColor(Math.max(0, Math.min(1, semb[vi * nT + ti])) * 2 - 1, 'viridis');
-      const idx = (ti * nV + vi) * 4;
-      img.data[idx] = r;
-      img.data[idx + 1] = g;
-      img.data[idx + 2] = b;
-      img.data[idx + 3] = 255;
-    }
-  }
+  // semb is velocity-major (semb[vi * nT + ti]), so the raster reads 'xMajor'.
+  rasterizeToRGBA(semb, nV, nT, magnitudeUnit(1), 'viridis', img.data, false, 'xMajor');
   octx.putImageData(img, 0, 0);
 
   const m = velMapping();
@@ -11552,13 +14488,7 @@ function drawVelocity() {
   const tDataSpan = dataTHi || 1;
   const sx0 = (vLo - dataVLo) / vDataSpan, sx1 = (vHi - dataVLo) / vDataSpan;
   const sy0 = tLo / tDataSpan, sy1 = tHi / tDataSpan;
-  const cl = (v: number) => Math.max(0, Math.min(1, Number.isFinite(v) ? v : 0));
-  let sx = cl(sx0) * nV, sw = (cl(sx1) - cl(sx0)) * nV;
-  let sy = cl(sy0) * nT, sh = (cl(sy1) - cl(sy0)) * nT;
-  if (!(sw >= 1)) { sw = 1; sx = Math.min(sx, nV - 1); }
-  if (!(sh >= 1)) { sh = 1; sy = Math.min(sy, nT - 1); }
-  ctx.imageSmoothingEnabled = false;
-  ctx.drawImage(off, sx, sy, sw, sh, ML, MT, pw, ph);
+  blitRaster(ctx, off, { x: ML, y: MT, w: pw, h: ph }, { sx0, sx1, sy0, sy1 });
 
   // Pick markers - map (v,tMs) through the SAME visible window as the click test.
   const vSpan = Math.max(1, vHi - vLo);
@@ -11578,11 +14508,23 @@ function drawVelocity() {
   ctx.fillStyle = '#7e93ac';
   ctx.font = '10px Consolas, monospace';
   ctx.fillText(`${Math.round(vLo)}-${Math.round(vHi)} m/s  (click to pick)`, ML, H - 8);
-  for (let k = 0; k <= 4; k++) {
-    const y = MT + (ph * k) / 4;
-    const tAt = tLo + (tSpan * k) / 4;
-    ctx.fillText(tAt.toFixed(0) + ' ms', 4, y + 3);
-  }
+  drawMsTimeAxis(ctx, { ML, MT, pw, ph, t0Ms: tLo, t1Ms: tLo + tSpan, target: 4, grid: null, labelX: 4 });
+  // Semblance is a dimensionless coherence measure on a fixed 0..1 scale, so the
+  // bar's numbers are exact rather than data-dependent.
+  drawColorbar(ctx, { x: ML, y: MT, w: pw, h: ph }, W, 'Semblance', (t) => t);
+  // Display-state strip. Semblance is computed by the worker on the stored
+  // samples and displayed on a FIXED 0 to 1 scale, so no display gain, AGC or
+  // clip exists here to change what the panel means.
+  drawStateStrip(ctx, W,
+    [
+      'Velocity semblance · Colour map Viridis',
+      'Scale fixed 0 to 1 (no normalisation)',
+      'Gain ×1.00 (0.0 dB)',
+      'AGC off',
+      'Clip none',
+      `${nV} velocities, ${Math.round(vLo)} to ${Math.round(vHi)} m/s`,
+    ],
+    stripValueLine('Higher semblance is more coherent and is at the yellow end of the map', { quantity: 'Semblance (coherence, 0 to 1)' }));
   syncVelAxisPlaceholders();
 }
 
@@ -11600,8 +14542,8 @@ function velMapping(): {
   const dataVLo = vels[0];
   const dataVHi = vels[vels.length - 1];
   const dataTHi = nT * dt * 1000;
-  const wv = heatAxisWindow(velView.v0, velView.v1, dataVLo, dataVHi);
-  const wt = heatAxisWindow(velView.t0, velView.t1, 0, dataTHi);
+  const wv = boxToWindow(velView.v0, velView.v1, dataVLo, dataVHi);
+  const wt = boxToWindow(velView.t0, velView.t1, 0, dataTHi);
   return { vLo: wv.lo, vHi: wv.hi, tLo: wt.lo, tHi: wt.hi, dataVLo, dataVHi, dataTHi };
 }
 
@@ -11637,6 +14579,55 @@ function velZoomAt(fx: number, fy: number, factor: number) {
   drawVelocity();
 }
 
+/** Drag-pan the velocity panel (X = velocity, Y = time down). Same bridge as
+ *  velZoomAt: velView is expressed as a SpecRange so the shared pan runs it. */
+function velPanAt(fdx: number, fdy: number) {
+  if (!velResult) return;
+  const { vels, nT, dt } = velResult;
+  const ext: HeatExtent = { xLo: vels[0], xHi: vels[vels.length - 1], yLo: 0, yHi: nT * dt * 1000 };
+  const view: SpecRange = { x0: velView.v0, x1: velView.v1, y0: velView.t0, y1: velView.t1 };
+  heatPanAt(view, ext, fdx, fdy, false);
+  velView.v0 = view.x0; velView.v1 = view.x1; velView.t0 = view.y0; velView.t1 = view.y1;
+}
+
+/** Read velocity, time and the semblance value under the cursor. Semblance is a
+ *  dimensionless coherence measure on a fixed 0 to 1 scale, so the number needs
+ *  no unit and no transform statement. */
+function updateVelHover(cv: HTMLCanvasElement, e: MouseEvent) {
+  const el = $opt('velHover');
+  if (!el) return;
+  if ($('panel-vel').style.display === 'none' || !velResult) return;
+  const m = velMapping();
+  if (!m) return;
+  const r = cv.getBoundingClientRect();
+  const { W, H, ML, MR, MT, MB } = velGeom(cv);
+  const pw = W - ML - MR, ph = H - MT - MB;
+  if (!(pw > 0) || !(ph > 0)) return;
+  const fx = (e.clientX - r.left - ML) / pw;
+  const fy = (e.clientY - r.top - MT) / ph;
+  if (fx < 0 || fx > 1 || fy < 0 || fy > 1) { clearVelHover(); return; }
+  const v = m.vLo + fx * (m.vHi - m.vLo);
+  const tMs = m.tLo + fy * (m.tHi - m.tLo);
+  const { semb, vels, nT, dt } = velResult;
+  const parts: Array<string | null> = [
+    Number.isFinite(v) ? `velocity ${Math.round(v)} m/s` : null,
+    hoverMs(tMs),
+  ];
+  // Nearest cell of the semblance grid (velocity-major, semb[vi * nT + ti]).
+  const dtMs = dt * 1000;
+  if (vels.length > 1 && nT > 0 && dtMs > 0) {
+    const step = (vels[vels.length - 1] - vels[0]) / (vels.length - 1);
+    const vi = step !== 0 ? Math.round((v - vels[0]) / step) : 0;
+    const ti = Math.round(tMs / dtMs);
+    if (vi >= 0 && vi < vels.length && ti >= 0 && ti < nT) parts.push(hoverVal('semblance', semb[vi * nT + ti]));
+  }
+  el.textContent = hoverJoin(parts) || 'Hover the panel to read velocity · time · semblance.';
+}
+
+function clearVelHover() {
+  setText('velHover', 'Hover the panel to read velocity · time · semblance.');
+}
+
 /** Toolbar +/- zoom (centred) for the velocity panel. */
 function velZoomButton(factor: number) { if (velResult) velZoomAt(0.5, 0.5, factor); }
 
@@ -11647,25 +14638,42 @@ function velFit() {
   drawVelocity();
 }
 
-/** Wire the velocity panel's wheel-zoom + zoom buttons + manual X/Y range boxes
- *  (called once from init). Click-to-pick stays on its own handler. */
+/** Wire the velocity panel's wheel-zoom + pan + click-to-pick + zoom buttons +
+ *  manual X/Y range boxes (called once from init). */
 function velInteractions() {
   const cv = $('velCanvas') as HTMLCanvasElement;
-  cv.addEventListener('wheel', (e) => {
-    if ($('panel-vel').style.display === 'none' || !velResult) return;
-    e.preventDefault();
-    const r = cv.getBoundingClientRect();
-    const { ML, MR, MT, MB } = velGeom(cv);
-    const W = cv.clientWidth || 900, H = cv.clientHeight || 460;
-    const pw = W - ML - MR, ph = H - MT - MB;
-    if (pw <= 0 || ph <= 0) return;
-    const fx = (e.clientX - r.left - ML) / pw, fy = (e.clientY - r.top - MT) / ph;
-    if (fx < 0 || fx > 1 || fy < 0 || fy > 1) return;
-    velZoomAt(fx, fy, e.deltaY < 0 ? 1 / 1.15 : 1.15);
-  }, { passive: false });
-  cv.addEventListener('dblclick', () => { if (velResult) velFit(); });
-  $opt('velZoomIn')?.addEventListener('click', () => velZoomButton(1 / 1.4));
-  $opt('velZoomOut')?.addEventListener('click', () => velZoomButton(1.4));
+  cv.addEventListener('mousemove', (e) => updateVelHover(cv, e));
+  cv.addEventListener('mouseleave', () => clearVelHover());
+  // Shared plumbing: the Velocity panel had wheel zoom and no pan.
+  attachPlotInteraction(cv, {
+    enabled: () => $('panel-vel').style.display !== 'none' && !!velResult,
+    frac: (e) => {
+      const r = cv.getBoundingClientRect();
+      const { ML, MR, MT, MB } = velGeom(cv);
+      const W = cv.clientWidth || 900, H = cv.clientHeight || 460;
+      const pw = W - ML - MR, ph = H - MT - MB;
+      if (!(pw > 0) || !(ph > 0)) return null;
+      const fx = (e.clientX - r.left - ML) / pw, fy = (e.clientY - r.top - MT) / ph;
+      if (fx < 0 || fx > 1 || fy < 0 || fy > 1) return null;
+      return { fx, fy };
+    },
+    zoomAt: (fx, fy, factor) => velZoomAt(fx, fy, factor),
+    panPx: (dx, dy) => {
+      const { ML, MR, MT, MB } = velGeom(cv);
+      const W = cv.clientWidth || 900, H = cv.clientHeight || 460;
+      const pw = W - ML - MR, ph = H - MT - MB;
+      if (!(pw > 0) || !(ph > 0)) return;
+      velPanAt(dx / pw, dy / ph);
+    },
+    fit: () => velFit(),
+    after: () => drawVelocity(),
+    // Click-to-pick goes through the shared plumbing, so it gets the same
+    // click-versus-drag guard as every other canvas: panning no longer drops a
+    // stray pick, and a double-click fits instead of picking then deleting.
+    click: (e) => onVelClick(e),
+  });
+  $opt('velZoomIn')?.addEventListener('click', () => velZoomButton(1 / PLOT_ZOOM_STEP));
+  $opt('velZoomOut')?.addEventListener('click', () => velZoomButton(PLOT_ZOOM_STEP));
   $opt('velZoomFit')?.addEventListener('click', () => velFit());
   const axHost = $opt('velAxisRange');
   if (axHost) {
@@ -11739,7 +14747,6 @@ async function velRemovePick(idx: number) {
 }
 
 function renderVelPicks() {
-  updateHeaderClear();   // picks changed → refresh header Clear state
   const el = $('velPicks');
   el.innerHTML = '';
   for (const p of velPicks.slice().sort((a, b) => a.tMs - b.tMs)) {
@@ -11796,7 +14803,7 @@ async function exportPicks() {
 //  and blit it (unsmoothed) into the plot rect, with axis labels + a colorbar.
 // ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
 
-const SPEC_M = { ML: 56, MR: 64, MT: 14, MB: 30 }; // shared plot-rect margins (MR leaves room for the colorbar)
+const SPEC_M = withStrip({ ML: 56, MR: 92, MT: 14, MB: 30 }); // shared plot-rect margins (MR leaves room for the colorbar AND its numeric ticks; MT for the display-state strip)
 
 /** Set the active display (segmented control) and (re)fetch/paint it. */
 function setSpecDisplay(d: SpecDisplay) {
@@ -11841,9 +14848,19 @@ async function refreshSpecAvg() {
   showProgress('Computing average spectrum…');
   try {
     specAvg = await api.avgSpectrum(opts);
-    specAvgFit(); // new data ⇒ auto-fit (clears any stale manual window) + draw
-    $('specLabel').textContent = specAvg.log || `Average over ${specAvg.nTraces} traces.`;
-    updateHeaderClear();
+    // New data ⇒ keep the FREQUENCY window (Hz means the same thing on the next
+    // record, and holding one band while paging is the comparison being made),
+    // clamped to this Nyquist; the AMPLITUDE axis re-fits, because a level pinned
+    // on one record says nothing about the next one's scale.
+    const ae = specAvgAutoExtent();
+    const [f0, f1] = keptAxis(specAvgView.x0, specAvgView.x1, ae.f0, ae.f1);
+    const lostF = specAvgView.x0 !== null && f0 === null;
+    specAvgView.x0 = f0; specAvgView.x1 = f1;
+    specAvgView.y0 = specAvgView.y1 = null;
+    specAvgAxis?.clear();
+    drawSpecAvg();
+    $('specLabel').textContent = (specAvg.log || `Average over ${specAvg.nTraces} traces.`)
+      + (lostF ? ' · previous frequency window does not fit these data, showing all of it' : '');
   } catch (e) {
     $('specLabel').textContent = 'Failed: ' + errMsg(e);
   } finally { hideProgress(); specBusy = false; if (specRerunPending) { specRerunPending = false; void refreshSpectrum(); } }
@@ -11908,17 +14925,28 @@ function specAvgZoomAt(fx: number, fy: number, factor: number) {
   let x0 = specAvgView.x0 ?? e.f0, x1 = specAvgView.x1 ?? e.f1;
   let y0 = specAvgView.y0 ?? e.a0, y1 = specAvgView.y1 ?? e.a1;
   // X about the cursor.
-  const ax = x0 + fx * (x1 - x0), wx = (x1 - x0) * factor;
-  x0 = ax - fx * wx; x1 = ax + (1 - fx) * wx;
-  // Y about the cursor (fy=0 at top = a1 / high amplitude).
-  const ay = y1 - fy * (y1 - y0), wy = (y1 - y0) * factor;
-  y1 = ay + fy * wy; y0 = ay - (1 - fy) * wy;
+  const zx = anchorZoom(x0, x1, fx, factor);
+  // Y about the cursor (fy=0 at top = a1 / high amplitude), anchored off the HIGH
+  // edge - deliberately a different float expression from heatZoomAt's yUp form.
+  const zy = anchorZoomYFromHigh(y0, y1, fy, factor);
   // Clamp to the data extent + a minimum span so we never zoom to zero width.
-  const minX = Math.max(1e-6, (e.f1 - e.f0) * 1e-3);
-  const minY = Math.max(1e-9, (e.a1 - e.a0) * 1e-3);
-  x0 = Math.max(e.f0, x0); x1 = Math.min(e.f1, x1); if (x1 - x0 < minX) { x1 = Math.min(e.f1, x0 + minX); x0 = x1 - minX; }
-  y0 = Math.max(e.a0, y0); y1 = Math.min(e.a1, y1); if (y1 - y0 < minY) { y1 = Math.min(e.a1, y0 + minY); y0 = y1 - minY; }
+  // The X floor is 1e-6 here, not the 1e-9 used everywhere else; left as it is.
+  const cx = clampToExtent(zx.lo, zx.hi, e.f0, e.f1, minSpanFor(e.f0, e.f1, 1e-6));
+  const cy = clampToExtent(zy.lo, zy.hi, e.a0, e.a1, minSpanFor(e.a0, e.a1, 1e-9));
+  x0 = cx.lo; x1 = cx.hi; y0 = cy.lo; y1 = cy.hi;
   specAvgView.x0 = x0; specAvgView.x1 = x1; specAvgView.y0 = y0; specAvgView.y1 = y1;
+  drawSpecAvg();
+}
+
+/** Drag-pan the Average view. The amplitude axis has fy = 0 at the HIGH edge,
+ *  the same convention as its zoom, so this passes yUp. */
+function specAvgPanAt(fdx: number, fdy: number) {
+  if (!specAvg) return;
+  const e = specAvgAutoExtent();
+  const view: SpecRange = { x0: specAvgView.x0, x1: specAvgView.x1, y0: specAvgView.y0, y1: specAvgView.y1 };
+  heatPanAt(view, { xLo: e.f0, xHi: e.f1, yLo: e.a0, yHi: e.a1 }, fdx, fdy, true);
+  specAvgView.x0 = view.x0; specAvgView.x1 = view.x1;
+  specAvgView.y0 = view.y0; specAvgView.y1 = view.y1;
   drawSpecAvg();
 }
 
@@ -11961,23 +14989,87 @@ function applyHeatAxis(axis: AxisRangeHandle | null, view: SpecRange, redraw: ()
 function heatZoomAt(view: SpecRange, ext: HeatExtent, fx: number, fy: number, factor: number, yUp: boolean) {
   let x0 = view.x0 ?? ext.xLo, x1 = view.x1 ?? ext.xHi;
   let y0 = view.y0 ?? ext.yLo, y1 = view.y1 ?? ext.yHi;
-  const ax = x0 + fx * (x1 - x0), wx = (x1 - x0) * factor;
-  x0 = ax - fx * wx; x1 = ax + (1 - fx) * wx;
+  const zx = anchorZoom(x0, x1, fx, factor);
   // For yUp, fy=0 (top) anchors the high edge; otherwise fy=0 anchors the low edge.
-  const fyTop = yUp ? (1 - fy) : fy;
-  const ay = y0 + fyTop * (y1 - y0), wy = (y1 - y0) * factor;
-  y0 = ay - fyTop * wy; y1 = ay + (1 - fyTop) * wy;
-  const minX = Math.max(1e-9, (ext.xHi - ext.xLo) * 1e-3);
-  const minY = Math.max(1e-9, (ext.yHi - ext.yLo) * 1e-3);
-  x0 = Math.max(ext.xLo, x0); x1 = Math.min(ext.xHi, x1); if (x1 - x0 < minX) { x1 = Math.min(ext.xHi, x0 + minX); x0 = x1 - minX; }
-  y0 = Math.max(ext.yLo, y0); y1 = Math.min(ext.yHi, y1); if (y1 - y0 < minY) { y1 = Math.min(ext.yHi, y0 + minY); y0 = y1 - minY; }
+  const zy = anchorZoomY(y0, y1, fy, factor, yUp);
+  const minX = minSpanFor(ext.xLo, ext.xHi, 1e-9);
+  const minY = minSpanFor(ext.yLo, ext.yHi, 1e-9);
+  const cx = clampToExtent(zx.lo, zx.hi, ext.xLo, ext.xHi, minX);
+  const cy = clampToExtent(zy.lo, zy.hi, ext.yLo, ext.yHi, minY);
+  x0 = cx.lo; x1 = cx.hi; y0 = cy.lo; y1 = cy.hi;
   view.x0 = x0; view.x1 = x1; view.y0 = y0; view.y1 = y1;
+}
+
+/** Drag-pan a heatmap view by a fraction of the plot rectangle. `fdx`/`fdy` are
+ *  the pixel drag divided by the plot width/height, so dragging right moves the
+ *  window left and the feature under the cursor follows the cursor one to one.
+ *  The span is preserved and the window is shifted back inside the extent rather
+ *  than squashed, so a pan can never invert or collapse an axis. */
+function heatPanAt(view: SpecRange, ext: HeatExtent, fdx: number, fdy: number, yUp: boolean) {
+  if (!Number.isFinite(fdx) || !Number.isFinite(fdy)) return;
+  const x0 = view.x0 ?? ext.xLo, x1 = view.x1 ?? ext.xHi;
+  const y0 = view.y0 ?? ext.yLo, y1 = view.y1 ?? ext.yHi;
+  if (!(x1 > x0) || !(y1 > y0)) return;
+  const dx = fdx * (x1 - x0);
+  // fy = 0 is the TOP. With yUp the top is the HIGH edge, so a downward drag
+  // raises the window; without it the top is the LOW edge and it lowers.
+  const dy = (yUp ? 1 : -1) * fdy * (y1 - y0);
+  const cx = shiftInto(x0 - dx, x1 - dx, ext.xLo, ext.xHi);
+  const cy = shiftInto(y0 + dy, y1 + dy, ext.yLo, ext.yHi);
+  view.x0 = cx.lo; view.x1 = cx.hi; view.y0 = cy.lo; view.y1 = cy.hi;
+}
+
+/** Slide [lo,hi] back inside [eLo,eHi] WITHOUT changing its span (a window wider
+ *  than the extent simply becomes the extent). Guarded so a non-finite edge can
+ *  never reach a draw. */
+function shiftInto(lo: number, hi: number, eLo: number, eHi: number): { lo: number; hi: number } {
+  if (!Number.isFinite(lo) || !Number.isFinite(hi) || !(hi > lo)) return { lo: eLo, hi: eHi };
+  const span = hi - lo;
+  if (span >= eHi - eLo) return { lo: eLo, hi: eHi };
+  if (lo < eLo) return { lo: eLo, hi: eLo + span };
+  if (hi > eHi) return { lo: eHi - span, hi: eHi };
+  return { lo, hi };
 }
 
 /** Clear a heatmap view + its boxes (auto-fit), then repaint. */
 function heatFit(axis: AxisRangeHandle | null, view: SpecRange, redraw: () => void) {
   view.x0 = view.x1 = view.y0 = view.y1 = null;
   axis?.clear();
+  redraw();
+}
+
+/** A short plain-English note appended ONCE to the Spectrum label when a kept
+ *  window had to be given up on for the data just computed. */
+let specKeepNote = '';
+
+/** Clamp ONE kept axis to the extent the new data actually covers. Returns the
+ *  pair unchanged when it already fits, pulled inside when it overhangs, and
+ *  [null, null] (auto) when nothing usable is left. */
+function keptAxis(lo: number | null, hi: number | null, eLo: number, eHi: number): [number | null, number | null] {
+  if (lo === null || hi === null) return [null, null];
+  if (![lo, hi, eLo, eHi].every(Number.isFinite) || !(eHi > eLo)) return [null, null];
+  const minSpan = minSpanFor(eLo, eHi, 1e-9);
+  const a = Math.max(eLo, Math.min(lo, eHi));
+  const b = Math.min(eHi, Math.max(hi, eLo));
+  if (!(b - a >= minSpan)) return [null, null];
+  const w = clampToExtent(a, b, eLo, eHi, minSpan);
+  return Number.isFinite(w.lo) && Number.isFinite(w.hi) && w.hi > w.lo ? [w.lo, w.hi] : [null, null];
+}
+
+/** New heatmap data arrived: KEEP the window the user is looking at (clamped to
+ *  what these data cover) instead of throwing it away. Both axes here are physical
+ *  (Hz, s, wavenumber), so the same window means the same thing on the next trace
+ *  or the next record. A window with nothing left inside falls back to the full
+ *  extent and says so on the label. The boxes are re-synced by the redraw, so they
+ *  always report the window actually painted. */
+function heatKeep(axis: AxisRangeHandle | null, view: SpecRange, ext: HeatExtent, redraw: () => void) {
+  const had = view.x0 !== null || view.y0 !== null;
+  const [x0, x1] = keptAxis(view.x0, view.x1, ext.xLo, ext.xHi);
+  const [y0, y1] = keptAxis(view.y0, view.y1, ext.yLo, ext.yHi);
+  const lost = had && ((view.x0 !== null && x0 === null) || (view.y0 !== null && y0 === null));
+  view.x0 = x0; view.x1 = x1; view.y0 = y0; view.y1 = y1;
+  axis?.clear();
+  if (lost) specKeepNote = ' · previous view does not fit these data, showing all of it';
   redraw();
 }
 
@@ -12013,9 +15105,13 @@ async function refreshSpecGram() {
   showProgress('Computing spectrogram…');
   try {
     specGram = await api.spectrogram({ index: specTraceIdx, winLen });
-    heatFit(specGramAxis, specGramView, () => drawSpecGram()); // new data ⇒ auto-fit + draw
+    specKeepNote = '';
+    heatKeep(specGramAxis, specGramView, specGramExtent(), () => drawSpecGram()); // new data ⇒ keep + clamp + draw
     const ny = specGram.siUs > 0 ? 1e6 / specGram.siUs / 2 : 0;
-    $('specLabel').textContent = `Trace ${specTraceIdx + 1} / ${summary.traceCount} · ${specGram.nFrames} frames × ${specGram.nBins} bins · 0-${ny.toFixed(0)} Hz`;
+    $('specLabel').textContent =
+      `Trace ${specTraceIdx + 1} / ${summary.traceCount} · ${specGram.nFrames} frames × ${specGram.nBins} bins · 0-${ny.toFixed(0)} Hz`
+      + specKeepNote;
+    specKeepNote = ''; // said once, for the data it was about
     const idIn = $opt('specTraceIdx') as HTMLInputElement | null; if (idIn) idIn.value = String(specTraceIdx);
   } catch (e) {
     $('specLabel').textContent = 'Failed: ' + errMsg(e);
@@ -12034,24 +15130,17 @@ function drawSpecGram() {
   const octx = off.getContext('2d')!;
   const img = octx.createImageData(nBins, nFrames);
   const inv = maxMag > 0 ? 1 / maxMag : 1;
-  for (let f = 0; f < nFrames; f++) {
-    const base = f * nBins;
-    for (let k = 0; k < nBins; k++) {
-      const [r, g, b] = getColor(Math.max(0, Math.min(1, mag[base + k] * inv)) * 2 - 1, 'viridis');
-      const idx = (f * nBins + k) * 4;
-      img.data[idx] = r; img.data[idx + 1] = g; img.data[idx + 2] = b; img.data[idx + 3] = 255;
-    }
-  }
+  rasterizeToRGBA(mag, nBins, nFrames, magnitudeUnit(inv), 'viridis', img.data, false, 'rowMajor');
   octx.putImageData(img, 0, 0);
   // Data extent: X = frequency 0..fMax (left→right), Y = time 0..tMax (top→bottom).
   const fMax = freqs.length ? freqs[freqs.length - 1] : 0;
   const tMax = times.length ? times[times.length - 1] : 0;
   // Visible window from the manual X (freq) / Y (time) boxes (or full extent).
-  const wx = heatAxisWindow(specGramView.x0, specGramView.x1, 0, fMax);
-  const wy = heatAxisWindow(specGramView.y0, specGramView.y1, 0, tMax);
+  const wx = boxToWindow(specGramView.x0, specGramView.x1, 0, fMax);
+  const wy = boxToWindow(specGramView.y0, specGramView.y1, 0, tMax);
   // Crop the offscreen image to the window: X 0..fMax → 0..1; Y 0..tMax (top→bottom) → 0..1.
   const fSpan = fMax || 1, tSpan = tMax || 1;
-  blitHeatCrop(ctx, off, plot, { sx0: wx.lo / fSpan, sx1: wx.hi / fSpan, sy0: wy.lo / tSpan, sy1: wy.hi / tSpan });
+  blitRaster(ctx, off, plot, { sx0: wx.lo / fSpan, sx1: wx.hi / fSpan, sy0: wy.lo / tSpan, sy1: wy.hi / tSpan });
   ctx.strokeStyle = '#214564'; ctx.lineWidth = 1; ctx.strokeRect(plot.x, plot.y, plot.w, plot.h);
 
   // Axes labelled over the visible window.
@@ -12059,7 +15148,20 @@ function drawSpecGram() {
     xLabel: 'Frequency (Hz) →', xMin: wx.lo, xMax: wx.hi,
     yLabel: 'Time (s) ↓', yMin: wy.lo, yMax: wy.hi, yUp: false,
   });
-  drawColorbar(ctx, plot, W, 'magnitude');
+  // The colours run 0 .. maxMag linearly, so the bar can be labelled directly.
+  // Spectral magnitude of SEG-Y samples carries no physical unit.
+  drawColorbar(ctx, plot, W, 'Magnitude', (t) => t * (specGram?.maxMag ?? 0));
+  // Display-state strip: the transform chain that produced these colours.
+  drawStateStrip(ctx, W,
+    [
+      'Spectrogram · Colour map Viridis',
+      `Scale linear 0 to the panel maximum (basis ${secNum(maxMag)})`,
+      'Gain ×1.00 (0.0 dB)',
+      'AGC off',
+      'Clip none',
+      `${nFrames} frames × ${nBins} frequency bins`,
+    ],
+    stripValueLine('Magnitude is never negative: larger is at the yellow end of the map', { quantity: 'Magnitude of the sample values' }));
   syncSpecGramPlaceholders();
 }
 
@@ -12072,8 +15174,10 @@ async function refreshSpecFk() {
   showProgress('Computing F-K spectrum…');
   try {
     specFk = await api.fk({});
-    heatFit(specFkAxis, specFkView, () => drawSpecFk()); // new data ⇒ auto-fit + draw
-    $('specLabel').textContent = specFk.log || `f-k grid ${specFk.nF}×${specFk.nKx}.`;
+    specKeepNote = '';
+    heatKeep(specFkAxis, specFkView, specFkExtent(), () => drawSpecFk()); // new data ⇒ keep + clamp + draw
+    $('specLabel').textContent = (specFk.log || `f-k grid ${specFk.nF}×${specFk.nKx}.`) + specKeepNote;
+    specKeepNote = ''; // said once, for the data it was about
   } catch (e) {
     $('specLabel').textContent = 'Failed: ' + errMsg(e);
   } finally { hideProgress(); specBusy = false; if (specRerunPending) { specRerunPending = false; void refreshSpectrum(); } }
@@ -12092,17 +15196,9 @@ function drawSpecFk() {
   const octx = off.getContext('2d')!;
   const img = octx.createImageData(nKx, nF);
   const logMax = Math.log1p(maxMag > 0 ? maxMag : 1);
-  for (let f = 0; f < nF; f++) {
-    const base = f * nKx;
-    for (let c = 0; c < nKx; c++) {
-      const v = logMax > 0 ? Math.log1p(mag[base + c]) / logMax : 0;
-      const [r, g, b] = getColor(Math.max(0, Math.min(1, v)) * 2 - 1, 'viridis');
-      // Flip y so f = 0 sits at the BOTTOM (frequency increases upward, the usual
-      // f-k convention). Source row f → image row (nF-1-f).
-      const idx = ((nF - 1 - f) * nKx + c) * 4;
-      img.data[idx] = r; img.data[idx + 1] = g; img.data[idx + 2] = b; img.data[idx + 3] = 255;
-    }
-  }
+  // flipY puts f = 0 at the BOTTOM (frequency increases upward, the usual f-k
+  // convention): source row f → image row (nF-1-f).
+  rasterizeToRGBA(mag, nKx, nF, logMagnitudeUnit(logMax), 'viridis', img.data, true, 'rowMajor');
   octx.putImageData(img, 0, 0);
   // Data extent: X = wavenumber kMin..kMax (left→right), Y = frequency 0..fMax
   // (0 at the BOTTOM, since image rows were flipped above).
@@ -12110,13 +15206,13 @@ function drawSpecFk() {
   const kMax = kAxis.length ? kAxis[kAxis.length - 1] : 0.5;
   const fMax = fAxis.length ? fAxis[fAxis.length - 1] : 0;
   // Visible window from the manual X (kx) / Y (freq) boxes (or full extent).
-  const wx = heatAxisWindow(specFkView.x0, specFkView.x1, kMin, kMax);
-  const wy = heatAxisWindow(specFkView.y0, specFkView.y1, 0, fMax);
+  const wx = boxToWindow(specFkView.x0, specFkView.x1, kMin, kMax);
+  const wy = boxToWindow(specFkView.y0, specFkView.y1, 0, fMax);
   // Crop the offscreen image. X: kMin..kMax → 0..1 across columns. Y: the image is
   // freq-flipped (row 0 = fMax at top, row last = 0 at bottom), so a [yLo,yHi]
   // freq window maps to source fractions sy0=(fMax-yHi)/fMax (top), sy1=(fMax-yLo)/fMax.
   const kSpan = kMax - kMin || 1, fSpan = fMax || 1;
-  blitHeatCrop(ctx, off, plot, {
+  blitRaster(ctx, off, plot, {
     sx0: (wx.lo - kMin) / kSpan, sx1: (wx.hi - kMin) / kSpan,
     sy0: (fMax - wy.hi) / fSpan, sy1: (fMax - wy.lo) / fSpan,
   });
@@ -12134,7 +15230,22 @@ function drawSpecFk() {
     ctx.beginPath(); ctx.moveTo(kZeroX, plot.y); ctx.lineTo(kZeroX, plot.y + plot.h); ctx.stroke();
     ctx.setLineDash([]);
   }
-  drawColorbar(ctx, plot, W, 'log |F|');
+  // The F-K panel is log-compressed (log1p(mag)/log1p(maxMag)), so invert that to
+  // label the bar with the magnitudes it actually represents.
+  drawColorbar(ctx, plot, W, 'Magnitude', (t) => Math.expm1(t * logMax));
+
+  // Display-state strip: the F-K panel compresses amplitude, which is the one
+  // thing a reader must know before comparing two colours on it.
+  drawStateStrip(ctx, W,
+    [
+      'F-K spectrum · Colour map Viridis',
+      `Scale log-compressed then 0 to the panel maximum (basis ${secNum(maxMag)})`,
+      'Gain ×1.00 (0.0 dB)',
+      'AGC off',
+      'Clip none',
+      `${nF} frequencies × ${nKx} wavenumbers, frequency increases upward`,
+    ],
+    stripValueLine('Magnitude is never negative: larger is at the yellow end of the map', { quantity: 'Magnitude of the sample values' }));
 
   ctx.fillStyle = '#9fb0c4'; ctx.font = '10px "Segoe UI", sans-serif';
   ctx.fillText('Slope f/kx = apparent velocity · steep dips ↔ aliasing at the kx edges', plot.x + 4, plot.y + plot.h + 22);
@@ -12143,67 +15254,18 @@ function drawSpecFk() {
 
 // -- Heatmap helpers (shared by the spectrogram + f-k panels) --
 
-/** Resolve one heatmap axis to a visible [lo,hi] window: the manual edges when
- *  both finite + ordered, else the full data extent [dLo,dHi]. Always returns an
- *  ordered, in-extent pair (clamped) - never NaN - so the blit-crop + axis labels
- *  stay valid even with a stale/garbage box (the helper already guards, this is a
- *  belt-and-braces second line of defence). */
-function heatAxisWindow(manualLo: number | null, manualHi: number | null, dLo: number, dHi: number): { lo: number; hi: number } {
-  const span = dHi - dLo;
-  if (!(span > 0)) return { lo: dLo, hi: dLo + 1 }; // degenerate extent ⇒ unit window
-  let lo = (typeof manualLo === 'number' && Number.isFinite(manualLo)) ? manualLo : dLo;
-  let hi = (typeof manualHi === 'number' && Number.isFinite(manualHi)) ? manualHi : dHi;
-  if (!(hi > lo)) { lo = dLo; hi = dHi; }
-  // Clamp inside the data and keep a minimum span (0.1% of the extent).
-  const minW = span * 1e-3;
-  lo = Math.max(dLo, Math.min(lo, dHi - minW));
-  hi = Math.min(dHi, Math.max(hi, lo + minW));
-  return { lo, hi };
-}
-
-/** Blit a cropped sub-rectangle of the offscreen heatmap into the plot rect,
- *  stretching the visible source window to fill the axes. `srcFrac` gives the
- *  crop in 0..1 source fractions (sx0<sx1 left→right, sy0<sy1 top→bottom of the
- *  OFFSCREEN image). All values are pre-clamped to [0,1] with a ≥1px source span
- *  so drawImage never gets a zero/negative rect (which throws). */
-function blitHeatCrop(
-  ctx: CanvasRenderingContext2D,
-  off: HTMLCanvasElement,
-  plot: { x: number; y: number; w: number; h: number },
-  srcFrac: { sx0: number; sx1: number; sy0: number; sy1: number },
-) {
-  const cl = (v: number) => Math.max(0, Math.min(1, Number.isFinite(v) ? v : 0));
-  const sx0 = cl(srcFrac.sx0), sx1 = cl(srcFrac.sx1), sy0 = cl(srcFrac.sy0), sy1 = cl(srcFrac.sy1);
-  let sx = sx0 * off.width, sw = (sx1 - sx0) * off.width;
-  let sy = sy0 * off.height, sh = (sy1 - sy0) * off.height;
-  if (!(sw >= 1)) { sw = 1; sx = Math.min(sx, off.width - 1); }
-  if (!(sh >= 1)) { sh = 1; sy = Math.min(sy, off.height - 1); }
-  ctx.imageSmoothingEnabled = false;
-  ctx.drawImage(off, sx, sy, sw, sh, plot.x, plot.y, plot.w, plot.h);
-}
-
 /** DPR-correct size the spectrum canvas, paint the dark background, and return a
  *  drawing context + the inner plot rectangle (margins from SPEC_M). */
 function setupHeatmapCanvas(cv: HTMLCanvasElement): { ctx: CanvasRenderingContext2D; W: number; H: number; plot: { x: number; y: number; w: number; h: number } } {
-  const dpr = window.devicePixelRatio || 1;
-  const W = cv.clientWidth || 900, H = cv.clientHeight || 460;
-  cv.width = Math.round(W * dpr); cv.height = Math.round(H * dpr);
-  const ctx = cv.getContext('2d')!;
-  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-  ctx.fillStyle = '#0d1f33'; ctx.fillRect(0, 0, W, H);
-  const { ML, MR, MT, MB } = SPEC_M;
-  return { ctx, W, H, plot: { x: ML, y: MT, w: W - ML - MR, h: H - MT - MB } };
+  return beginPlot(cv, { fallbackW: 900, fallbackH: 460 }, '#0d1f33', SPEC_M)!;
 }
 
 /** Empty-state placeholder for the spectrum canvas (no file / no data). */
 function drawSpecEmpty() {
   const cv = $('specCanvas') as HTMLCanvasElement;
-  const dpr = window.devicePixelRatio || 1;
-  const W = cv.clientWidth || 900, H = cv.clientHeight || 460;
-  cv.width = Math.round(W * dpr); cv.height = Math.round(H * dpr);
-  const ctx = cv.getContext('2d')!;
-  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-  ctx.fillStyle = '#0d1f33'; ctx.fillRect(0, 0, W, H);
+  const surf = beginCanvas(cv, { fallbackW: 900, fallbackH: 460 }, '#0d1f33');
+  if (!surf) return;
+  const { ctx, W, H } = surf;
   ctx.fillStyle = '#5e7186'; ctx.font = '13px Consolas, monospace'; ctx.textAlign = 'center';
   ctx.fillText('Open a seismic file to analyse its spectrum', W / 2, H / 2);
   ctx.textAlign = 'left';
@@ -12221,7 +15283,7 @@ function drawHeatAxesXY(
   const xSpan = a.xMax - a.xMin || 1;
   const xStep = niceStep(xSpan, 8);
   const xStart = Math.ceil(a.xMin / xStep) * xStep;
-  for (let v = xStart; v <= a.xMax + 1e-6; v += xStep) {
+  for (let v = xStart; v <= a.xMax + xStep * 1e-6; v += xStep) {
     const x = plot.x + ((v - a.xMin) / xSpan) * plot.w;
     if (x < plot.x - 0.5 || x > plot.x + plot.w + 0.5) continue;
     ctx.strokeStyle = 'rgba(33,69,100,0.35)';
@@ -12232,10 +15294,11 @@ function drawHeatAxesXY(
   ctx.textAlign = 'left';
   // Y ticks.
   const ySpan = a.yMax - a.yMin || 1;
-  for (let g = 0; g <= 4; g++) {
-    const frac = g / 4;
+  const yStep = niceStep(ySpan, 4);
+  for (const val of tickValues(a.yMin, a.yMax, yStep, yStep * 1e-6)) {
+    const frac = a.yUp ? (a.yMax - val) / ySpan : (val - a.yMin) / ySpan;
     const y = plot.y + frac * plot.h;
-    const val = a.yUp ? a.yMax - frac * ySpan : a.yMin + frac * ySpan;
+    if (!Number.isFinite(y) || y < plot.y - 0.5 || y > plot.y + plot.h + 0.5) continue;
     ctx.strokeStyle = 'rgba(33,69,100,0.35)';
     ctx.beginPath(); ctx.moveTo(plot.x, y); ctx.lineTo(plot.x + plot.w, y); ctx.stroke();
     ctx.fillStyle = '#5e7186';
@@ -12255,23 +15318,73 @@ function drawHeatAxesXY(
   ctx.restore();
 }
 
-/** Vertical viridis colorbar (0..1 normalized) to the right of the plot rect. */
-function drawColorbar(ctx: CanvasRenderingContext2D, plot: { x: number; y: number; w: number; h: number }, W: number, label: string) {
+/** Vertical viridis colorbar to the right of the plot rect, carrying REAL numbers.
+ *
+ *  `valueAt(t)` turns a position on the bar (t = 0 at the bottom, 1 at the top)
+ *  into the quantity that colour represents, so a non-linear mapping (the F-K
+ *  panel is log-compressed) still gets truthful tick labels instead of a
+ *  normalised 0..1 that exists nowhere in the data. A colour that cannot be read
+ *  back as a number is not a measurement.
+ *
+ *  Every tick is finite-guarded; a degenerate range falls back to the old
+ *  high/low wording rather than printing NaN at the user. */
+function drawColorbar(
+  ctx: CanvasRenderingContext2D,
+  plot: { x: number; y: number; w: number; h: number },
+  W: number,
+  label: string,
+  valueAt?: (t: number) => number,
+  map: ColorMapName | string = 'viridis',
+) {
   const bw = 12, bh = Math.min(plot.h, 160);
   const x0 = plot.x + plot.w + 14, y0 = plot.y + (plot.h - bh) / 2;
+  if (!(bh > 2)) return;
   for (let p = 0; p < bh; p++) {
     const t = 1 - p / (bh - 1); // 1 at top → 0 at bottom
-    const [r, g, b] = colorViridis(t * 2 - 1);
+    // Whatever map the panel painted with - a bar that disagrees with the
+    // picture it explains is worse than no bar at all.
+    const [r, g, b] = getColor(t * 2 - 1, map);
     ctx.fillStyle = `rgb(${r},${g},${b})`;
     ctx.fillRect(x0, y0 + p, bw, 1);
   }
   ctx.strokeStyle = 'rgba(200,210,224,0.5)'; ctx.lineWidth = 1;
   ctx.strokeRect(x0 + 0.5, y0 + 0.5, bw, bh);
-  ctx.fillStyle = '#c8d2e0'; ctx.font = '10px Consolas, monospace'; ctx.textAlign = 'left';
-  ctx.fillText('hi', x0 + bw + 4, y0 + 8);
-  ctx.fillText('lo', x0 + bw + 4, y0 + bh);
-  ctx.fillStyle = '#9fb0c4'; ctx.save(); ctx.translate(x0 + bw + 26, y0 + bh / 2); ctx.rotate(Math.PI / 2);
-  ctx.textAlign = 'center'; ctx.fillText(label, 0, 0); ctx.restore(); ctx.textAlign = 'left';
+  ctx.font = '10px Consolas, monospace'; ctx.textAlign = 'left'; ctx.textBaseline = 'middle';
+  const ticks = 4; // 5 labels: bottom, quarters, top
+  let numeric = false;
+  if (valueAt) {
+    numeric = true;
+    for (let k = 0; k <= ticks; k++) if (!Number.isFinite(valueAt(k / ticks))) numeric = false;
+    // A degenerate range (an all-zero panel) would print five identical ticks,
+    // which is worse than saying nothing.
+    if (!(valueAt(1) > valueAt(0))) numeric = false;
+  }
+  if (numeric && valueAt) {
+    ctx.fillStyle = '#c8d2e0';
+    for (let k = 0; k <= ticks; k++) {
+      const t = k / ticks;
+      const y = y0 + (1 - t) * bh;
+      ctx.strokeStyle = 'rgba(200,210,224,0.5)';
+      ctx.beginPath(); ctx.moveTo(x0 + bw, y); ctx.lineTo(x0 + bw + 3, y); ctx.stroke();
+      ctx.fillText(secNum(valueAt(t)), x0 + bw + 6, Math.max(y0 + 5, Math.min(y0 + bh - 5, y)));
+    }
+  } else {
+    ctx.fillStyle = '#c8d2e0';
+    ctx.fillText('high', x0 + bw + 6, y0 + 6);
+    ctx.fillText('low', x0 + bw + 6, y0 + bh - 6);
+  }
+  // Unit/quantity caption sits ABOVE the bar (horizontal, so it stays readable)
+  // rather than rotated beside it, where the tick numbers now live.
+  ctx.fillStyle = '#9fb0c4'; ctx.textBaseline = 'alphabetic';
+  const cap = label;
+  const maxW = W - x0 - 4;
+  let out = cap;
+  if (ctx.measureText(out).width > maxW) {
+    while (out.length > 2 && ctx.measureText(out + '...').width > maxW) out = out.slice(0, -1);
+    out += '...';
+  }
+  ctx.fillText(out, x0, Math.max(10, y0 - 6));
+  ctx.textAlign = 'left'; ctx.textBaseline = 'alphabetic';
 }
 
 /** Repaint the active display from cached data (no fetch) - for resize/theme. */
@@ -12290,9 +15403,9 @@ function specPlotFrac(cv: HTMLCanvasElement, e: MouseEvent): { fx: number; fy: n
   const W = cv.clientWidth || 900, H = cv.clientHeight || 460;
   // Avg view margins (drawSpectrum) vs heatmap margins (SPEC_M).
   const m = specDisplay === 'avg'
-    ? { ML: 56, MR: 16, MT: 18, MB: 28 }
+    ? SPEC_AVG_MARGINS
     : SPEC_M;
-  const pw = W - m.ML - m.MR, ph = H - m.MT - m.MB;
+  const { w: pw, h: ph } = plotRect(W, H, m);
   if (pw <= 0 || ph <= 0) return null;
   const fx = (e.clientX - r.left - m.ML) / pw;
   const fy = (e.clientY - r.top - m.MT) / ph;
@@ -12300,22 +15413,103 @@ function specPlotFrac(cv: HTMLCanvasElement, e: MouseEvent): { fx: number; fy: n
   return { fx, fy };
 }
 
-/** Wheel-zoom dispatcher: route a wheel event to the active spectrum view's zoom
- *  (centred on the cursor). factor <1 = zoom in (wheel up). */
-function specWheelZoom(cv: HTMLCanvasElement, e: WheelEvent) {
+/** Read the spectrum panel under the cursor, in the SAME words as every other
+ *  viewer. Each display names its own axes: frequency and amplitude for the
+ *  average spectrum, frequency / time / magnitude for the spectrogram, and
+ *  wavenumber / frequency / magnitude for f-k. Magnitude is the panel's own
+ *  linear magnitude - the f-k picture is log-compressed for display only, so the
+ *  number quoted is the magnitude, not the compressed value. */
+function updateSpecHover(cv: HTMLCanvasElement, e: MouseEvent) {
+  const el = $opt('specHover');
+  if (!el) return;
+  if ($('panel-spectrum').style.display === 'none') return;
   const f = specPlotFrac(cv, e);
-  if (!f) return;
-  const factor = e.deltaY < 0 ? 1 / 1.15 : 1.15;
+  if (!f) { clearSpecHover(); return; }
+  const parts: Array<string | null> = [];
   if (specDisplay === 'avg') {
     if (!specAvg) return;
-    specAvgZoomAt(f.fx, f.fy, factor); // redraws inside
+    const nyq = specAvg.nyquist || 0;
+    const wx = boxToWindow(specAvgView.x0, specAvgView.x1, 0, nyq);
+    const hz = wx.lo + f.fx * (wx.hi - wx.lo);
+    parts.push(hoverVal('frequency', hz, 'Hz'), null);
+    const n = specAvg.freqs.length;
+    if (n > 0 && nyq > 0) {
+      const k = Math.round((hz / nyq) * (n - 1));
+      if (k >= 0 && k < n) parts.push(hoverVal('amplitude', specAvg.amp[k]));
+    }
   } else if (specDisplay === 'spectrogram') {
     if (!specGram) return;
-    heatZoomAt(specGramView, specGramExtent(), f.fx, f.fy, factor, false);
+    const { freqs, times, mag, nBins, nFrames } = specGram;
+    const fMax = freqs.length ? freqs[freqs.length - 1] : 0;
+    const tMax = times.length ? times[times.length - 1] : 0;
+    const wx = boxToWindow(specGramView.x0, specGramView.x1, 0, fMax);
+    const wy = boxToWindow(specGramView.y0, specGramView.y1, 0, tMax);
+    const hz = wx.lo + f.fx * (wx.hi - wx.lo);
+    const tS = wy.lo + f.fy * (wy.hi - wy.lo);
+    parts.push(hoverVal('frequency', hz, 'Hz'), Number.isFinite(tS) ? hoverMs(tS * 1000) : null);
+    if (nBins > 0 && nFrames > 0 && fMax > 0 && tMax > 0) {
+      const k = Math.round((hz / fMax) * (nBins - 1));
+      const fr = Math.round((tS / tMax) * (nFrames - 1));
+      if (k >= 0 && k < nBins && fr >= 0 && fr < nFrames) parts.push(hoverVal('magnitude', mag[fr * nBins + k]));
+    }
+  } else {
+    if (!specFk) return;
+    const { kAxis, fAxis, mag, nKx, nF } = specFk;
+    const kMin = kAxis.length ? kAxis[0] : -0.5;
+    const kMax = kAxis.length ? kAxis[kAxis.length - 1] : 0.5;
+    const fMax = fAxis.length ? fAxis[fAxis.length - 1] : 0;
+    const wx = boxToWindow(specFkView.x0, specFkView.x1, kMin, kMax);
+    const wy = boxToWindow(specFkView.y0, specFkView.y1, 0, fMax);
+    const kx = wx.lo + f.fx * (wx.hi - wx.lo);
+    const hz = wy.hi - f.fy * (wy.hi - wy.lo); // frequency increases UPWARD here
+    parts.push(hoverVal('wavenumber', kx, 'cyc/trace'), hoverVal('frequency', hz, 'Hz'));
+    if (nKx > 0 && nF > 0 && kMax > kMin && fMax > 0) {
+      const c = Math.round(((kx - kMin) / (kMax - kMin)) * (nKx - 1));
+      const fr = Math.round((hz / fMax) * (nF - 1));
+      if (c >= 0 && c < nKx && fr >= 0 && fr < nF) parts.push(hoverVal('magnitude', mag[fr * nKx + c]));
+    }
+  }
+  el.textContent = hoverJoin(parts) || 'Hover the panel to read frequency · time · magnitude.';
+}
+
+function clearSpecHover() {
+  setText('specHover', specDisplay === 'fk'
+    ? 'Hover the panel to read wavenumber · frequency · magnitude.'
+    : specDisplay === 'avg'
+      ? 'Hover the panel to read frequency · amplitude.'
+      : 'Hover the panel to read frequency · time · magnitude.');
+}
+
+/** Zoom dispatcher: route a cursor-anchored zoom to the active spectrum view.
+ *  factor <1 = zoom in (wheel up). */
+function specZoomAtCursor(fx: number, fy: number, factor: number) {
+  if (specDisplay === 'avg') {
+    if (!specAvg) return;
+    specAvgZoomAt(fx, fy, factor); // redraws inside
+  } else if (specDisplay === 'spectrogram') {
+    if (!specGram) return;
+    heatZoomAt(specGramView, specGramExtent(), fx, fy, factor, false);
     drawSpecGram();
   } else {
     if (!specFk) return;
-    heatZoomAt(specFkView, specFkExtent(), f.fx, f.fy, factor, true); // F-K freq axis is up
+    heatZoomAt(specFkView, specFkExtent(), fx, fy, factor, true); // F-K freq axis is up
+    drawSpecFk();
+  }
+}
+
+/** Pan dispatcher: the drag, as a fraction of the plot rectangle, applied to the
+ *  active spectrum view. Each display keeps its own Y convention (the average
+ *  spectrum and f-k run their high edge at the top, the spectrogram runs time
+ *  down), so the sense is passed per display rather than assumed. */
+function specPanBy(fdx: number, fdy: number) {
+  if (specDisplay === 'avg') { specAvgPanAt(fdx, fdy); return; } // redraws inside
+  if (specDisplay === 'spectrogram') {
+    if (!specGram) return;
+    heatPanAt(specGramView, specGramExtent(), fdx, fdy, false);
+    drawSpecGram();
+  } else {
+    if (!specFk) return;
+    heatPanAt(specFkView, specFkExtent(), fdx, fdy, true);
     drawSpecFk();
   }
 }
@@ -12348,13 +15542,25 @@ function initSpectrum() {
   $opt('specDispGram')?.addEventListener('click', () => setSpecDisplay('spectrogram'));
   $opt('specDispFk')?.addEventListener('click', () => setSpecDisplay('fk'));
 
-  // Wheel-zoom over the shared canvas → the active view's range state.
+  // Shared plumbing over the canvas the three displays share: wheel zoom about
+  // the cursor, drag pan and double-click fit, all routed to whichever view is
+  // active. Before this the Spectrum had wheel zoom only.
   const specCv = $('specCanvas') as HTMLCanvasElement;
-  specCv.addEventListener('wheel', (e) => {
-    if ($('panel-spectrum').style.display === 'none' || !summary || summary.traceCount === 0) return;
-    e.preventDefault();
-    specWheelZoom(specCv, e);
-  }, { passive: false });
+  attachPlotInteraction(specCv, {
+    enabled: () => $('panel-spectrum').style.display !== 'none' && !!summary && summary.traceCount > 0,
+    frac: (e) => specPlotFrac(specCv, e),
+    zoomAt: (fx, fy, factor) => specZoomAtCursor(fx, fy, factor),
+    panPx: (dx, dy) => {
+      const m = specDisplay === 'avg' ? SPEC_AVG_MARGINS : SPEC_M;
+      const W = specCv.clientWidth || 900, H = specCv.clientHeight || 460;
+      const { w: pw, h: ph } = plotRect(W, H, m);
+      if (!(pw > 0) || !(ph > 0)) return;
+      specPanBy(dx / pw, dy / ph);
+    },
+    fit: () => specZoomFit(),
+  });
+  specCv.addEventListener('mousemove', (e) => updateSpecHover(specCv, e));
+  specCv.addEventListener('mouseleave', () => clearSpecHover());
 
   // -- Average-spectrum controls --
   $opt('specDbLin')?.addEventListener('click', () => setSpecDb(false));
@@ -12365,8 +15571,8 @@ function initSpectrum() {
     $opt(id)?.addEventListener('keydown', (e) => { if ((e as KeyboardEvent).key === 'Enter') { e.preventDefault(); void refreshSpecAvg(); } });
   }
   // Average view: zoom buttons + manual X (freq) / Y (amp) range boxes.
-  $opt('specAvgZoomIn')?.addEventListener('click', () => specZoomButton(1 / 1.4));
-  $opt('specAvgZoomOut')?.addEventListener('click', () => specZoomButton(1.4));
+  $opt('specAvgZoomIn')?.addEventListener('click', () => specZoomButton(1 / PLOT_ZOOM_STEP));
+  $opt('specAvgZoomOut')?.addEventListener('click', () => specZoomButton(PLOT_ZOOM_STEP));
   $opt('specAvgZoomFit')?.addEventListener('click', () => specZoomFit());
   const avgHost = $opt('specAvgAxis');
   if (avgHost) {
@@ -12387,8 +15593,8 @@ function initSpectrum() {
   });
   $opt('specWin')?.addEventListener('change', () => void refreshSpecGram());
   // Spectrogram view: zoom buttons + manual X (freq) / Y (time) range boxes.
-  $opt('specGramZoomIn')?.addEventListener('click', () => specZoomButton(1 / 1.4));
-  $opt('specGramZoomOut')?.addEventListener('click', () => specZoomButton(1.4));
+  $opt('specGramZoomIn')?.addEventListener('click', () => specZoomButton(1 / PLOT_ZOOM_STEP));
+  $opt('specGramZoomOut')?.addEventListener('click', () => specZoomButton(PLOT_ZOOM_STEP));
   $opt('specGramZoomFit')?.addEventListener('click', () => specZoomFit());
   const gramHost = $opt('specGramAxis');
   if (gramHost) {
@@ -12401,8 +15607,8 @@ function initSpectrum() {
   // -- F-K controls --
   $opt('specFkCompute')?.addEventListener('click', () => void refreshSpecFk());
   // F-K view: zoom buttons + manual X (wavenumber) / Y (freq) range boxes.
-  $opt('specFkZoomIn')?.addEventListener('click', () => specZoomButton(1 / 1.4));
-  $opt('specFkZoomOut')?.addEventListener('click', () => specZoomButton(1.4));
+  $opt('specFkZoomIn')?.addEventListener('click', () => specZoomButton(1 / PLOT_ZOOM_STEP));
+  $opt('specFkZoomOut')?.addEventListener('click', () => specZoomButton(PLOT_ZOOM_STEP));
   $opt('specFkZoomFit')?.addEventListener('click', () => specZoomFit());
   const fkHost = $opt('specFkAxis');
   if (fkHost) {
@@ -12442,7 +15648,6 @@ function clearSpectrum() {
   specAvgAxis?.clear(); specGramAxis?.clear(); specFkAxis?.clear();
   drawSpecEmpty();
   $('specLabel').textContent = 'Open a seismic file to analyse its spectrum.';
-  updateHeaderClear();
 }
 
 
@@ -12842,7 +16047,6 @@ async function clearLogRows() {
   saveLog();
   renderLog();
   audit('clear', `cleared observer-log records (${n} row${n === 1 ? '' : 's'})`, 'obslog');
-  updateHeaderClear();
 }
 
 // -- File persistence: save / reload the whole log as JSON ----------------------
@@ -12887,7 +16091,6 @@ async function reloadLogJson() {
   ensureColRoles(); // backfill v2 roles onto columns from older saved files
   saveLog();        // mirror into localStorage so it survives a tab switch
   renderLog();      // logConfigured() is now true → grid is shown, wizard skipped
-  updateHeaderClear();
   setLogExportStatus('Reloaded log JSON.');
   audit('reconfigure', `reloaded observer-log from file (${logRows.length} records, ${logColumns.length} columns)`, 'obslog');
 }
@@ -13010,7 +16213,7 @@ function buildLogReportHtml(): string {
       return `<tr><td class="rn">${i + 1}</td>${cells}</tr>`;
     })
     .join('');
-  const generated = new Date().toLocaleString();
+  const generated = fmtStamp(new Date());
   return `<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -13275,7 +16478,6 @@ async function buildLog() {
 
   saveLog();
   renderLog();
-  updateHeaderClear();
 }
 
 // -- Grid ---------------------------------------------------------------------
@@ -13578,7 +16780,6 @@ async function importRowsFromSps(): Promise<void> {
   logRows = rows;
   saveLog();
   renderLog();
-  updateHeaderClear();
   setLogExportStatus(`Imported ${rows.length} source${rows.length === 1 ? '' : 's'} from SPS.`);
 }
 
@@ -13803,7 +17004,6 @@ function applyColumnsManager(): void {
   saveLog();
   closeColumnsManager();
   renderLog();
-  updateHeaderClear();
   setLogExportStatus('Columns updated.');
 }
 
@@ -13897,7 +17097,6 @@ async function applyTemplate(t: LogTemplate): Promise<void> {
   saveLog();
   renderLog();
   syncTimeSrcUI();
-  updateHeaderClear();
   setLogExportStatus(`Loaded template “${t.name}”.`);
 }
 
@@ -14054,7 +17253,6 @@ async function logDeleteRow(i: number) {
   logRows.splice(pos, 1);
   saveLog();
   renderLog();
-  updateHeaderClear();
   audit('delete', `observer-log record (row ${pos + 1})`, 'obslog');
   let undone = false;
   undoToast(`Deleted record ${pos + 1}`, () => {
@@ -14064,7 +17262,6 @@ async function logDeleteRow(i: number) {
     logRows.splice(at, 0, saved);
     saveLog();
     renderLog();
-    updateHeaderClear();
     audit('undo-delete', `observer-log record (row ${at + 1})`, 'obslog');
   });
 }
@@ -14301,7 +17498,6 @@ function addLogRow() {
   logRows.push(r);
   saveLog();
   renderLog();
-  updateHeaderClear();
 }
 
 // -- Renumber rows below (fix stuck / re-shot shots · recompute interval) --
@@ -14371,7 +17567,6 @@ function applyRenumber(): void {
   }
   saveLog();
   renderLog();
-  updateHeaderClear();
   const count = logRows.length - fromIdx;
   audit('renumber', `renumbered SP${startFile != null ? ' + File#' : ''} from row ${fromIdx + 1} (start SP ${startSP}, interval ${interval}${startFile != null ? `, File# start ${startFile}` : ''}) across ${count} row${count === 1 ? '' : 's'}`, 'obslog');
   closeRenumberModal();
@@ -14857,7 +18052,6 @@ async function trigCreateRow(opts: { ts: string | null; sp: number | null; line:
   try { const i = logRows.indexOf(r); if (i >= 0) await autoFillSpsRow(i); } catch { /* lookup failure is fine */ }
   saveLog();
   renderLog();
-  updateHeaderClear();
   const n = logRows.length;
   const spTxt = num(r['shotPoint']) != null ? ` SP ${r['shotPoint']}` : '';
   audit('trigger', `row ${n} added by trigger (${opts.source}${spTxt})`, 'obslog');
@@ -15591,7 +18785,6 @@ function restoreLastBackup(kind: BackupKind): boolean {
           ensureColRoles();
           saveLog();
           renderLog();
-          updateHeaderClear();
         }
         break;
       }
@@ -15604,7 +18797,6 @@ function restoreLastBackup(kind: BackupKind): boolean {
           drawWorkbench();
           wbUpdateAnalysis();
           wbUpdateExport();
-          updateHeaderClear();
         }
         break;
       }
@@ -15613,7 +18805,6 @@ function restoreLastBackup(kind: BackupKind): boolean {
           velPicks = snap.data as typeof velPicks;
           drawVelocity();
           renderVelPicks();
-          updateHeaderClear();
         }
         break;
       }
@@ -15637,7 +18828,6 @@ function restoreLastBackup(kind: BackupKind): boolean {
           if (d.mode === '3D' || d.mode === '2D') setCreateMode(d.mode);
           planSel = null;
           planRepaintAll();
-          updateHeaderClear();
         }
         break;
       }
@@ -15761,7 +18951,7 @@ function renderBackupList() {
     if (list.length) {
       const last = list[list.length - 1];
       let when = last.ts;
-      try { const d = new Date(last.ts); if (!isNaN(d.getTime())) when = d.toLocaleString(); } catch { /* keep raw */ }
+      try { const d = new Date(last.ts); if (!isNaN(d.getTime())) when = fmtStamp(d); } catch { /* keep raw */ }
       meta.textContent = `${list.length} snapshot${list.length === 1 ? '' : 's'} · last ${when}`;
       meta.title = last.label;
     } else {
@@ -15806,7 +18996,7 @@ function renderAuditList() {
     const ts = document.createElement('span'); ts.className = 'ae-ts';
     // Local-friendly compact timestamp; full ISO in the tooltip.
     let label = e.ts;
-    try { const d = new Date(e.ts); if (!isNaN(d.getTime())) label = d.toLocaleString(); } catch { /* keep raw */ }
+    try { const d = new Date(e.ts); if (!isNaN(d.getTime())) label = fmtStamp(d); } catch { /* keep raw */ }
     ts.textContent = label; ts.title = e.ts;
     const user = document.createElement('span'); user.className = 'ae-user'; user.textContent = e.user || '(unsigned)';
     const act = document.createElement('span'); act.className = 'ae-act'; act.textContent = e.action;
@@ -15994,6 +19184,52 @@ function swZoomButton(id: string, factor: number): void {
   swZoomSet(id, { xMin: cx - hx, xMax: cx + hx, yMin: cy - hy, yMax: cy + hy });
 }
 
+/** The plot's live window: the pinned view if there is one, else the extent of
+ *  the frame it last drew. Null when the plot has never drawn. */
+function swZoomWin(id: string): SwZoomWin | null {
+  const v = swZoomView.get(id);
+  if (v) return v;
+  const f = swZoomFrame.get(id);
+  return f ? { xMin: f.xMin, xMax: f.xMax, yMin: f.yMin, yMax: f.yMax } : null;
+}
+
+/** Cursor pixel to a fraction of the plot rectangle, from the frame the plot
+ *  last drew. Null when off the plot rect (or before the first draw). */
+function swZoomFrac(id: string, cv: HTMLCanvasElement, e: MouseEvent): { fx: number; fy: number } | null {
+  const f = swZoomFrame.get(id);
+  if (!f || !(f.rect.w > 0) || !(f.rect.h > 0)) return null;
+  const p = canvasPx(cv, e);
+  const fx = (p.x - f.rect.x) / f.rect.w, fy = (p.y - f.rect.y) / f.rect.h;
+  if (fx < 0 || fx > 1 || fy < 0 || fy > 1) return null;
+  return { fx, fy };
+}
+
+/** Wheel zoom anchored at the cursor, the same step and the same sense as every
+ *  other data canvas. A Sweeps plot draws y UPWARD unless its frame says the
+ *  axis runs down (the pilot-signal plot), so the anchor sense comes from the
+ *  frame rather than being assumed. */
+function swZoomAtCursor(id: string, fx: number, fy: number, factor: number): void {
+  const cur = swZoomWin(id), f = swZoomFrame.get(id);
+  if (!cur || !f) return;
+  const zx = anchorZoom(cur.xMin, cur.xMax, fx, factor);
+  const zy = anchorZoomY(cur.yMin, cur.yMax, fy, factor, !f.yDown);
+  if (![zx.lo, zx.hi, zy.lo, zy.hi].every(Number.isFinite)) return;
+  swZoomSet(id, { xMin: zx.lo, xMax: zx.hi, yMin: zy.lo, yMax: zy.hi });
+}
+
+/** Drag pan by a fraction of the plot rectangle (Shift-drag; a plain drag is the
+ *  existing box zoom). Dragging right moves the window left, so the feature under
+ *  the cursor follows the cursor. */
+function swZoomPanBy(id: string, fdx: number, fdy: number): void {
+  const cur = swZoomWin(id), f = swZoomFrame.get(id);
+  if (!cur || !f) return;
+  const dx = fdx * (cur.xMax - cur.xMin);
+  const dy = (f.yDown ? -1 : 1) * fdy * (cur.yMax - cur.yMin);
+  const w = { xMin: cur.xMin - dx, xMax: cur.xMax - dx, yMin: cur.yMin + dy, yMax: cur.yMax + dy };
+  if (![w.xMin, w.xMax, w.yMin, w.yMax].every(Number.isFinite)) return;
+  swZoomSet(id, w);
+}
+
 /** Convert the drag-box (canvas px) to a data window via the plot's last frame. */
 function swZoomFromBox(id: string, b: { x0: number; y0: number; x1: number; y1: number }): void {
   const f = swZoomFrame.get(id);
@@ -16051,8 +19287,8 @@ function swZoomDecorate(cv: HTMLCanvasElement): void {
     b.addEventListener('mousedown', (e) => e.stopPropagation()); // don't start a box-drag under the button
     return b;
   };
-  bar.appendChild(mk('+', 'Zoom in', () => swZoomButton(cv.id, 1 / 1.4)));
-  bar.appendChild(mk('-', 'Zoom out', () => swZoomButton(cv.id, 1.4)));
+  bar.appendChild(mk('+', 'Zoom in', () => swZoomButton(cv.id, 1 / PLOT_ZOOM_STEP)));
+  bar.appendChild(mk('-', 'Zoom out', () => swZoomButton(cv.id, PLOT_ZOOM_STEP)));
   bar.appendChild(mk('⤢', 'Reset zoom (fit)', () => swZoomSet(cv.id, null)));
   wrap.appendChild(bar);
 }
@@ -16064,14 +19300,30 @@ function initSweepZoom(): void {
     if (!cv) continue;
     swZoomDecorate(cv);
     cv.style.cursor = 'crosshair';
-    cv.addEventListener('mousedown', (e) => {
-      if (e.button !== 0) return;
-      const p = canvasPx(cv, e);
-      swZoomDrag = { id: cv.id, cv, x0: p.x, y0: p.y, x1: p.x, y1: p.y };
-      swZoomRubber(cv, swZoomDrag);
-      e.preventDefault();
+    // Shared plumbing. The plain left drag stays the box zoom these plots have
+    // always had, so pan is on Shift-drag; wheel zoom and double-click fit are
+    // the same everywhere.
+    attachPlotInteraction(cv, {
+      enabled: () => !!swZoomFrame.get(cv.id),
+      frac: (e) => swZoomFrac(cv.id, cv, e),
+      zoomAt: (fx, fy, factor) => swZoomAtCursor(cv.id, fx, fy, factor),
+      panModifier: (e) => e.shiftKey,
+      panPx: (dx, dy) => {
+        const f = swZoomFrame.get(cv.id);
+        if (!f || !(f.rect.w > 0) || !(f.rect.h > 0)) return;
+        swZoomPanBy(cv.id, dx / f.rect.w, dy / f.rect.h);
+      },
+      fit: () => swZoomSet(cv.id, null), // double-click resets to fit
+      restCursor: () => 'crosshair',
+      claimDown: (e) => {
+        if (e.button !== 0 || e.shiftKey) return false; // Shift-drag pans instead
+        const p = canvasPx(cv, e);
+        swZoomDrag = { id: cv.id, cv, x0: p.x, y0: p.y, x1: p.x, y1: p.y };
+        swZoomRubber(cv, swZoomDrag);
+        e.preventDefault();
+        return true;
+      },
     });
-    cv.addEventListener('dblclick', () => swZoomSet(cv.id, null)); // double-click resets to fit
   }
   window.addEventListener('mousemove', (e) => {
     if (!swZoomDrag) return;
@@ -16210,7 +19462,7 @@ function swDrawSignalPlot(): void {
     s1 = Math.max(s0 + 1, Math.min(n, Math.round(v.yMax)));
     ampRange = { min: v.xMin, max: v.xMax };
   }
-  drawTraceCore(cv, t, s0, s1, ampRange);
+  drawTraceCore(cv, t, s0, s1, ampRange, { name: 'Sweep signal', polarity: false });
   const W = cv.clientWidth || 800, H = cv.clientHeight || 320;
   const rect = { x: TRC_ML, y: TRC_MT, w: W - TRC_ML - TRC_MR, h: H - TRC_MT - TRC_MB };
   let xMin: number, xMax: number;
@@ -16319,7 +19571,6 @@ async function swBuildSweep(auto = false) {
     setText('swStatus', '⚠ ' + errMsg(e));
   } finally {
     if (heavy) hideProgress();
-    updateHeaderClear();
   }
 }
 
@@ -16337,7 +19588,7 @@ function refreshSweeps() {
   if (swResult && swMeasured) swRefreshQC(true);
 }
 
-/** Clear the built sweep + measured trace (header Clear). Form values stay. */
+/** Clear the built sweep + measured trace (the tab Clear button). Form values stay. */
 function swClear() {
   swResult = null;
   swSpec = null;
@@ -16351,7 +19602,6 @@ function swClear() {
   const adv = $opt('swAdvisories');
   if (adv) { adv.style.display = 'none'; adv.textContent = ''; }
   swClearQCPanel();
-  updateHeaderClear();
 }
 
 // -- Segment editor (Pelton segmented model, ≤16 segments) ------------------
@@ -16756,7 +20006,7 @@ function buildSweepSheetHtml(): string {
     .join('');
   const advHtml = r.meta.advisories.map((a) => `<li>${htmlEscape(a)}</li>`).join('');
   const qcHtml = swQcSummaryHtml();
-  const generated = new Date().toLocaleString();
+  const generated = fmtStamp(new Date());
   return `<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -16902,7 +20152,6 @@ async function swQcLoad() {
     setText('swQcFileLabel', '⚠ ' + errMsg(e));
   } finally {
     hideProgress();
-    updateHeaderClear();
   }
 }
 
@@ -17116,7 +20365,6 @@ function initSweeps() {
   $opt('swQcClearBtn')?.addEventListener('click', () => {
     swMeasured = null;
     swClearQCPanel();
-    updateHeaderClear();
   });
   for (const id of ['swQcThrAvg', 'swQcThrPeak', 'swQcThrThd']) {
     $opt(id)?.addEventListener('input', () => { swReadQcThresholds(); swQcVerdictRefresh(); });
@@ -17150,7 +20398,7 @@ const fInput = (id: string) => $opt(id) as HTMLInputElement | null;
 function fldLog(msg: string): void {
   const box = $opt('fldLog');
   if (!box) return;
-  const t = new Date().toLocaleTimeString();
+  const t = fmtClock(new Date());
   fieldLogLines.push(`[${t}] ${msg}`);
   if (fieldLogLines.length > 400) fieldLogLines.splice(0, fieldLogLines.length - 400);
   box.textContent = fieldLogLines.join('\n');
@@ -17248,7 +20496,7 @@ async function fldLoadHistory(): Promise<void> {
   try { entries = await api.fieldHistoryGet(); } catch { entries = []; }
   body.innerHTML = '';
   for (const e of entries.slice(0, 200)) {
-    const time = new Date((e.timestamp || 0) * 1000).toLocaleTimeString();
+    const time = fmtClock(new Date((e.timestamp || 0) * 1000));
     const icon = e.action === 'deleted' ? '🗑' : '⬇';
     const file = (e.filename || '').split('/').pop() || e.filename;
     // Every value below came from a peer over the network - build the cells with
@@ -17603,7 +20851,7 @@ function init() {
   for (const id of ['traceOpenBtn', 'secOpenBtn', 'specOpenBtn', 'wbOpenBtn']) {
     $opt(id)?.addEventListener('click', () => void onOpen());
   }
-  for (const id of ['traceClearBtn', 'secClearBtn', 'specClearBtn', 'wbTabClearBtn', 'ologClearBtn']) {
+  for (const id of ['traceClearBtn', 'secClearBtn', 'specClearBtn', 'wbTabClearBtn', 'ologClearBtn', 'swClearBtn']) {
     $opt(id)?.addEventListener('click', () => clearActiveTab());
   }
   // Provenance foundation: signature identity · audit log · confirm + undo.
@@ -17701,20 +20949,100 @@ function init() {
     $('traceLabel').textContent = `Added trace ${lastTrace.index + 1} to Workbench`;
   });
   traceInteractions(); // wheel-zoom / drag-pan / dblclick-fit + toolbar on the trace TIME axis
-  for (const id of ['secMode', 'secColor']) ($(id) as HTMLSelectElement).addEventListener('change', redrawSection);
+  for (const id of ['secMode', 'secColor']) ($(id) as HTMLSelectElement).addEventListener('change', () => { secSyncScaleControls(); redrawSection(); });
+  // Excursion + display clip are pure DISPLAY settings: redraw only, no refetch,
+  // so the current zoom survives changing them.
+  $opt('secExc')?.addEventListener('change', () => redrawSection());
+  $opt('secClip')?.addEventListener('change', () => redrawSection());
   // Gain fires on every pixel of the drag - coalesce the full (potentially heavy
   // wiggle/VA) section repaint to ONE per animation frame so large sections stay
   // responsive while dragging. Behaviour is identical, just throttled to frame rate.
   let secGainRaf = false;
-  ($('secGain') as HTMLInputElement).addEventListener('input', () => {
+  const secGainThrottled = (src: 'db' | 'box' | 'reset') => {
     if (secGainRaf) return;
     secGainRaf = true;
-    requestAnimationFrame(() => { secGainRaf = false; redrawSection(); });
-  });
-  ($('secAgc') as HTMLInputElement).addEventListener('change', () => void refreshSection());
+    requestAnimationFrame(() => { secGainRaf = false; secSyncGain(src); });
+  };
+  // dB slider drives the multiplier box; the box is the source of truth. The box
+  // commits on 'change' (not 'input') so a half-typed "0." never reaches a draw.
+  $opt('secGainDb')?.addEventListener('input', () => secGainThrottled('db'));
+  ($('secGain') as HTMLInputElement).addEventListener('change', () => secSyncGain('box'));
+  $opt('secGainReset')?.addEventListener('click', () => secSyncGain('reset'));
+  // Scaling mode + percentile are pure DISPLAY settings: redraw only, no refetch,
+  // so the current zoom survives switching between them.
+  $opt('secScaleMode')?.addEventListener('change', () => { secSyncScaleControls(); redrawSection(); });
+  // The gain law and its exponent are a pure REDRAW: the law is applied in the
+  // renderer over the matrix the worker already sent, so switching it never
+  // refetches and never throws away the zoom or a typed axis range.
+  $opt('secGainLaw')?.addEventListener('change', () => { secSyncScaleControls(); redrawSection(); });
+  $opt('secGainLawExp')?.addEventListener('change', () => { secSyncScaleControls(); redrawSection(); });
+  $opt('secAttrToggle')?.addEventListener('click', () => void secToggleAttr());
+  // -- Near-trace gather (modal off the File Viewer's file-nav row) --
+  $opt('secGatherBtn')?.addEventListener('click', () => openGather());
+  $opt('gatherClose')?.addEventListener('click', closeGather);
+  $opt('gatherBack')?.addEventListener('click', (e) => { if (e.target === $opt('gatherBack')) closeGather(); });
+  $opt('gatherSelectBy')?.addEventListener('change', () => gatherSyncControls());
+  $opt('gatherRun')?.addEventListener('click', () => void runGather());
+  // -- Save the panel on screen as a PNG image (every canvas viewer, one shared
+  // mechanism in exportViewImage) --
+  $opt('secExportImgBtn')?.addEventListener('click', () => void exportViewImage({
+    canvas: $opt('secCanvas') as HTMLCanvasElement | null,
+    redraw: () => { if (lastSection) drawSection($('secCanvas') as HTMLCanvasElement, lastSection); },
+    view: 'File Viewer section', source: exportSourceName(), suffix: 'section',
+  }));
+  $opt('traceExportImgBtn')?.addEventListener('click', () => void exportViewImage({
+    canvas: $opt('traceCanvas') as HTMLCanvasElement | null,
+    redraw: () => renderTrace(),
+    view: traceMode === 'spectrum' ? 'Trace Inspector, amplitude spectrum' : 'Trace Inspector, waveform',
+    source: exportSourceName(), suffix: 'trace',
+  }));
+  $opt('wbExportImgBtn')?.addEventListener('click', () => void exportViewImage({
+    canvas: $opt('wbCanvas') as HTMLCanvasElement | null,
+    redraw: () => drawWorkbench(),
+    view: 'Trace Workbench',
+    // The collection can hold traces from several files, so no single file name
+    // would be honest here.
+    source: 'traces collected in the Workbench', stem: 'workbench', suffix: 'traces',
+  }));
+  $opt('velExportImgBtn')?.addEventListener('click', () => void exportViewImage({
+    canvas: $opt('velCanvas') as HTMLCanvasElement | null,
+    redraw: () => drawVelocity(),
+    view: 'Velocity semblance', source: exportSourceName(), suffix: 'velocity',
+  }));
+  $opt('specExportImgBtn')?.addEventListener('click', () => void exportViewImage({
+    canvas: $opt('specCanvas') as HTMLCanvasElement | null,
+    redraw: () => repaintSpectrum(),
+    view: specDisplay === 'avg' ? 'Average amplitude spectrum'
+      : specDisplay === 'spectrogram' ? 'Spectrogram' : 'F-K spectrum',
+    source: exportSourceName(),
+    suffix: specDisplay === 'avg' ? 'spectrum' : specDisplay === 'spectrogram' ? 'spectrogram' : 'fk',
+  }));
+  $opt('gatherExportImgBtn')?.addEventListener('click', () => void exportViewImage({
+    canvas: $opt('gatherCanvas') as HTMLCanvasElement | null,
+    redraw: () => drawGatherPanel(),
+    view: 'Near-trace gather', source: exportSourceName(), suffix: 'gather',
+  }));
+  // The SPS survey grid draws no display-state strip, so it states its context in
+  // the footer instead (see spsExportContext) - a map that does not say which
+  // survey, how many stations, in what CRS and at what bearing is not evidence.
+  $opt('spsExportImgBtn')?.addEventListener('click', () => void exportSurveyGridImage());
+  $opt('secCvdBtn')?.addEventListener('click', () => openSecCvdCheck());
+  $opt('secCvdClose')?.addEventListener('click', () => closeSecCvdCheck());
+  $opt('secCvdBack')?.addEventListener('click', (e) => { if (e.target === $opt('secCvdBack')) closeSecCvdCheck(); });
+  $opt('secScalePct')?.addEventListener('change', () => redrawSection());
+  // AGC changes the SAMPLES, so it must refetch - but via refetchSection(), which
+  // keeps the current zoom instead of re-fitting the whole record.
+  ($('secAgc') as HTMLInputElement).addEventListener('change', () => { secSyncScaleControls(); void refetchSection(); });
+  $opt('secAgcWin')?.addEventListener('change', () => void refetchSection());
+  $opt('secAgcType')?.addEventListener('change', () => void refetchSection());
+  secSyncScaleControls(); // hide the percentile / AGC sub-controls until they apply
   sectionInteractions(); // wheel-zoom / drag-pan / dblclick-fit + toolbar on the section DATA
   // File Viewer trace-health QC: scan / sensitivity / clear-flags / export-report.
   $opt('secHealthBtn')?.addEventListener('click', () => void secRunHealth());
+  // Collapsed toolbar sections - Display settings and the trace-health tools.
+  $opt('secDisplayBtn')?.addEventListener('click', () => secTogglePanel('secDisplayPanel', 'secDisplayBtn'));
+  $opt('secResetDisplay')?.addEventListener('click', () => secResetDisplay());
+  $opt('secHealthToggle')?.addEventListener('click', () => secTogglePanel('secHealthWrap', 'secHealthToggle'));
   $opt('secHealthSensBtn')?.addEventListener('click', () => secToggleSensPanel());
   $opt('secHealthClearBtn')?.addEventListener('click', () => { secHealthReset(); if (lastSection) drawSection($('secCanvas') as HTMLCanvasElement, lastSection); });
   $opt('secHealthExportBtn')?.addEventListener('click', () => void secHealthExport());
@@ -17828,8 +21156,7 @@ function init() {
   initSpsCreate();          // SPS Creation tab + Generate wizard wiring
   $('velComputeBtn').addEventListener('click', () => void computeVelocity());
   $('velExportBtn').addEventListener('click', () => void exportPicks());
-  ($('velCanvas') as HTMLCanvasElement).addEventListener('click', onVelClick);
-  velInteractions();        // Velocity: wheel-zoom + zoom buttons + manual X/Y boxes
+  velInteractions();        // Velocity: wheel-zoom + pan + click-to-pick + zoom buttons + X/Y boxes
   initSpectrum();           // Spectrum tab: display selector + per-display controls
   workbenchInteractions(); // Trace Workbench: add/remove/clear + shared zoom/pan
   initObsLog();             // Observer Log: wizard + editable grid wiring
@@ -17860,6 +21187,47 @@ function init() {
   switchTab('conv');
 }
 
+/** The File Viewer's display shortcuts, as one table so the manual, the tooltips
+ *  and the handler can never drift apart. `id` is the control the key drives.
+ *
+ *  Every one of them works the EXISTING control (a click on the button, or the
+ *  next entry in the drop-down plus its own change event) instead of repeating
+ *  what that control does. A disabled button therefore stays disabled, and a key
+ *  and a mouse click produce exactly the same result down to the redraw. */
+const SEC_KEYS: ReadonlyArray<{ keys: string[]; id: string; kind: 'click' | 'cycle' | 'check'; what: string }> = [
+  { keys: ['PageUp'], id: 'secPagePrev', kind: 'click', what: 'previous block of traces' },
+  { keys: ['PageDown'], id: 'secPageNext', kind: 'click', what: 'next block of traces' },
+  { keys: ['f'], id: 'secZoomFit', kind: 'click', what: 'fit the whole record' },
+  { keys: ['+', '='], id: 'secZoomIn', kind: 'click', what: 'zoom in' },
+  { keys: ['-', '_'], id: 'secZoomOut', kind: 'click', what: 'zoom out' },
+  { keys: ['a'], id: 'secAgc', kind: 'check', what: 'AGC on / off' },
+  { keys: ['m'], id: 'secMode', kind: 'cycle', what: 'next display mode' },
+  { keys: ['c'], id: 'secColor', kind: 'cycle', what: 'next colour map' },
+  { keys: ['d'], id: 'secDisplayBtn', kind: 'click', what: 'show / hide the Display panel' },
+  { keys: ['r'], id: 'secResetDisplay', kind: 'click', what: 'reset the display' },
+];
+
+/** Run the File Viewer shortcut bound to `key`, if there is one. Returns true
+ *  when the key was consumed, so the caller can stop the browser seeing it. */
+function secDisplayKey(key: string): boolean {
+  const k = key.length === 1 ? key.toLowerCase() : key;
+  const row = SEC_KEYS.find((r) => r.keys.includes(k));
+  if (!row) return false;
+  const el = $opt(row.id);
+  if (!el) return true;                       // bound, just not on screen yet
+  if (row.kind === 'cycle') {
+    const sel = el as HTMLSelectElement;
+    const n = sel.options.length;
+    if (sel.disabled || n === 0) return true;
+    sel.selectedIndex = (sel.selectedIndex + 1) % n;
+    sel.dispatchEvent(new Event('change'));
+    return true;
+  }
+  const ctl = el as HTMLButtonElement | HTMLInputElement;
+  if (!ctl.disabled) ctl.click();
+  return true;
+}
+
 /** App-wide keyboard shortcuts. */
 function onKeyDown(e: KeyboardEvent) {
   // Esc closes whichever overlay is open (confirm dialog is the most modal, then
@@ -17868,7 +21236,9 @@ function onKeyDown(e: KeyboardEvent) {
   // The value prompt is as modal as the confirm dialog - Esc cancels it.
   if (e.key === 'Escape' && $opt('promptBack')?.classList.contains('open')) { closePrompt(null); return; }
   // The box-zoom viewer + the magnifier select modes are dismissed by Esc too.
+  if (e.key === 'Escape' && $opt('secCvdBack')?.classList.contains('open')) { closeSecCvdCheck(); return; }
   if (e.key === 'Escape' && zoomViewerOpen()) { closeZoom(); return; }
+  if (e.key === 'Escape' && gatherOpen()) { closeGather(); return; }
   if (e.key === 'Escape' && (secBoxMode || traceBoxMode)) { exitBoxModes(); return; }
   // Abandoning a station drag has to restore map dragging, so it is handled before
   // any modal branch can swallow the key.
@@ -17910,6 +21280,13 @@ function onKeyDown(e: KeyboardEvent) {
   // '[' / ']' step to the previous / next seismic file in the open file's folder.
   if (!mod && e.key === '[') { e.preventDefault(); void navFile(-1); return; }
   if (!mod && e.key === ']') { e.preventDefault(); void navFile(1); return; }
+  // File Viewer display keys - only on that tab, and only while nothing is open
+  // over it, so a key never reaches the section from behind a dialog. Typing in a
+  // box is already ruled out by the guard above, so a trace range with a '4' or a
+  // file name with an 'f' in it stays in the field.
+  if (!mod && !e.altKey && activeTab === 'section' && !document.querySelector('.modal-back.open')) {
+    if (secDisplayKey(e.key)) { e.preventDefault(); return; }
+  }
   if (!mod && e.key >= '1' && e.key <= '9') {
     const idx = parseInt(e.key, 10) - 1;
     if (idx >= 0 && idx < TAB_DIGITS) { e.preventDefault(); switchTab(TABS[idx]); }

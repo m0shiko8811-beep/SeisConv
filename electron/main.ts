@@ -457,8 +457,36 @@ ipcMain.handle('seisconv:getSection', async (_e, opts: Record<string, unknown>) 
   const r = await callWorker<{ ok: boolean; error?: string } & Record<string, any>>({ type: 'section', ...paramOpts(opts) });
   if (!r.ok) throw new Error(r.error || 'section failed');
   return {
-    numTraces: r.numTraces, colLen: r.colLen, norm: r.norm, sampleInt: r.sampleInt, traceStep: r.traceStep, data: r.data,
+    numTraces: r.numTraces, colLen: r.colLen, norm: r.norm, norms: r.norms, sampleInt: r.sampleInt, traceStep: r.traceStep, data: r.data,
     traceStart: r.traceStart, traceEnd: r.traceEnd, sampStart: r.sampStart, sampEnd: r.sampEnd, fullTraces: r.fullTraces, fullSamples: r.fullSamples,
+    // Per-column geometry headers - the File Viewer positions traces by them and
+    // shifts them into reduced time. Forgetting them HERE would look exactly like
+    // a file with no offset header, so they are listed explicitly.
+    colOffset: r.colOffset ?? null, colChannel: r.colChannel ?? null, colSrcPt: r.colSrcPt ?? null, colCdp: r.colCdp ?? null,
+  };
+});
+
+// Near-trace (common-offset) gather across RECORDS: one chosen channel from every
+// shot record in the open file's FOLDER. The record list reuses `siblingPaths` -
+// the very list the file Prev/Next control steps ("file 45 / 116") - so there is
+// no second folder mechanism. A renderer-supplied list is accepted but every path
+// must already be authorized (sibling or dialog pick), like extractTrace.
+ipcMain.handle('seisconv:getNearGather', async (_e, opts: Record<string, unknown>) => {
+  const raw = opts && typeof opts === 'object' ? (opts as { paths?: unknown }).paths : undefined;
+  let paths: string[];
+  if (Array.isArray(raw)) {
+    paths = raw.filter((p): p is string => typeof p === 'string');
+    for (const p of paths) if (!isAuthorizedPath(p)) throw new Error('getNearGather: unauthorized file path');
+  } else {
+    paths = siblingPaths.slice();
+  }
+  if (!paths.length) throw new Error('No records to gather - open a file first.');
+  const r = await callWorker<{ ok: boolean; error?: string } & Record<string, any>>({ type: 'nearGather', ...paramOpts(opts), paths });
+  if (!r.ok) throw new Error(r.error || 'near-trace gather failed');
+  return {
+    numTraces: r.numTraces, colLen: r.colLen, norm: r.norm, norms: r.norms, sampleInt: r.sampleInt, data: r.data,
+    records: r.records, truncated: r.truncated, droppedByCap: r.droppedByCap, offered: r.offered,
+    mixedSampleInt: r.mixedSampleInt, sampleInts: r.sampleInts, skipped: r.skipped, selectBy: r.selectBy,
   };
 });
 
@@ -1673,7 +1701,11 @@ ipcMain.handle('seisconv:firstBreaks', async (_e, opts: Record<string, unknown>)
 
 ipcMain.handle('seisconv:exportText', async (_e, args: { name: string; text: string }) => {
   if (!win) return { ok: false };
-  const save = await dialog.showSaveDialog(win, { defaultPath: args.name });
+  // Same gap as exportBinary: sanitize the base, keep the extension verbatim.
+  const rawExt = path.extname(args.name || '');
+  const ext = rawExt.replace(/^\./, '');
+  const safeName = ext ? `${sanitizeBaseName(args.name.slice(0, -rawExt.length))}.${ext}` : sanitizeBaseName(args.name);
+  const save = await dialog.showSaveDialog(win, { defaultPath: safeName });
   if (save.canceled || !save.filePath) return { ok: false, canceled: true };
   await writeFile(save.filePath, args.text, 'utf8');
   return { ok: true, path: save.filePath };
@@ -1693,14 +1725,23 @@ function ensureExt(p: string, ext: string): string {
 // file always carries the right extension (fixes obslog XLSX opening empty).
 ipcMain.handle('seisconv:exportBinary', async (_e, args: { name: string; bytes: Uint8Array }) => {
   if (!win) return { ok: false };
-  const ext = path.extname(args.name || '').replace(/^\./, '').toLowerCase();
+  const rawExt = path.extname(args.name || '');
+  const ext = rawExt.replace(/^\./, '').toLowerCase();
+  // Sanitize the base name only (same discipline as convertSingle/batchConvert)
+  // and reattach the extension verbatim, so a control-char / bidi-override name
+  // can't reach the save dialog while the .png/.xlsx/.ods suffix stays intact.
+  const safeName = ext ? `${sanitizeBaseName(args.name.slice(0, -rawExt.length))}.${ext}` : sanitizeBaseName(args.name);
   const filters =
     ext === 'xlsx' ? [{ name: 'Excel workbook', extensions: ['xlsx'] }] :
     ext === 'ods' ? [{ name: 'OpenDocument Spreadsheet', extensions: ['ods'] }] :
+    // Exported viewer images (the section, trace, workbench, velocity, spectrum
+    // and gather panels). PNG only: the wiggle modes draw one-pixel lines, and a
+    // lossy codec rings around those edges in a way that reads as data.
+    ext === 'png' ? [{ name: 'PNG image', extensions: ['png'] }] :
     undefined;
   const save = await dialog.showSaveDialog(
     win,
-    filters ? { defaultPath: args.name, filters } : { defaultPath: args.name },
+    filters ? { defaultPath: safeName, filters } : { defaultPath: safeName },
   );
   if (save.canceled || !save.filePath) return { ok: false, canceled: true };
   const outPath = ext ? ensureExt(save.filePath, ext) : save.filePath;

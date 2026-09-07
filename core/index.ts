@@ -23,6 +23,7 @@ export * from './coords';
 export * from './formats/registry';
 export * from './formats/tapeimage';
 export * from './dsp/interpolate';
+export * from './dsp/neargather';
 export * from './dsp/agc';
 export * from './dsp/fft';
 export * from './dsp/correlate';

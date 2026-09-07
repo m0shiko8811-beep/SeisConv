@@ -129,6 +129,27 @@ export function parseSegyMeta(b: Bytes): SegyMeta {
     // 1/5/etc = pre-stack; 0/absent = unknown. Read straight through; the geometry
     // check uses it to avoid false-flagging post-stack data.
     traceSorting: r16s(bhBytes, 28, le),
+    // Impulse signal polarity, file bytes 3257-3258 (binhdr offset 56, uint16).
+    // SEG-Y rev1 sec 3.4 / rev2.1 sec 5.2, Binary File Header table: 1 = an
+    // increase in pressure or upward geophone case movement gives a NEGATIVE
+    // number on trace; 2 = the same gives a POSITIVE number. This matches the
+    // SEG polarity standard (Thigpen, Lash et al., "The SEG standard for
+    // polarity of field data", Geophysics 40(4), 1975): upward case motion /
+    // pressure increase -> negative deflection is polarity code 1, not 2.
+    // 0 or any other value = unknown/unspecified; many files leave this at 0
+    // and it must NOT be reported as a real convention.
+    impulsePolarity: (() => {
+      const v = r16u(bhBytes, 56, le);
+      return v === 1 || v === 2 ? v : 0;
+    })(),
+    // Vibratory polarity code, file bytes 3259-3260 (binhdr offset 58, uint16).
+    // SEG-Y rev1 sec 3.4 / rev2.1 sec 5.2: seismic signal lag relative to the
+    // pilot signal, coded 1-8 for 45-degree wedges starting at 337.5-22.5deg.
+    // 0 or out-of-range (not 1..8) = unknown/unspecified.
+    vibratoryPolarity: (() => {
+      const v = r16u(bhBytes, 58, le);
+      return v >= 1 && v <= 8 ? v : 0;
+    })(),
     revision: r16u(bhBytes, 300, le),
     // Byte 3505-3506 is SIGNED in rev2: -1 (0xFFFF) means "a variable number of
     // extended textual headers, read until the End Text stanza", NOT 65535.

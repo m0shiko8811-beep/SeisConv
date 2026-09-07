@@ -1,0 +1,20 @@
+{
+  "_comment": "Copy this file to qa/local-paths.json (git-ignored) and put the absolute paths of YOUR OWN sample data in it. Nothing naming a real survey, site or job may ever be committed. Every key is optional; an env var (SEISCONV_QA_SEGY / SEISCONV_QA_LE / SEISCONV_QA_SPS, ';'-separated for a list) overrides it, and SEISCONV_QA_DATA_ROOT sets the folder the placeholder defaults resolve under.",
+  "segy": "C:\\path\\to\\your.segy",
+  "le": "C:\\path\\to\\your-little-endian.sgy",
+  "sps": [
+    "C:\\path\\to\\your.s01",
+    "C:\\path\\to\\your.r01",
+    "C:\\path\\to\\your.x01"
+  ],
+  "hoverSps": [
+    "C:\\path\\to\\hover.s01",
+    "C:\\path\\to\\hover.r01",
+    "C:\\path\\to\\hover.x01"
+  ],
+  "fuzzData": "C:\\path\\to\\a\\folder\\of\\segd-and-segy",
+  "fuzzDirs": ["subdir-one", "subdir-two"],
+  "xfmtDir": "C:\\path\\to\\a\\paired-corpus-root",
+  "spsDir": "C:\\path\\to\\an\\sps-triplet-folder",
+  "spsBase": "your-triplet-basename"
+}
