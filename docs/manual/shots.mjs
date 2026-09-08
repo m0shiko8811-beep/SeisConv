@@ -183,6 +183,25 @@ async function step(id, fn) {
 }
 
 /** Set a tick/toggle to `want`, whether it is a checkbox input or a class-toggled button. */
+/**
+ * Open (or close) one of the File Viewer's collapsible sections by clicking its
+ * toolbar button, and wait until the panel is really laid out. The display rework
+ * moved the gain, AGC and trace-health controls off the toolbar and behind these
+ * toggles, so a shot that points at one of them has to open it first or Playwright
+ * waits forever on an element that is display:none.
+ */
+async function openPanel(win, btnSel, panelSel, want = true) {
+  const shown = async () => win.evaluate((s) => {
+    const e = document.querySelector(s);
+    return !!e && e.offsetParent !== null;
+  }, panelSel);
+  if (await shown() === want) return;
+  await win.click(btnSel).catch(() => {});
+  await sleep(500);
+  if (await shown() !== want) throw new Error(`openPanel: ${panelSel} did not become ${want ? 'visible' : 'hidden'}`);
+  await sleep(400);
+}
+
 async function setCheck(win, sel, want) {
   const is = await win.evaluate((s) => {
     const e = document.querySelector(s);
@@ -312,22 +331,29 @@ async function main() {
   await step('section', async () => {
     await gotoTab(win, 'tab-section', 'panel-section');
     await sleep(1200);
+    // The gain controls live inside the collapsible Display panel now, not on the
+    // toolbar, so open it before touching or pointing at any of them.
+    await openPanel(win, '#secDisplayBtn', '#secDisplayPanel');
     await setCheck(win, '#secAgc', false);
     await sleep(700);
     await capture(win, '04a-section-agc-off', 'File Viewer, variable density, AGC OFF - amplitude decays with time', [
       { sel: '#secAgc', label: 'AGC is OFF here' },
-      { sel: '#secCanvas', label: 'The shot record: 96 traces, 2 s, three reflectors under the direct arrival', at: 'tr' },
+      { sel: '#secGainLaw', label: 'Gain law: the correction applied before the picture is drawn', at: 'bl' },
+      { sel: '#secCanvas', label: 'The shot record: 96 traces, 2 s, three reflectors under the direct arrival, with the display-state strip along the bottom', at: 'tr' },
     ]);
     await setCheck(win, '#secAgc', true);
     await sleep(900);
     await capture(win, '04b-section-agc-on', 'The same record with AGC ON - the deep reflectors become visible', [
       { sel: '#secAgc', label: 'AGC is ON: each trace is balanced in a sliding window', at: 'bl' },
-      { sel: '#secGain', label: 'Display gain', at: 'tr' },
+      { sel: '#secGainReadout', label: 'The display gain actually applied', at: 'tr' },
       { sel: '#secMode', label: 'Display mode: variable density, wiggle, variable area' },
       { sel: '#secColor', label: 'Colour map' },
     ]);
+    await openPanel(win, '#secDisplayBtn', '#secDisplayPanel', false);
 
-    // Health scan - a meaningful, populated state for the QC picture.
+    // Health scan - a meaningful, populated state for the QC picture. The health bar
+    // is behind its own toolbar toggle, so open it before clicking Health scan.
+    await openPanel(win, '#secHealthToggle', '#secHealthWrap');
     await win.click('#secHealthBtn');
     await waitFor(win, () => {
       const l = document.getElementById('secHealthLabel') || document.getElementById('secHealthSummary');

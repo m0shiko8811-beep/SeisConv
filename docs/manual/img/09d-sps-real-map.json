@@ -31,7 +31,7 @@
       "selector": "#spsMap",
       "rect": {
         "x": 90,
-        "y": 263,
+        "y": 277,
         "w": 1478,
         "h": 619
       }
@@ -50,5 +50,5 @@
   ],
   "missingCallouts": [],
   "frameLeaks": [],
-  "bytes": 1919101
+  "bytes": 1920780
 }

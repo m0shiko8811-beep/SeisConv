@@ -20,13 +20,13 @@
       "selector": "#specCanvas",
       "rect": {
         "x": 90,
-        "y": 269,
-        "w": 1488,
+        "y": 299,
+        "w": 1478,
         "h": 619
       }
     }
   ],
   "missingCallouts": [],
   "frameLeaks": [],
-  "bytes": 329955
+  "bytes": 386003
 }

@@ -43,12 +43,12 @@
       "rect": {
         "x": 90,
         "y": 299,
-        "w": 1488,
+        "w": 1478,
         "h": 619
       }
     }
   ],
   "missingCallouts": [],
   "frameLeaks": [],
-  "bytes": 167443
+  "bytes": 170835
 }

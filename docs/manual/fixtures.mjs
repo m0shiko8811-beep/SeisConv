@@ -103,7 +103,7 @@ function textualHeader(lines) {
  * the section shows a symmetric direct arrival and three hyperbolic reflectors -
  * a picture that actually teaches something, which an empty or flat panel does not.
  */
-function shotTraces(ffid, rand) {
+function shotTraces(ffid, rand, defect = null) {
   const dt = DT_US / 1e6;
   const refl = [{ t0: 0.22, v: 1800 }, { t0: 0.46, v: 2400 }, { t0: 0.78, v: 3000 }];
   const ricker = (t, f) => { const x = Math.PI * f * t; return (1 - 2 * x * x) * Math.exp(-x * x); };
@@ -125,19 +125,52 @@ function shotTraces(ffid, rand) {
         const tt = Math.sqrt(t0 * t0 + (off * off) / (vel * vel));
         v += (0.85 - 0.15 * k) * ricker(t - tt, 30 - 5 * k);
       }
+      // OPTIONAL refracted head wave (promo fixtures only): a linear arrival with a
+      // real intercept time, so reduced time flattens it to a visible horizontal line
+      // rather than to t = 0 where nothing can be read.
+      if (defect && defect.refractor) {
+        const R = defect.refractor;
+        v += R.amp * ricker(t - (R.t0 + aoff / R.vel), 34);
+      }
       // spherical divergence + seeded band-limited noise
       v *= 1 / (1 + 2.2 * t);
       v += 0.022 * (rand() - 0.5);
       s[i] = v * 1000;
     }
-    out.push({ ch, off, samples: s });
+    out.push({ ch, off, samples: applyDefect(s, ch, defect) });
   }
   return out;
 }
 
+/**
+ * OPTIONAL, OFF BY DEFAULT. Impose a deliberate, described fault on one synthetic
+ * channel so a picture can argue about how the display treats it. `defect` is null
+ * for every manual fixture, so the manual's bytes are unchanged by its existence.
+ *
+ *   { weakCh: 61, weakScale: 0.12 }         one channel recorded at 12% of its neighbours
+ *   { staticFrom: 60, staticTo: 96, staticMs: 40 }  a block of stations planted late
+ *   { srcScale: 0.35 }                      the whole shot fired weak
+ *
+ * All three are amplitude/timing edits to already-synthetic samples. Nothing here
+ * reads, copies or approximates any real recording.
+ */
+function applyDefect(s, ch, defect) {
+  if (!defect) return s;
+  let out = s;
+  if (defect.staticMs && ch >= (defect.staticFrom || 1) && ch <= (defect.staticTo || N_CH)) {
+    const shift = Math.round((defect.staticMs * 1000) / DT_US);
+    const t = new Float32Array(out.length);
+    for (let i = 0; i < out.length; i++) { const j = i - shift; t[i] = j >= 0 && j < out.length ? out[j] : 0; }
+    out = t;
+  }
+  const k = (defect.srcScale || 1) * (defect.weakCh === ch ? (defect.weakScale ?? 0.12) : 1);
+  if (k !== 1) for (let i = 0; i < out.length; i++) out[i] *= k;
+  return out;
+}
+
 /** Write one SEG-Y Rev 1 file, byte by byte, big-endian, format code 5 (IEEE float). */
-function writeSegy(path, ffid, srcE, srcN, rand) {
-  const traces = shotTraces(ffid, rand);
+function writeSegy(path, ffid, srcE, srcN, rand, defect = null) {
+  const traces = shotTraces(ffid, rand, defect);
   const txt = textualHeader([
     'SEISCONV USER MANUAL - SYNTHETIC DEMONSTRATION DATA',
     'THIS FILE CONTAINS NO REAL SURVEY. SEE DOCS/MANUAL/FIXTURES.MJS',
@@ -364,6 +397,42 @@ export function buildFixtures(dir = join(tmpdir(), 'seisconv-manual-fixtures')) 
       xrefs: SRC_LINES * SRC_PER_LINE * 2,
     },
   };
+}
+
+/**
+ * The PROMOTIONAL fixture set: the same generator, the same seed, the same artificial
+ * origin, written into its OWN folder so the manual's set is untouched.
+ *
+ *   weak/SYNTH_WEAK_201.sgy   one record whose channel 61 recorded at 12% of its
+ *                             neighbours, for the AGC-versus-time-gain comparison.
+ *   weak/SYNTH_STATIC_202.sgy the same spread, plus a 2400 m/s refracted head wave with a
+ *                             190 ms intercept, and stations 60..96 planted 40 ms late,
+ *                             for the reduced-time picture.
+ *   line/SYNTH_LINE2_3xx.sgy  a folder of records for folder paging and the near-trace
+ *                             gather; record 7 fired at 35% strength, so the gather has
+ *                             something to show that no single record can.
+ *
+ * Same seed in, same bytes out. NOTHING here is, or is derived from, a real survey.
+ */
+export function buildPromoFixtures(dir, records = 12) {
+  const weakDir = join(dir, 'weak');
+  const lineDir = join(dir, 'line');
+  mkdirSync(weakDir, { recursive: true });
+  mkdirSync(lineDir, { recursive: true });
+  const rand = rng(SEED);
+  const weak = writeSegy(join(weakDir, 'SYNTH_WEAK_201.sgy'), 201,
+    ORIGIN.east + 150, ORIGIN.north, rand, { weakCh: 61, weakScale: 0.12 });
+  const stat = writeSegy(join(weakDir, 'SYNTH_STATIC_202.sgy'), 202,
+    ORIGIN.east + 150, ORIGIN.north, rand,
+    { staticFrom: 60, staticTo: N_CH, staticMs: 40, refractor: { vel: 2400, t0: 0.19, amp: 2.6 } });
+  const line = [];
+  for (let i = 0; i < records; i++) {
+    const ffid = 301 + i;
+    line.push(writeSegy(join(lineDir, `SYNTH_LINE2_${ffid}.sgy`), ffid,
+      ORIGIN.east + 150 + i * SRC_INT, ORIGIN.north + i * SRC_INT, rand,
+      i === 6 ? { srcScale: 0.35 } : null));
+  }
+  return { dir, weakDir, lineDir, weak, stat, line, origin: ORIGIN, seed: SEED };
 }
 
 if (process.argv[1] && process.argv[1].endsWith('fixtures.mjs')) {

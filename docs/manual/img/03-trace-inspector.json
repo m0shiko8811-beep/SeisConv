@@ -9,7 +9,7 @@
       "selector": "#traceCanvas",
       "rect": {
         "x": 90,
-        "y": 299,
+        "y": 313,
         "w": 1478,
         "h": 619
       }
@@ -30,7 +30,7 @@
       "label": "Switch this panel to the trace spectrum",
       "selector": "#traceSpec",
       "rect": {
-        "x": 612,
+        "x": 906,
         "y": 228,
         "w": 76,
         "h": 26
@@ -41,8 +41,8 @@
       "label": "Send this trace to the Trace Workbench",
       "selector": "#traceToWb",
       "rect": {
-        "x": 1436,
-        "y": 225,
+        "x": 650,
+        "y": 269,
         "w": 132,
         "h": 32
       }
@@ -50,5 +50,5 @@
   ],
   "missingCallouts": [],
   "frameLeaks": [],
-  "bytes": 183095
+  "bytes": 210699
 }

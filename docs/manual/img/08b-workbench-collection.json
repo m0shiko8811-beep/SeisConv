@@ -9,7 +9,7 @@
       "selector": "#wbList",
       "rect": {
         "x": 109,
-        "y": 763,
+        "y": 762,
         "w": 1440,
         "h": 65
       }
@@ -20,7 +20,7 @@
       "selector": "#wbExportFmt",
       "rect": {
         "x": 153,
-        "y": 910,
+        "y": 909,
         "w": 150,
         "h": 28
       }
@@ -28,5 +28,5 @@
   ],
   "missingCallouts": [],
   "frameLeaks": [],
-  "bytes": 163582
+  "bytes": 162489
 }

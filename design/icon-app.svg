@@ -1,0 +1,36 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 512 512" role="img" aria-label="SeisConv app icon - teal seismic waveform on a navy rounded square">
+  <!--
+    Faithful master of the in-app header mark (renderer/index.html: .mark + its inline SVG).
+    30x30 tile, border-radius 9  ->  rx = 0.30 * side
+    20x20 waveform centred in it ->  1/6 padding per side, 24-unit viewBox scaled by 341.333/24
+    build/icon.ico and build/icon.png are rendered from this geometry; the .ico's 16/20 px
+    entries substitute a simplified waveform so a legible stroke does not close up.
+  -->
+  <defs>
+    <!-- .mark background: linear-gradient(125deg, #0d1f33 0%, #173251 100%) -->
+    <linearGradient id="bg" x1="-0.07" y1="0.10" x2="1.07" y2="0.90">
+      <stop offset="0" stop-color="#0d1f33"/>
+      <stop offset="1" stop-color="#173251"/>
+    </linearGradient>
+    <!-- .mark box-shadow: inset 0 1px 0 rgba(255,255,255,.12) -->
+    <linearGradient id="sheen" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#ffffff" stop-opacity="0.12"/>
+      <stop offset="1" stop-color="#ffffff" stop-opacity="0"/>
+    </linearGradient>
+    <!-- waveform stroke gradient, as in the header SVG -->
+    <linearGradient id="wg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#22c9bf"/>
+      <stop offset="1" stop-color="#0fb3ab"/>
+    </linearGradient>
+    <clipPath id="tile"><rect x="0" y="0" width="512" height="512" rx="153.6" ry="153.6"/></clipPath>
+  </defs>
+
+  <rect x="0" y="0" width="512" height="512" rx="153.6" ry="153.6" fill="url(#bg)"/>
+  <rect x="0" y="0" width="512" height="256" fill="url(#sheen)" clip-path="url(#tile)"/>
+
+  <g transform="translate(85.333 85.333) scale(14.2222)">
+    <path d="M2 12 H5 L7 5 L10 19 L13 9 L15 15 L17 12 H22"
+          fill="none" stroke="url(#wg)" stroke-width="2.1"
+          stroke-linecap="round" stroke-linejoin="round"/>
+  </g>
+</svg>

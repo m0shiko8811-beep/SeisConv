@@ -19,8 +19,8 @@
       "label": "What was loaded: sources, receivers, cross-references",
       "selector": "#spsStats",
       "rect": {
-        "x": 90,
-        "y": 233,
+        "x": 202,
+        "y": 241,
         "w": 549,
         "h": 17
       }
@@ -31,7 +31,7 @@
       "selector": "#spsCanvas",
       "rect": {
         "x": 90,
-        "y": 263,
+        "y": 277,
         "w": 1478,
         "h": 619
       }
@@ -53,7 +53,7 @@
       "selector": "#qcResults",
       "rect": {
         "x": 90,
-        "y": 938,
+        "y": 953,
         "w": 1478,
         "h": 65
       }
@@ -61,5 +61,5 @@
   ],
   "missingCallouts": [],
   "frameLeaks": [],
-  "bytes": 205997
+  "bytes": 207509
 }

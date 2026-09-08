@@ -20,7 +20,7 @@
       "selector": "#spsCanvas",
       "rect": {
         "x": 90,
-        "y": 263,
+        "y": 277,
         "w": 1478,
         "h": 619
       }
@@ -39,5 +39,5 @@
   ],
   "missingCallouts": [],
   "frameLeaks": [],
-  "bytes": 848285
+  "bytes": 787129
 }

@@ -207,9 +207,19 @@
 
   <h3>Look at the whole record</h3>
   <p>Press <span class="kbd">3</span> for the File Viewer. Now every trace is drawn side by
-  side, time running down, so the record reads as a picture. <b>Gain</b> brightens it, the
-  display <b>Mode</b> chooses how each trace is drawn (Variable Density, Wiggle, Variable Area,
-  or VD + Wiggle), and the colour picker offers Seismic, Gray, Amber and Viridis.</p>
+  side, time running down, so the record reads as a picture. The display <b>Mode</b> chooses how
+  each trace is drawn (Variable Density, Wiggle, Variable Area, or VD + Wiggle), and the colour
+  picker offers nine maps: Seismic, Gray, Amber, Viridis, Gray (perceptual), Berlin (dark
+  centre), Vik (light centre), and two positive-black greys.</p>
+
+  <p>Everything that changes how bright the picture is lives behind the <b>Display…</b> button:
+  the gain, the gain law, the clip level, the excursion and the scale basis. You only need that
+  panel open while you are changing something, because whatever you set is printed permanently
+  on the <b>display-state strip</b> along the top of the section, so a screenshot always carries
+  the settings that produced it. <b>Gain Law</b> chooses what correction is applied before
+  anything is drawn: None (true amplitude), Fixed gain, Time gain t^n, Exponential time gain,
+  Amplitude compression, or Equalise traces (RMS). The picker states in plain words what the
+  selected law does, including which ones flatten the difference between one trace and the next.</p>
 
   <p>The one control worth understanding on day one is <b>AGC</b>. Seismic energy gets weaker
   with time, so the top of a record is loud and the bottom is faint: the deep reflections are
@@ -222,7 +232,11 @@
   <!--FIG:04b-section-agc-on-->
 
   <p class="note">AGC is a <i>display</i> setting. It changes how the picture looks, never the
-  samples in the file, and nothing you export is affected by it.</p>
+  samples in the file, and nothing you export is affected by it. It also has a cost worth
+  knowing on day one: AGC rescales every window of every trace to the same level, so a weak or
+  dying geophone is painted exactly as healthy as a good one. When you are checking the spread
+  rather than looking for a deep reflector, use a time gain instead, or read the attribute
+  profile under the Health panel, which is measured on the stored samples.</p>
 
   <p>If the file sits in a folder of similar files, <span class="kbd">[</span> and
   <span class="kbd">]</span> step to the previous and next file in that folder without going

@@ -9,7 +9,7 @@
       "selector": "#secHealthBtn",
       "rect": {
         "x": 90,
-        "y": 313,
+        "y": 257,
         "w": 92,
         "h": 32
       }
@@ -19,8 +19,8 @@
       "label": "Tune per-detector sensitivity; the flag count updates live",
       "selector": "#secHealthSensBtn",
       "rect": {
-        "x": 194,
-        "y": 313,
+        "x": 288,
+        "y": 257,
         "w": 93,
         "h": 32
       }
@@ -30,8 +30,8 @@
       "label": "Export the flagged traces as CSV",
       "selector": "#secHealthExportBtn",
       "rect": {
-        "x": 395,
-        "y": 313,
+        "x": 490,
+        "y": 257,
         "w": 112,
         "h": 32
       }
@@ -42,7 +42,7 @@
       "selector": "#secCanvas",
       "rect": {
         "x": 90,
-        "y": 418,
+        "y": 336,
         "w": 1478,
         "h": 619
       }
@@ -50,5 +50,5 @@
   ],
   "missingCallouts": [],
   "frameLeaks": [],
-  "bytes": 373914
+  "bytes": 370085
 }

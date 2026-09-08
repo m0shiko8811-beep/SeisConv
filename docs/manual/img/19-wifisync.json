@@ -41,9 +41,9 @@
       "label": "Trust: an approved machine, and Revoke to stop syncing with it",
       "selector": "#fldPeerBody tr:nth-child(1) td:nth-child(4)",
       "rect": {
-        "x": 687,
+        "x": 684,
         "y": 305,
-        "w": 121,
+        "w": 119,
         "h": 61
       }
     },
@@ -52,9 +52,9 @@
       "label": "Nothing is shared with a machine until you press Approve",
       "selector": "#fldPeerBody tr:nth-child(2) td:nth-child(4)",
       "rect": {
-        "x": 687,
+        "x": 684,
         "y": 366,
-        "w": 121,
+        "w": 119,
         "h": 61
       }
     },
@@ -63,14 +63,14 @@
       "label": "The hotspot password - no default, you choose one (8+ characters)",
       "selector": "#fldHsPass",
       "rect": {
-        "x": 966,
+        "x": 961,
         "y": 396,
-        "w": 169,
+        "w": 167,
         "h": 29
       }
     }
   ],
   "missingCallouts": [],
   "frameLeaks": [],
-  "bytes": 183630
+  "bytes": 183556
 }

@@ -9,7 +9,7 @@
       "selector": "#spsExpFormat",
       "rect": {
         "x": 151,
-        "y": 873,
+        "y": 874,
         "w": 141,
         "h": 32
       }
@@ -20,7 +20,7 @@
       "selector": "#spsExpFormatBtn",
       "rect": {
         "x": 304,
-        "y": 873,
+        "y": 874,
         "w": 73,
         "h": 32
       }
@@ -31,7 +31,7 @@
       "selector": "#spsExpGeotiffBtn",
       "rect": {
         "x": 672,
-        "y": 917,
+        "y": 918,
         "w": 81,
         "h": 32
       }
@@ -42,7 +42,7 @@
       "selector": "#spsExpShpBtn",
       "rect": {
         "x": 503,
-        "y": 917,
+        "y": 918,
         "w": 157,
         "h": 32
       }
@@ -50,5 +50,5 @@
   ],
   "missingCallouts": [],
   "frameLeaks": [],
-  "bytes": 715522
+  "bytes": 659402
 }

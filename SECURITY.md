@@ -27,8 +27,8 @@ long-term support branches.
 
 | Version | Supported |
 | ------- | --------- |
-| 0.7.x   | Yes       |
-| < 0.7   | No        |
+| 0.8.x   | Yes       |
+| < 0.8   | No        |
 
 ## Scope
 
