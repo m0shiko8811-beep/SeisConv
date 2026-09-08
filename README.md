@@ -490,10 +490,10 @@ Every seismic viewer (File Viewer, Trace Inspector, Spectrum Analysis, Velocity,
 ```
 .                   # repo root - the `main` branch is the app itself
 +-- core/           Pure TypeScript engine - no Electron or DOM dependency
-|   +-- binary/     Typed buffer readers (big/little-endian, IBM float)
-|   +-- detect/     Format and byte-order auto-detection
+|   +-- binary.ts   Typed buffer readers (big/little-endian, IBM float)
+|   +-- detect.ts   Format and byte-order auto-detection
 |   +-- formats/    segy · segd · seg2 · su · tapeimage parsers + writers
-|   +-- coords/     TM / UTM / ITM + Helmert 7-parameter transforms
+|   +-- coords.ts   TM / UTM / ITM + Helmert 7-parameter transforms
 |   +-- dsp/        AGC · interpolation · NMO semblance · Hann FFT ·
 |   |               avgspectrum · spectrogram · fk · correlate ·
 |   |               sweepgen (vibroseis) · hilbert · firstbreak/fbassist ·
@@ -516,7 +516,7 @@ Every seismic viewer (File Viewer, Trace Inspector, Spectrum Analysis, Velocity,
 |   +-- field/      WiFiSync host process - engine · UDP discovery · TCP transport ·
 |                   fs watcher · file utils · Windows Mobile-Hotspot control
 +-- renderer/       esbuild-bundled TypeScript UI (12-tab shell) - one
-                    ~1.06 MB app.ts plus a separate manual.ts module
+                    ~1.04 MB app.ts plus a separate manual.ts module
 ```
 
 The `core/` package has no Electron or DOM imports - it can run in Node, a worker thread, or a browser. The WiFiSync protocol lives in `core/field` as pure, testable algorithms; the OS-facing sockets, file-watching, and hotspot control live in `electron/field`.
