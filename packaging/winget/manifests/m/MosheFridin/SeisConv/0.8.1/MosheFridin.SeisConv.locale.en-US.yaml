@@ -1,0 +1,51 @@
+# yaml-language-server: $schema=https://aka.ms/winget-manifest.defaultLocale.1.6.0.schema.json
+
+PackageIdentifier: MosheFridin.SeisConv
+PackageVersion: 0.8.1
+PackageLocale: en-US
+Publisher: Moshe Fridin
+PublisherUrl: https://github.com/m0shiko8811-beep
+PublisherSupportUrl: https://github.com/m0shiko8811-beep/SeisConv/issues
+PackageName: SeisConv
+PackageUrl: https://github.com/m0shiko8811-beep/SeisConv
+License: AGPL-3.0-or-later
+LicenseUrl: https://github.com/m0shiko8811-beep/SeisConv/blob/main/LICENSE
+Copyright: Copyright (C) 2026 Moshe Fridin
+CopyrightUrl: https://github.com/m0shiko8811-beep/SeisConv/blob/main/NOTICE
+ShortDescription: Desktop viewer, converter and QC tool for field seismic data on Windows, covering SEG-Y, SEG-D, SEG-2 and Seismic Unix, with SPS survey geometry.
+Description: |-
+  SeisConv opens field seismic data and shows it to you. Format, revision, sample
+  encoding and byte order are detected for you, so there is nothing to configure
+  before the first trace appears.
+
+  It reads and writes SEG-Y (rev 0, 1 and 2), SEG-D, SEG-2 and Seismic Unix, converts
+  between them, and handles SPS survey geometry in SPS, P1/11 and P6/11 alongside plain
+  coordinate CSV. Beyond conversion it carries a trace inspector, a file viewer with
+  gain laws and colour maps, geometry QC, sweep and velocity tools, a trace workbench,
+  spectrum analysis, an observer's log and positioning exports to GeoTIFF and Shapefile.
+
+  The full EPSG registry is built in and the application works entirely offline, apart
+  from optional map tiles in the geometry views. It is free and open source under the
+  GNU Affero General Public License v3.
+Moniker: seisconv
+Tags:
+  - seismic
+  - segy
+  - segd
+  - seg-2
+  - seismic-unix
+  - sps
+  - geophysics
+  - geoscience
+  - exploration
+  - converter
+  - viewer
+  - epsg
+  - geotiff
+  - shapefile
+ReleaseNotesUrl: https://github.com/m0shiko8811-beep/SeisConv/releases/tag/v0.8.1
+Documentations:
+  - DocumentLabel: Manual
+    DocumentUrl: https://github.com/m0shiko8811-beep/SeisConv/blob/main/MANUAL.md
+ManifestType: defaultLocale
+ManifestVersion: 1.6.0

@@ -1,0 +1,20 @@
+# yaml-language-server: $schema=https://aka.ms/winget-manifest.installer.1.6.0.schema.json
+
+PackageIdentifier: MosheFridin.SeisConv
+PackageVersion: 0.8.1
+InstallerType: nullsoft
+InstallModes:
+  - interactive
+  - silent
+  - silentWithProgress
+InstallerSwitches:
+  Silent: /S
+  SilentWithProgress: /S
+UpgradeBehavior: install
+ReleaseDate: 2026-09-08
+Installers:
+  - Architecture: x64
+    InstallerUrl: https://github.com/m0shiko8811-beep/SeisConv/releases/download/v0.8.1/SeisConv-Setup-0.8.1.exe
+    InstallerSha256: 6FB71BDC42222A716F56ED21BF5563E6F2C28AA5A66B85641AF37E11705B13BE
+ManifestType: installer
+ManifestVersion: 1.6.0

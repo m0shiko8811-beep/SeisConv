@@ -4055,6 +4055,15 @@ function secGainFactors(sec: SectionData, gain: number): { gf: Float64Array; bas
  *  clipping destroyed the sample in the field, and a viewer that cannot tell them
  *  apart is useless for field QC.
  *
+ *  `sec` is the UN-SHIFTED (gained) matrix even when the panel is painted in
+ *  reduced time, for the same reason the scale basis is carried over there (see
+ *  secReducedSection): both numbers state the EXPOSURE, and a pure shift in time
+ *  changes no sample value, so it must not move either one. Handed the shifted
+ *  matrix, SU's zero-fill entered the percentile and quietly lowered both on a
+ *  record nothing had been done to. So `frac` counts the record's own samples and
+ *  not the padding, which is also what keeps it the complement of the requested
+ *  percentile the strip prints next to it.
+ *
  *  Both values are always finite; `level` is always > 0 (it divides a draw). */
 function secClipLevel(sec: SectionData, gf: Float64Array, pct: number): { level: number; frac: number } {
   const { numTraces, colLen, data } = sec;
@@ -4937,8 +4946,13 @@ function paintSection(cv: HTMLCanvasElement, secIn: SectionData, mode: string, c
   const { gf, basis } = secGainFactors(sec, gain);
   // Display clip + excursion. `clip.level` is > 0 by construction, so dividing by
   // it can never put a NaN or an Infinity on a canvas path.
+  // Measured on `gained`, the UN-SHIFTED matrix, exactly as the scale basis is
+  // carried over: reduced time is a pure shift, so it must not move the exposure.
+  // On the shifted matrix the zero-fill joined the percentile and pulled the
+  // saturation level the strip prints down on an untouched record. With reduced
+  // time off `gained` IS `sec`, so the ordinary display is unchanged.
   const clipPct = secClipPct();
-  const clip = secClipLevel(sec, gf, clipPct);
+  const clip = secClipLevel(gained, gf, clipPct);
   const cInv = 1 / clip.level;
   const exc = secExcursion();
   // Display-only polarity flip. Folded into the per-trace draw gain, so the
@@ -5038,6 +5052,9 @@ function paintSection(cv: HTMLCanvasElement, secIn: SectionData, mode: string, c
       // alarm red the health scanner uses for a genuinely overdriven recording
       // (HEALTH_COLORS.clipped) - one is a rendering choice, the other destroyed
       // the sample in the field.
+      // The gate reads a `frac` measured on the un-shifted matrix, which is a safe
+      // superset: shifting can only carry a saturated sample OUT of the window,
+      // never invent one, so no flattened run here is ever gated away unpainted.
       if (clip.frac > 0) {
         ctx.beginPath();
         let run = false;
