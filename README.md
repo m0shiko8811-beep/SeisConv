@@ -444,7 +444,7 @@ will give you different figures.
 | What | Measured |
 |---|---|
 | Core unit tests | **484 passed, 0 failed, 4 skipped** without local sample data (`npm run test:core`) |
-| Pixel render oracle | **196 display states** hashed and compared, so a refactor cannot silently change a drawing |
+| Pixel render oracle | **197 display states** hashed and compared, so a refactor cannot silently change a drawing |
 | File Viewer section redraw | **234 ms down to 43 ms** after the display rework, on the same record |
 | Near-trace gather | **116 records** of a real field folder read and drawn in about **2 seconds** |
 
