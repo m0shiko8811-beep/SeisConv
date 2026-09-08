@@ -111,6 +111,7 @@ function shotTraces(ffid, rand, defect = null) {
   for (let ch = 1; ch <= N_CH; ch++) {
     const off = (ch - (N_CH + 1) / 2) * RCV_INT;
     const aoff = Math.abs(off);
+    const sigK = signalScale(ch, defect); // 1 unless this channel/shot is deliberately weak
     const s = new Float32Array(NS);
     for (let i = 0; i < NS; i++) {
       const t = i * dt;
@@ -132,8 +133,20 @@ function shotTraces(ffid, rand, defect = null) {
         const R = defect.refractor;
         v += R.amp * ricker(t - (R.t0 + aoff / R.vel), 34);
       }
-      // spherical divergence + seeded band-limited noise
+      // spherical divergence
       v *= 1 / (1 + 2.2 * t);
+      // The weak-channel / weak-source loss is applied HERE, while `v` is still nothing
+      // but modelled wavefield, and the noise floor on the line below is deliberately
+      // left unscaled. A geophone that is failing, and a shot that fired soft, both lose
+      // SIGNAL; neither one quiets the ambient ground motion and instrument noise the
+      // channel is sitting in. Scaling the sum instead - signal and noise together - makes
+      // a trace that core/dsp/agc.ts, which divides each sample by its local RMS, hands
+      // back IDENTICAL to its healthy neighbours, so the record would argue that AGC hides
+      // a dying geophone. On a real record the opposite happens: AGC scales the leftover
+      // noise floor up to full scale and the failing channel becomes the LOUDEST column.
+      // That published claim was wrong once already. Keep the noise out of the multiply.
+      v *= sigK;
+      // seeded band-limited noise: the channel's own floor, independent of the shot
       v += 0.022 * (rand() - 0.5);
       s[i] = v * 1000;
     }
@@ -147,13 +160,25 @@ function shotTraces(ffid, rand, defect = null) {
  * channel so a picture can argue about how the display treats it. `defect` is null
  * for every manual fixture, so the manual's bytes are unchanged by its existence.
  *
- *   { weakCh: 61, weakScale: 0.12 }         one channel recorded at 12% of its neighbours
+ *   { weakCh: 61, weakScale: 0.12 }         one channel whose SIGNAL is 12% of its
+ *                                           neighbours', on its usual noise floor
+ *   { srcScale: 0.35 }                      the whole shot fired weak: every channel's
+ *                                           SIGNAL at 35%, every noise floor untouched
  *   { staticFrom: 60, staticTo: 96, staticMs: 40 }  a block of stations planted late
- *   { srcScale: 0.35 }                      the whole shot fired weak
  *
  * All three are amplitude/timing edits to already-synthetic samples. Nothing here
  * reads, copies or approximates any real recording.
+ *
+ * The two amplitude faults live in signalScale() and are applied inside shotTraces()
+ * BEFORE the noise is summed in - see the long comment there for why that placement is
+ * the whole point. Only the timing fault can be done afterwards, and correctly is: a
+ * station planted late delays everything the channel records, its noise included.
  */
+function signalScale(ch, defect) {
+  if (!defect) return 1;
+  return (defect.srcScale || 1) * (defect.weakCh === ch ? (defect.weakScale ?? 0.12) : 1);
+}
+
 function applyDefect(s, ch, defect) {
   if (!defect) return s;
   let out = s;
@@ -163,8 +188,6 @@ function applyDefect(s, ch, defect) {
     for (let i = 0; i < out.length; i++) { const j = i - shift; t[i] = j >= 0 && j < out.length ? out[j] : 0; }
     out = t;
   }
-  const k = (defect.srcScale || 1) * (defect.weakCh === ch ? (defect.weakScale ?? 0.12) : 1);
-  if (k !== 1) for (let i = 0; i < out.length; i++) out[i] *= k;
   return out;
 }
 
@@ -403,8 +426,10 @@ export function buildFixtures(dir = join(tmpdir(), 'seisconv-manual-fixtures')) 
  * The PROMOTIONAL fixture set: the same generator, the same seed, the same artificial
  * origin, written into its OWN folder so the manual's set is untouched.
  *
- *   weak/SYNTH_WEAK_201.sgy   one record whose channel 61 recorded at 12% of its
- *                             neighbours, for the AGC-versus-time-gain comparison.
+ *   weak/SYNTH_WEAK_201.sgy   one record whose channel 61 receives 12% of the SIGNAL its
+ *                             neighbours do while keeping its own full noise floor - a
+ *                             dying geophone, weak but not silent, for the AGC-versus-
+ *                             time-gain comparison.
  *   weak/SYNTH_STATIC_202.sgy the same spread, plus a 2400 m/s refracted head wave with a
  *                             190 ms intercept, and stations 60..96 planted 40 ms late,
  *                             for the reduced-time picture.
