@@ -910,6 +910,46 @@ async function main() {
         await capture('section:spacing=offset:fallback:mode=vd', 'secCanvas');
         await setSpacing('trace');
       }
+
+      // ---- DISPLAY CLIP x REDUCED TIME, together ----
+      // The clip sweep above runs at #secClip 90 and then RESTORES 100, so every
+      // reduced-time state captured before this line ran with the clip inactive:
+      // the set had no state where a clip below 100 and reduced time were on at
+      // once. That was a hole, not a covered case. The clip level is a percentile
+      // over the panel and reduced time rewrites the panel, so the hole is exactly
+      // where an exposure that moves when it must not can hide - and one did: the
+      // level was measured on the SHIFTED matrix, whose zero-fill diluted the
+      // percentile and darkened a record nothing had been done to. This state
+      // guards the fix. Placed at the very END of the secCanvas captures, per the
+      // capture-order rule at the top of this file; the fallback above left the
+      // offset-less SEG-Y open, so the offset-bearing record is reopened here.
+      if (reduceOk) {
+        await openFile(app, win, LE);
+        await gotoTab(win, 'tab-section', 'panel-section');
+        await waitSecIdle(win);
+        await openSecPanels(win);
+        await setSecMode('vd');
+        await win.fill('#secClip', '90');
+        await win.evaluate(() => {
+          const el = document.getElementById('secReduceVel');
+          el.value = '8';
+          el.dispatchEvent(new Event('change', { bubbles: true }));
+        });
+        await win.evaluate(() => {
+          const b = document.getElementById('secReduce');
+          b.checked = true;
+          b.dispatchEvent(new Event('change', { bubbles: true }));
+        });
+        await twoFrames(win);
+        await capture('section:clip=90:reduce=on:v=8:mode=vd', 'secCanvas');
+        await win.fill('#secClip', '100');
+        await win.evaluate(() => {
+          const b = document.getElementById('secReduce');
+          b.checked = false;
+          b.dispatchEvent(new Event('change', { bubbles: true }));
+        });
+        await twoFrames(win);
+      }
     } else {
       excluded.push('section:reduce=* and section:spacing=* - LE fixture not found');
     }

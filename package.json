@@ -35,7 +35,8 @@
     "verify": "node qa/verify.mjs",
     "qa:render-golden": "node qa/render-golden.mjs",
     "typecheck": "tsc --noEmit",
-    "dist": "npm run build && electron-builder",
+    "dist": "npm run build && electron-builder --publish never",
+    "dist:store": "npm run build && electron-builder --win appx --publish never",
     "gen:epsg": "tsx scripts/gen-epsg.ts",
     "gen:manual": "tsx scripts/gen-manual.ts",
     "test:crossformat": "tsx scripts/test-crossformat.ts",
@@ -88,6 +89,23 @@
       "oneClick": false,
       "allowToChangeInstallationDirectory": true,
       "allowElevation": true
+    },
+    "appx": {
+      "identityName": "REPLACE-WITH-PARTNER-CENTER-IDENTITY-NAME",
+      "publisher": "CN=REPLACE-WITH-PARTNER-CENTER-PUBLISHER-ID",
+      "publisherDisplayName": "REPLACE WITH PARTNER CENTER PUBLISHER DISPLAY NAME",
+      "applicationId": "SeisConv",
+      "displayName": "SeisConv",
+      "backgroundColor": "#192B42",
+      "languages": [
+        "en-US"
+      ],
+      "capabilities": [
+        "runFullTrust",
+        "internetClient",
+        "privateNetworkClientServer"
+      ],
+      "showNameOnTiles": false
     },
     "mac": {
       "target": "dmg"

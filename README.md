@@ -48,138 +48,6 @@
 
 ---
 
-## The argument in pictures
-
-Seismic work is done by eye. So here is what SeisConv does, before any prose about it.
-
-### The display decides what you see. Only the measurement does not
-
-<p align="center">
-  <img src="design/promo/agc-vs-time-gain.png" width="98%" alt="The same shot record under time gain and under AGC, plus the per-trace attribute profile"/>
-</p>
-
-One channel of this real field record was recording at a level well below its neighbours. Under a time
-gain it is a flat, featureless gap in the picture. Switch AGC on, change nothing else, and the channel's noise floor is stretched to full scale, the same texture as its neighbours, so brightness
-says nothing either way. One geophone,
-two displays, two opposite impressions, and neither of them is a measurement. The per-trace attribute profile
-underneath is taken on the **stored** samples, so the notch sits at the same trace whatever the display is
-doing. This is why the gain-law picker says in plain words which laws equalise traces and which do not, and
-why the attribute profile exists at all.
-
-### A screenshot without its processing state is not evidence
-
-<p align="center">
-  <img src="design/promo/display-state.png" width="98%" alt="The display-state strip, showing the full transform chain between the stored samples and the pixels"/>
-</p>
-
-Every viewer paints a permanent strip into its own canvas naming the entire chain between the stored samples
-and the pixels, and states the file's declared polarity convention in the standard's own words rather than as
-"normal" or "reverse", which mean opposite things in different parts of the world - or, as in the strip above,
-says plainly that this format carries no polarity field at all. It travels with the image export, and whatever
-the panel was too narrow to show is repeated in full underneath.
-
-### One record cannot show you a geophone dying
-
-<p align="center">
-  <img src="design/promo/near-trace-gather.png" width="86%" alt="A near-trace gather: one channel out of every record in the folder, side by side"/>
-</p>
-
-The near-trace gather takes one chosen channel out of **every** record in the folder and draws them side by
-side, one column per record, on a single common scale. Here that is the same failing channel again, across twelve
-records of one real sequence: level with its neighbours at the start, climbing briefly above them, then falling
-unevenly to about a fifth of them by the end. Open any one of those records on its own and nothing looks wrong. Shot-to-shot behaviour only exists across
-records. The channel index the panel's own strip names is cropped out of that figure, at the data owner's request.
-
-### Flatten the first breaks and a bad station becomes a step
-
-<p align="center">
-  <img src="design/promo/reduced-time.png" width="98%" alt="The same record in recorded time and in reduced time, where a timing error reads as a step"/>
-</p>
-
-Reduced time (Seismic Unix `sureduce`) shifts every trace by its own offset over a reducing velocity. A timing
-slip, a reversed geophone or a station planted at the wrong stake stops being a subtle kink in a curve and
-becomes an obvious step in a straight line. Display only: the stored samples are never touched.
-
-<sub>This is the one seismic figure still drawn on synthetic data: reduced time needs the source-receiver offset
-header, and the real records used for the other figures report offset 0, so the viewer correctly refuses to
-reduce them.</sub>
-
-### The colour map is part of the interpretation
-
-<p align="center">
-  <img src="design/promo/colour-maps.png" width="98%" alt="The same record under nine colour maps, grayscale first"/>
-</p>
-
-Nine colour maps, including matplotlib's full 256-entry Viridis and Crameri's perceptually uniform diverging
-Berlin and Vik, where equal steps in amplitude look like equal steps in colour. A colour-vision check renders
-the panel exactly as it stands as a red, green or blue deficient viewer would see it.
-
-### Page the folder without losing your place
-
-<p align="center">
-  <img src="design/promo/record-paging.png" width="98%" alt="Twelve records from one folder, stepped through with Prev and Next"/>
-</p>
-
-Zoom, gain, colour map, AGC, the scale basis and the trace window all survive the page turn, so what changes
-on screen is the data and not the framing.
-
-### Twelve tabs, one application
-
-<p align="center">
-  <img src="design/promo/tabs.png" width="98%" alt="Contact sheet of all twelve SeisConv tabs"/>
-</p>
-
-<details>
-<summary><b>Numbers, measured rather than promised</b></summary>
-
-These are measurements taken on the development machine, not guarantees. Your data and your hardware
-will give you different figures.
-
-| What | Measured |
-|---|---|
-| Core unit tests | **484 passed, 0 failed, 4 skipped** without local sample data (`npm run test:core`) |
-| Pixel render oracle | **196 display states** hashed and compared, so a refactor cannot silently change a drawing |
-| File Viewer section redraw | **234 ms down to 43 ms** after the display rework, on the same record |
-| Near-trace gather | **116 records** of a real field folder read and drawn in about **2 seconds** |
-
-</details>
-
----
-
-## Download
-
-**Windows 10 / 11, 64-bit.** Download the installer from the
-[latest release](https://github.com/m0shiko8811-beep/SeisConv/releases/latest)
-and run it. The installer lets you choose the installation directory (per-user
-by default, with an option to elevate and install for all users).
-
-> **The installer is not code-signed.** On first run Windows SmartScreen will
-> show *"Windows protected your PC"*. Click **More info**, then **Run anyway**.
-> This is expected for an unsigned installer and is not an indication that
-> anything is wrong with the download.
-
-macOS (DMG) and Linux (AppImage) targets are defined in the build configuration
-but are **not built or distributed** - on those platforms, build from source
-(see [Build and run](#build-and-run)).
-
-### The manual
-
-A **100 page user manual** is attached to every release, in
-[A4](https://github.com/m0shiko8811-beep/SeisConv/releases/latest/download/SeisConv-Manual-A4.pdf)
-and
-[US Letter](https://github.com/m0shiko8811-beep/SeisConv/releases/latest/download/SeisConv-Manual-Letter.pdf).
-
-It is written to be useful whether this is your first day on a crew or your
-twentieth year: Part I assumes no seismic background at all, Part II is ten
-worked jobs in the form "I need to ...", Part III is a control by control
-reference generated from the application itself so it cannot drift, and Part IV
-covers the byte layouts, the coordinate handling and what is lossy where.
-
-The same reference is inside the application under **Help**, and in
-[MANUAL.md](MANUAL.md).
-
----
-
 ## What it does
 
 SeisConv is a Windows desktop application built on Electron, with a platform-agnostic TypeScript core, for working with seismic data files. Drop in any file and SeisConv identifies the format revision, sample encoding (IBM float or IEEE), and byte order automatically, before you choose an output format. All parsing runs on a worker thread; the UI stays responsive on multi-gigabyte files.
@@ -220,10 +88,7 @@ If you are looking for an **open source alternative** to a commercial format con
 <details>
 <summary><b>Contents</b></summary>
 
-- [The argument in pictures](#the-argument-in-pictures)
-- [Download](#download)
 - [What it does](#what-it-does)
-- [Format support](#format-support)
 - [Features](#features)
   - [Converter](#converter)
   - [Trace Inspector](#trace-inspector)
@@ -238,6 +103,9 @@ If you are looking for an **open source alternative** to a commercial format con
   - [WiFiSync](#wifisync)
   - [Spectrum Analysis](#spectrum-analysis)
   - [Viewer controls](#viewer-controls)
+- [Format support](#format-support)
+- [The argument in pictures](#the-argument-in-pictures)
+- [Download](#download)
 - [Architecture](#architecture)
 - [Build and run](#build-and-run)
 - [Installer](#installer)
@@ -248,35 +116,6 @@ If you are looking for an **open source alternative** to a commercial format con
 - [License](#license)
 
 </details>
-
----
-## Format support
-
-| Format | Read | Write | Notes |
-|---|:---:|:---:|---|
-| SEG-Y Rev 0 | Yes | Yes | IBM float + IEEE float; EBCDIC / ASCII text header |
-| SEG-Y Rev 1 | Yes | Yes | Extended text headers |
-| SEG-Y Rev 2 | Yes | Yes | Reads files stamped Rev 2.0 (2017) and Rev 2.1 (October 2023), including the rev-2 additional 240-byte trace headers; the writer stamps Rev 2.0. Sample formats decoded: IBM float (1), int32 (2), int16 (3), IEEE float32 (5), int8 (8) - the wider rev-2 codes (IEEE double, little-endian variants) are not decoded |
-| SEG-D Rev 2.1 | Yes | - | Reader written to the SEG-D Rev 2.1 spec (*SEG Field Tape Standards*, January 2006): GH1/GH2, channel sets, trace-header extensions - validated **bit-identical** against paired vendor SEG-Y on real recorder field data. There is no Rev 2.1 writer |
-| SEG-D Rev 3.0 | Yes | Yes | Same reader validation. The two writers stamp **Rev 1.0** and **Rev 3.0** in General Header #2; legacy SeisConv-written SEG-D still reads via a compatibility decoder |
-| SEG-2 / Geode `.dat` | Yes | Yes | |
-| Seismic Unix (SU) | Yes | Yes | |
-| Tape Image `.tpimage` | Yes | Yes | Single-file tape images and **batch → one combined multi-record tape** (streamed, memory-bounded); multi-GB tapes open via a streaming trace index. Unsupported vendor SEG-D tape containers fail fast with an honest message |
-| CSV | - | Yes | Export / analysis |
-
-### Survey geometry / positioning formats
-
-| Format | Read | Write | Notes |
-|---|:---:|:---:|---|
-| SPS 2.1 (S / R / X) | Yes | Yes | The native survey-geometry format and SeisConv's internal data model. A survey is the three files together: sources (`.s`), receivers (`.r`) and the cross-reference relation (`.x`) that ties each shot to the channels it was recorded on. Read as a triplet, written as a triplet, and the only export that also ships a matching `.prj` because it is already delivered as a zip. Generated surveys and re-numbered surveys are written in this format. |
-| SEG-P1 | Yes | Yes | Deprecated by IOGP (succeeded by P1/11), but still demanded by some legacy processing packages, so a writer is provided (grid easting/northing in decimetres). Fixed-column post-plot point file. Geographic records auto-projected lat/long → E/N; F-format metres vs integer-decimetres auto-detected. |
-| IOGP P1/11 | Yes | Yes | Modern comma-delimited relational positioning standard (IOGP Report 483-1; v1.0 2012, v1.1 2015, v2.0 August 2024, v2.01 March 2025 - replaces UKOOA P1/90 and P2/94, and IOGP states SEG-P1 is deprecated in its favour). SeisConv implements the v1.x record-coded structure. Source, receiver, and relation records map onto SeisConv's SPS data model; CRS round-trips. |
-| IOGP P6/11 | Yes | - | IOGP Report 483-6, first released 2012 (it replaces UKOOA P6/98). Bin-grid definition (origin, rotation, inline/crossline numbering, bin size, CRS). Rendered as a bin-grid overlay on the SPS survey-grid and Leaflet map; rotation and crossline-axis aware. No writer yet. |
-| Coordinate CSV (CRS-tagged) | Yes | Yes | Generic point CSV with an explicit CRS tag (ITM / UTM / WGS84) and flexible column-synonym mapping (line, point, type, easting/x, northing/y, elevation/z). |
-
-**Automatic detection:** format revision, sample format (IBM 4-byte float, IEEE float, 2-byte int, etc.), and byte order (big/little-endian) are detected from the file header before conversion. No manual override required for well-formed files.
-
-**Two conversion modes:** convert a **single file** (with a native save dialog), or point at a **folder** and batch-convert every seismic file in it - with a format/destination wizard, a live per-file progress bar, and a Cancel button.
 
 ---
 
@@ -482,6 +321,168 @@ All three views share the manual X/Y axis range boxes (with Auto reset) and supp
 ### Viewer controls
 
 Every seismic viewer (File Viewer, Trace Inspector, Spectrum Analysis, Velocity, Trace Workbench) provides manual X-axis and Y-axis range boxes (min / max numeric inputs) plus an **Auto** button that clears the overrides and reverts to auto-fit. This makes it straightforward to compare the same time window across tabs or to zoom into a specific frequency band in the Spectrum views.
+
+---
+
+## Format support
+
+| Format | Read | Write | Notes |
+|---|:---:|:---:|---|
+| SEG-Y Rev 0 | Yes | Yes | IBM float + IEEE float; EBCDIC / ASCII text header |
+| SEG-Y Rev 1 | Yes | Yes | Extended text headers |
+| SEG-Y Rev 2 | Yes | Yes | Reads files stamped Rev 2.0 (2017) and Rev 2.1 (October 2023), including the rev-2 additional 240-byte trace headers; the writer stamps Rev 2.0. Sample formats decoded: IBM float (1), int32 (2), int16 (3), IEEE float32 (5), int8 (8) - the wider rev-2 codes (IEEE double, little-endian variants) are not decoded |
+| SEG-D Rev 2.1 | Yes | - | Reader written to the SEG-D Rev 2.1 spec (*SEG Field Tape Standards*, January 2006): GH1/GH2, channel sets, trace-header extensions - validated **bit-identical** against paired vendor SEG-Y on real recorder field data. There is no Rev 2.1 writer |
+| SEG-D Rev 3.0 | Yes | Yes | Same reader validation. The two writers stamp **Rev 1.0** and **Rev 3.0** in General Header #2; legacy SeisConv-written SEG-D still reads via a compatibility decoder |
+| SEG-2 / Geode `.dat` | Yes | Yes | |
+| Seismic Unix (SU) | Yes | Yes | |
+| Tape Image `.tpimage` | Yes | Yes | Single-file tape images and **batch → one combined multi-record tape** (streamed, memory-bounded); multi-GB tapes open via a streaming trace index. Unsupported vendor SEG-D tape containers fail fast with an honest message |
+| CSV | - | Yes | Export / analysis |
+
+### Survey geometry / positioning formats
+
+| Format | Read | Write | Notes |
+|---|:---:|:---:|---|
+| SPS 2.1 (S / R / X) | Yes | Yes | The native survey-geometry format and SeisConv's internal data model. A survey is the three files together: sources (`.s`), receivers (`.r`) and the cross-reference relation (`.x`) that ties each shot to the channels it was recorded on. Read as a triplet, written as a triplet, and the only export that also ships a matching `.prj` because it is already delivered as a zip. Generated surveys and re-numbered surveys are written in this format. |
+| SEG-P1 | Yes | Yes | Deprecated by IOGP (succeeded by P1/11), but still demanded by some legacy processing packages, so a writer is provided (grid easting/northing in decimetres). Fixed-column post-plot point file. Geographic records auto-projected lat/long → E/N; F-format metres vs integer-decimetres auto-detected. |
+| IOGP P1/11 | Yes | Yes | Modern comma-delimited relational positioning standard (IOGP Report 483-1; v1.0 2012, v1.1 2015, v2.0 August 2024, v2.01 March 2025 - replaces UKOOA P1/90 and P2/94, and IOGP states SEG-P1 is deprecated in its favour). SeisConv implements the v1.x record-coded structure. Source, receiver, and relation records map onto SeisConv's SPS data model; CRS round-trips. |
+| IOGP P6/11 | Yes | - | IOGP Report 483-6, first released 2012 (it replaces UKOOA P6/98). Bin-grid definition (origin, rotation, inline/crossline numbering, bin size, CRS). Rendered as a bin-grid overlay on the SPS survey-grid and Leaflet map; rotation and crossline-axis aware. No writer yet. |
+| Coordinate CSV (CRS-tagged) | Yes | Yes | Generic point CSV with an explicit CRS tag (ITM / UTM / WGS84) and flexible column-synonym mapping (line, point, type, easting/x, northing/y, elevation/z). |
+
+**Automatic detection:** format revision, sample format (IBM 4-byte float, IEEE float, 2-byte int, etc.), and byte order (big/little-endian) are detected from the file header before conversion. No manual override required for well-formed files.
+
+**Two conversion modes:** convert a **single file** (with a native save dialog), or point at a **folder** and batch-convert every seismic file in it - with a format/destination wizard, a live per-file progress bar, and a Cancel button.
+
+---
+
+## The argument in pictures
+
+Seismic work is done by eye. So here is what SeisConv does, before any prose about it.
+
+### The display decides what you see. Only the measurement does not
+
+<p align="center">
+  <img src="design/promo/agc-vs-time-gain.png" width="98%" alt="The same shot record under time gain and under AGC, plus the per-trace attribute profile"/>
+</p>
+
+One channel of this real field record was recording at a level well below its neighbours. Under a time
+gain it is a flat, featureless gap in the picture. Switch AGC on, change nothing else, and the channel's noise floor is stretched to full scale, the same texture as its neighbours, so brightness
+says nothing either way. One geophone,
+two displays, two opposite impressions, and neither of them is a measurement. The per-trace attribute profile
+underneath is taken on the **stored** samples, so the notch sits at the same trace whatever the display is
+doing. This is why the gain-law picker says in plain words which laws equalise traces and which do not, and
+why the attribute profile exists at all.
+
+### A screenshot without its processing state is not evidence
+
+<p align="center">
+  <img src="design/promo/display-state.png" width="98%" alt="The display-state strip, showing the full transform chain between the stored samples and the pixels"/>
+</p>
+
+Every viewer paints a permanent strip into its own canvas naming the entire chain between the stored samples
+and the pixels, and states the file's declared polarity convention in the standard's own words rather than as
+"normal" or "reverse", which mean opposite things in different parts of the world - or, as in the strip above,
+says plainly that this format carries no polarity field at all. It travels with the image export, and whatever
+the panel was too narrow to show is repeated in full underneath.
+
+### One record cannot show you a geophone dying
+
+<p align="center">
+  <img src="design/promo/near-trace-gather.png" width="86%" alt="A near-trace gather: one channel out of every record in the folder, side by side"/>
+</p>
+
+The near-trace gather takes one chosen channel out of **every** record in the folder and draws them side by
+side, one column per record, on a single common scale. Here that is the same failing channel again, across twelve
+records of one real sequence: level with its neighbours at the start, climbing briefly above them, then falling
+unevenly to about a fifth of them by the end. Open any one of those records on its own and nothing looks wrong. Shot-to-shot behaviour only exists across
+records. The channel index the panel's own strip names is cropped out of that figure, at the data owner's request.
+
+### Flatten the first breaks and a bad station becomes a step
+
+<p align="center">
+  <img src="design/promo/reduced-time.png" width="98%" alt="The same record in recorded time and in reduced time, where a timing error reads as a step"/>
+</p>
+
+Reduced time (Seismic Unix `sureduce`) shifts every trace by its own offset over a reducing velocity. A timing
+slip, a reversed geophone or a station planted at the wrong stake stops being a subtle kink in a curve and
+becomes an obvious step in a straight line. Display only: the stored samples are never touched.
+
+<sub>This is the one seismic figure still drawn on synthetic data: reduced time needs the source-receiver offset
+header, and the real records used for the other figures report offset 0, so the viewer correctly refuses to
+reduce them.</sub>
+
+### The colour map is part of the interpretation
+
+<p align="center">
+  <img src="design/promo/colour-maps.png" width="98%" alt="The same record under nine colour maps, grayscale first"/>
+</p>
+
+Nine colour maps, including matplotlib's full 256-entry Viridis and Crameri's perceptually uniform diverging
+Berlin and Vik, where equal steps in amplitude look like equal steps in colour. A colour-vision check renders
+the panel exactly as it stands as a red, green or blue deficient viewer would see it.
+
+### Page the folder without losing your place
+
+<p align="center">
+  <img src="design/promo/record-paging.png" width="98%" alt="Twelve records from one folder, stepped through with Prev and Next"/>
+</p>
+
+Zoom, gain, colour map, AGC, the scale basis and the trace window all survive the page turn, so what changes
+on screen is the data and not the framing.
+
+### Twelve tabs, one application
+
+<p align="center">
+  <img src="design/promo/tabs.png" width="98%" alt="Contact sheet of all twelve SeisConv tabs"/>
+</p>
+
+<details>
+<summary><b>Numbers, measured rather than promised</b></summary>
+
+These are measurements taken on the development machine, not guarantees. Your data and your hardware
+will give you different figures.
+
+| What | Measured |
+|---|---|
+| Core unit tests | **484 passed, 0 failed, 4 skipped** without local sample data (`npm run test:core`) |
+| Pixel render oracle | **196 display states** hashed and compared, so a refactor cannot silently change a drawing |
+| File Viewer section redraw | **234 ms down to 43 ms** after the display rework, on the same record |
+| Near-trace gather | **116 records** of a real field folder read and drawn in about **2 seconds** |
+
+</details>
+
+---
+
+## Download
+
+**Windows 10 / 11, 64-bit.** Download the installer from the
+[latest release](https://github.com/m0shiko8811-beep/SeisConv/releases/latest)
+and run it. The installer lets you choose the installation directory (per-user
+by default, with an option to elevate and install for all users).
+
+> **The installer is not code-signed.** On first run Windows SmartScreen will
+> show *"Windows protected your PC"*. Click **More info**, then **Run anyway**.
+> This is expected for an unsigned installer and is not an indication that
+> anything is wrong with the download.
+
+macOS (DMG) and Linux (AppImage) targets are defined in the build configuration
+but are **not built or distributed** - on those platforms, build from source
+(see [Build and run](#build-and-run)).
+
+### The manual
+
+A **100 page user manual** is attached to every release, in
+[A4](https://github.com/m0shiko8811-beep/SeisConv/releases/latest/download/SeisConv-Manual-A4.pdf)
+and
+[US Letter](https://github.com/m0shiko8811-beep/SeisConv/releases/latest/download/SeisConv-Manual-Letter.pdf).
+
+It is written to be useful whether this is your first day on a crew or your
+twentieth year: Part I assumes no seismic background at all, Part II is ten
+worked jobs in the form "I need to ...", Part III is a control by control
+reference generated from the application itself so it cannot drift, and Part IV
+covers the byte layouts, the coordinate handling and what is lossy where.
+
+The same reference is inside the application under **Help**, and in
+[MANUAL.md](MANUAL.md).
 
 ---
 
