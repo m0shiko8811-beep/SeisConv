@@ -123,6 +123,37 @@ $env:SEISCONV_QA_SEGY = "C:\data\my.sgy"; npm run qa
 SEISCONV_QA_SEGY=/c/data/my.sgy npm run qa
 ```
 
+## `forbiddenTerms` - keeping real names out of the manual pictures
+
+| Env var | local-paths.json key | Used by |
+|---------|----------------------|---------|
+| `SEISCONV_FORBIDDEN_TERMS` | `forbiddenTerms` | `manual:shots` - strings that must never appear in a screenshot |
+
+`npm run manual:shots` reads the whole window's text back after every capture and fails
+the shot if it finds something that must not be published. That denylist lives in
+`docs/manual/frame-safety.mjs` and is deliberately **split in two**:
+
+- the **generic half is committed** - drive-letter path roots, `AppData`, and the
+  `Users/<name>` shape that exposes whatever account the machine runs under. It names
+  nobody and nothing, and it works for every contributor with no setup at all;
+- the **site half is per machine** - your real survey names, your corpus folder names,
+  your account name, your employer. Those are exactly the strings that must not be
+  published, and this repository is public, so a committed denylist would leak the very
+  names it exists to guard. They go in `qa/local-paths.json` under `forbiddenTerms`.
+
+Each entry is a **regular-expression source**, matched case-insensitively, so
+`"SURVEY-\\d{4}"` or a whole-word `"\\bACME\\b"` works - double the backslash for JSON.
+An entry that will not compile stops the run rather than being quietly skipped: a
+silently dropped pattern would be an invisible hole in the guard. The `;`-separated
+`SEISCONV_FORBIDDEN_TERMS` overrides the key; a pattern containing `;` has to go in the
+JSON file.
+
+**With the key absent** the run still catches a drive-letter path, `AppData` and an
+account name inside a path, and it prints one line saying only the generic patterns are
+active. What it cannot know without you is your own site's vocabulary: a bare account
+name with no path around it, a survey name, a job folder. `qa/local-paths.example.json`
+shows the shape with obviously fake placeholders.
+
 ## How the dialog mock works
 
 The native `dialog.showOpenDialog` / `showSaveDialog` block on a real OS dialog, so

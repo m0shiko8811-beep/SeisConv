@@ -985,8 +985,12 @@ table.olog-grid tr.olog-row-pending:hover td:not(.olog-rowhdr){background:rgba(2
 /* Near-trace gather: the records that contributed no column. Scrolls rather than
    pushing the gather canvas off the modal when a folder has many unreadable files. */
 /* The attribute profile keeps .canvas (same 1px border, so its clientWidth matches
-   #secCanvas to the pixel) and overrides only the height. */
-.sec-attr{height:172px;margin-top:8px;}
+   #secCanvas to the pixel) and overrides only the height. The element selector is
+   load-bearing: `.canvas{height:60vh}` is declared LATER in this sheet, so a bare
+   `.sec-attr` of equal specificity loses on source order and the 172px bitmap was
+   being stretched to 60vh (measured: 1476x172 painted into a 1478x619 box, 3.6x
+   taller than drawn). `canvas.sec-attr` outranks it and the strip draws 1:1. */
+canvas.sec-attr{height:172px;margin-top:8px;}
 .gather-skips{font-family:var(--mono);font-size:11px;color:var(--ink-3);line-height:1.5;
   margin:6px 0 10px;padding:6px 10px 6px 26px;max-height:120px;overflow:auto;
   background:var(--surface);border:1px solid var(--hair-soft);border-radius:8px;}

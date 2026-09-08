@@ -26,7 +26,10 @@
 // obviously artificial origin (500000E 4000000N, UTM 36N). After each capture, `scanFrame()`
 // reads the WHOLE window's visible text back and fails the shot if it finds a real path root,
 // a machine/user name or a known real-site token. A picture that cannot be made safe is
-// skipped and reported, never shipped.
+// skipped and reported, never shipped. The denylist is in docs/manual/frame-safety.mjs: the
+// generic path/account patterns are committed there, the real site and identity terms are
+// per machine in the git-ignored qa/local-paths.json (`forbiddenTerms`), so this public repo
+// never publishes the names the guard exists to keep out.
 //
 // CALLOUTS. `capture()` takes a list of { sel, label }: it measures each element in the live
 // page, paints a numbered marker over it, screenshots, then removes the overlay again. The
@@ -40,6 +43,7 @@ import { fileURLToPath } from 'node:url';
 import { tmpdir } from 'node:os';
 import { launch, mockDialogs, gotoTab, sleep, APP_DIR } from '../../qa/harness.mjs';
 import { buildFixtures } from './fixtures.mjs';
+import { buildForbidden, scanText } from './frame-safety.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const argAfter = (name) => {
@@ -64,24 +68,26 @@ const only = (() => {
 
 // ---------------------------------------------------------------- frame safety
 /**
- * Tokens that must never appear in a manual picture. Anything matching is a real
- * path root, this machine's identity, or a real site/survey name seen in this repo's
- * QA data. The check runs on the window's rendered text after every capture.
+ * Tokens that must never appear in a manual picture: a real path root, this machine's
+ * identity, or a real site/survey name seen in this repo's QA data. The check runs on the
+ * window's rendered text after every capture.
+ *
+ * The list itself lives in docs/manual/frame-safety.mjs, in two halves. The generic half
+ * (path roots, AppData, "Users/<name>") is committed and works everywhere. The site half -
+ * real survey, folder and account names - is per machine, read from the git-ignored
+ * qa/local-paths.json key `forbiddenTerms`, BECAUSE THIS REPOSITORY IS PUBLIC and a
+ * committed denylist would publish the very names it exists to keep out. See that file for
+ * how to add your own; read qa/local-paths.example.json for the shape.
+ *
+ * NOTE: the header byline "Made by Moshe Fridin" is the application's OWN credit and belongs
+ * in the picture. It is the machine ACCOUNT name that would be a leak, and that is a site
+ * term, so it lives in the per-machine list rather than here.
  */
-const FORBIDDEN = [
-  /Yagur/i, /NodesCheck/i, /GP-\d{4}/i, /SegY_Rev2/i, /Data_Games/i, /SPS_Games/i,
-  // NOTE: the header byline "Made by Moshe Fridin" is the application's OWN credit and
-  // belongs in the picture; only this machine's ACCOUNT name (moshef*) would be a leak.
-  /moshef/i, /\bGII\b/i, /Geophysical Institute/i,
-  /D:\\Projects/i, /D:\/Projects/i, /C:\\Users/i, /C:\/Users/i, /AppData/i,
-  /Users[\\/][A-Za-z]/,
-];
+const FORBIDDEN = buildForbidden();
 
 async function scanFrame(win) {
   const txt = await win.evaluate(() => document.body.innerText || '');
-  const hits = [];
-  for (const re of FORBIDDEN) { const m = txt.match(re); if (m) hits.push(m[0]); }
-  return [...new Set(hits)];
+  return scanText(txt, FORBIDDEN);
 }
 
 // ---------------------------------------------------------------- callouts

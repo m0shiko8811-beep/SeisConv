@@ -16,5 +16,15 @@
   "fuzzDirs": ["subdir-one", "subdir-two"],
   "xfmtDir": "C:\\path\\to\\a\\paired-corpus-root",
   "spsDir": "C:\\path\\to\\an\\sps-triplet-folder",
-  "spsBase": "your-triplet-basename"
+  "spsBase": "your-triplet-basename",
+  "_forbiddenTerms_comment": "Strings that must never appear in a manual/marketing screenshot: YOUR real survey and site names, YOUR corpus folder names, YOUR machine account name, YOUR employer. They live here, not in the committed source, because the repo is public and a committed denylist would publish exactly what it guards. Each entry is a REGULAR-EXPRESSION SOURCE matched case-insensitively, so remember to double the backslash for JSON; an entry that will not compile stops the run instead of being skipped. SEISCONV_FORBIDDEN_TERMS (';'-separated) overrides this key. The examples below are FAKE placeholders - replace them, never commit a real one. With this key absent the guard still catches drive-letter paths, AppData and an account name inside a path, but knows nothing of your site's vocabulary.",
+  "forbiddenTerms": [
+    "Example-Survey",
+    "SampleJob",
+    "EXAMPLE-\\d{4}",
+    "Example_Corpus",
+    "your-account-name",
+    "\\bACME\\b",
+    "Example Institute"
+  ]
 }

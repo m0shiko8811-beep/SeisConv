@@ -58,7 +58,7 @@ Seismic work is done by eye. So here is what SeisConv does, before any prose abo
   <img src="design/promo/agc-vs-time-gain.png" width="98%" alt="The same shot record under time gain and under AGC, plus the per-trace attribute profile"/>
 </p>
 
-Channel 91 of this real field record was recording a few per cent of what its neighbours were. Under a time
+One channel of this real field record was recording a few per cent of what its neighbours were. Under a time
 gain it is a flat, featureless gap in the picture. Switch AGC on, change nothing else, and the same channel
 becomes the loudest column on the panel, because AGC has scaled its own noise up to full scale. One geophone,
 two displays, two opposite impressions, and neither of them is a measurement. The per-trace attribute profile
@@ -85,9 +85,10 @@ the panel was too narrow to show is repeated in full underneath.
 </p>
 
 The near-trace gather takes one chosen channel out of **every** record in the folder and draws them side by
-side, one column per record, on a single common scale. Here that is channel 91 again, across twelve records of
-one real sequence: still recording on the left, and a few per cent of its neighbours by the right-hand edge. Open any
-one of those records on its own and nothing looks wrong. Shot-to-shot behaviour only exists across records.
+side, one column per record, on a single common scale. Here that is the same failing channel again, across twelve
+records of one real sequence: still recording on the left, and a few per cent of its neighbours by the right-hand
+edge. Open any one of those records on its own and nothing looks wrong. Shot-to-shot behaviour only exists across
+records. The channel index the panel's own strip names is cropped out of that figure, at the data owner's request.
 
 ### Flatten the first breaks and a bad station becomes a step
 

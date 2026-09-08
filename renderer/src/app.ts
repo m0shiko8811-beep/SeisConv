@@ -5990,12 +5990,17 @@ function secDrawAttrStrip(sec: SectionData | null, rect: SecPlotRect | null) {
   const peak = new Float64Array(n).fill(NaN);
   const rms = new Float64Array(n).fill(NaN);
   const noise = new Float64Array(n).fill(NaN);
+  // Which columns the scan actually COVERED, kept apart from which columns hold a
+  // value: a strided scan leaves columns nobody measured, and a gap of that kind
+  // must not be read as "the neighbours were measured and came back empty".
+  const scannedAt = new Uint8Array(n);
   let scanned = 0, noPick = 0;
   for (let c = 0; c < n; c++) {
     const abs = sec.traceStart + c * sec.traceStep;
     const m = secHealth.meta.get(abs);
     if (!m) continue;
     const ev = readEvidence(d.evidence, m.row);
+    scannedAt[c] = 1;
     scanned++;
     if (Number.isFinite(ev.peak)) peak[c] = ev.peak;
     if (Number.isFinite(ev.rms)) rms[c] = ev.rms;
@@ -6064,7 +6069,16 @@ function secDrawAttrStrip(sec: SectionData | null, rect: SecPlotRect | null) {
   // The three series. A gap in a series BREAKS its line rather than being bridged:
   // a strided scan leaves real holes, and joining across them would draw a profile
   // through traces nobody measured. Isolated points get a dot so they still show.
+  //
+  // SHORT RUNS ARE THE HARD CASE, in both directions. A run of ONE value is a
+  // moveTo with no lineTo, which strokes NOTHING - so below the dot threshold a
+  // trace that WAS measured used to vanish from a panel whose whole job is to show
+  // you the channel that is misbehaving. A run of TWO drew as a bare dash that
+  // reads as a broken line. Both are handled below the dot pass: always marked
+  // (nothing measured can be invisible at any zoom), and RINGED when the scan
+  // bounded them, so a real measurement reads as a measurement.
   const dots = pw / n >= 2.5;
+  let anyRing = false;
   const drawSeries = (vals: Float64Array, color: string) => {
     ctx.save();
     ctx.beginPath(); ctx.rect(ML, MT, pw, ph); ctx.clip();
@@ -6088,6 +6102,67 @@ function secDrawAttrStrip(sec: SectionData | null, rect: SecPlotRect | null) {
         const x = xFor(c), y = yFor(v);
         if (!Number.isFinite(x) || !Number.isFinite(y)) continue;
         ctx.fillRect(x - 0.9, y - 0.9, 1.8, 1.8);
+      }
+    }
+
+    // Collect the runs of one or two measured traces. `ring` is true only when the
+    // scan BOUNDED the run: the column on each side was scanned yet carries no
+    // value in this series. A stride hole is a sampling gap, not an isolated
+    // measurement, and keeps the plain dot - otherwise a 1-in-2 scan would ring
+    // every single point and bury the plot. A run touching the window edge is
+    // unknown, not bounded, so it is not ringed either.
+    const shorts: { x: number; y: number; ring: boolean }[] = [];
+    for (let c = 0; c < n; c++) {
+      if (!Number.isFinite(vals[c])) continue;
+      let e = c;
+      while (e + 1 < n && Number.isFinite(vals[e + 1])) e++;
+      if (e - c <= 1) {
+        const ring = c > 0 && e < n - 1 && scannedAt[c - 1] === 1 && scannedAt[e + 1] === 1;
+        for (let k = c; k <= e; k++) {
+          const x = xFor(k), y = yFor(vals[k]);
+          if (Number.isFinite(x) && Number.isFinite(y)) shorts.push({ x, y, ring });
+        }
+      }
+      c = e;
+    }
+    if (shorts.length) {
+      if (dots) {
+        // Hollow ring, stroked at the series' own weight in the series' own colour.
+        // r = 3 on a 124 px plot is legible without eating a decade, and a hollow
+        // mark stays readable where many of them cluster. NOT filled: the three
+        // series are drawn peak, rms, noise in that order, so an opaque disc under
+        // a noise ring would punch a 6 px hole in the Peak and RMS lines beneath it
+        // - hiding measured data in a panel that exists to show it, and hiding a
+        // different amount of it per series. The two-trace connector runs through
+        // both rings instead, which is the ordinary way this mark is drawn.
+        ctx.lineWidth = 1.2;
+        ctx.strokeStyle = color;
+        for (const p of shorts) {
+          if (!p.ring) continue;
+          anyRing = true;
+          ctx.beginPath();
+          ctx.arc(p.x, p.y, 3, 0, Math.PI * 2);
+          ctx.stroke();
+        }
+      } else {
+        // Under 2.5 px per trace the dot pass is off and individual markers cannot
+        // all be drawn anyway, so the short runs collapse to ONE mark per pixel
+        // column, spanning the lowest to the highest value that fell in it. A bar
+        // rather than a dot on purpose: at this density the outlier is the whole
+        // reason to look, and a bar keeps it instead of averaging it away.
+        const lo = new Map<number, number>(), hi = new Map<number, number>();
+        for (const p of shorts) {
+          const px = Math.round(p.x);
+          const l = lo.get(px), h = hi.get(px);
+          lo.set(px, l === undefined ? p.y : Math.min(l, p.y));
+          hi.set(px, h === undefined ? p.y : Math.max(h, p.y));
+        }
+        ctx.fillStyle = color;
+        for (const [px, y0] of lo) {
+          const y1 = hi.get(px);
+          if (!Number.isFinite(px) || !Number.isFinite(y0) || !Number.isFinite(y1 as number)) continue;
+          ctx.fillRect(px - 0.8, y0 - 1, 1.6, Math.max(2.4, (y1 as number) - y0 + 2));
+        }
       }
     }
     ctx.restore();
@@ -6116,15 +6191,27 @@ function secDrawAttrStrip(sec: SectionData | null, rect: SecPlotRect | null) {
   ctx.font = '10px Consolas, monospace';
   ctx.textAlign = 'left';
   let lx = ML;
-  const keys: [string, string][] = [
-    ['Peak', SEC_ATTR_COLORS.peak],
-    ['RMS', SEC_ATTR_COLORS.rms],
-    [`Noise RMS (before the first break)${noPick > 0 ? ` - missing on ${grp(noPick)} trace${noPick === 1 ? '' : 's'} with no pick` : ''}`, SEC_ATTR_COLORS.noise],
+  // The ring key is here and NOT in the caption below: the caption is already at
+  // the width limit on a normal window, and a fourth item there pushes the "no
+  // pick" sentence off the strip. A key is also where the meaning of a MARK
+  // belongs, next to the marks' own colours. Neutral ink, because the ring is
+  // drawn in each series' own colour - it is a shape, not a fourth series.
+  const keys: [string, string, boolean][] = [
+    ['Peak', SEC_ATTR_COLORS.peak, false],
+    ['RMS', SEC_ATTR_COLORS.rms, false],
+    [`Noise RMS (before the first break)${noPick > 0 ? ` - missing on ${grp(noPick)} trace${noPick === 1 ? '' : 's'} with no pick` : ''}`, SEC_ATTR_COLORS.noise, false],
+    ...(anyRing
+      ? [['Ringed: an isolated measurement, the scanned traces on both sides carry no value', '#7e93ac', true] as [string, string, boolean]]
+      : []),
   ];
-  for (const [label, color] of keys) {
+  for (const [label, color, ring] of keys) {
     if (lx > W - 60) break;
-    ctx.strokeStyle = color; ctx.lineWidth = 2;
-    ctx.beginPath(); ctx.moveTo(lx, H - 8); ctx.lineTo(lx + 14, H - 8); ctx.stroke();
+    ctx.strokeStyle = color; ctx.lineWidth = ring ? 1.2 : 2;
+    if (ring) {
+      ctx.beginPath(); ctx.arc(lx + 7, H - 8, 3, 0, Math.PI * 2); ctx.stroke();
+    } else {
+      ctx.beginPath(); ctx.moveTo(lx, H - 8); ctx.lineTo(lx + 14, H - 8); ctx.stroke();
+    }
     ctx.fillStyle = color;
     ctx.fillText(label, lx + 18, H - 4);
     lx += 18 + ctx.measureText(label).width + 16;
