@@ -2003,7 +2003,7 @@ canvas.sec-attr{height:172px;margin-top:8px;}
                  OWN per-trace numbers, and row B of that toolbar is pinned to its
                  measured width (see the note on #secColor), so a button there
                  would wrap the row and push #secCanvas down the page. -->
-            <button class="btn sm" id="secAttrToggle" aria-pressed="false" title="Attribute profile - draw each trace's peak, its RMS, and a separate pre-first-break noise RMS as a line profile under the section, on the same trace axis. These are numbers that do NOT depend on the display normalisation, so a weak, hot or noisy geophone stays visible where per-trace scaling and AGC would hide it. It uses the trace-health scan's own measurements; if this file has not been scanned yet, turning it on runs the scan." disabled>Attributes</button>
+            <button class="btn sm" id="secAttrToggle" aria-pressed="false" title="Attribute profile - draw each trace's peak, its RMS, and a separate pre-first-break noise RMS as a line profile under the section, on the same trace axis. These are numbers that do NOT depend on the display normalisation, so a weak, hot or noisy geophone can still be found after per-trace scaling or AGC has destroyed the amplitude evidence in the picture. It uses the trace-health scan's own measurements; if this file has not been scanned yet, turning it on runs the scan." disabled>Attributes</button>
             <button class="btn sm" id="secHealthSensBtn" title="Tune per-detector sensitivity (Low = stricter / fewer flags, High = more) - the flagged count updates live, no re-scan" disabled aria-expanded="false">Sensitivity…</button>
             <button class="btn sm" id="secHealthClearBtn" title="Remove the trace-health flags + findings from the section" disabled>Clear flags</button>
             <button class="btn sm" id="secHealthExportBtn" title="Export the flagged traces (per-detector score · confidence · reason · local baseline · real std) as CSV" disabled>Export report…</button>
@@ -2544,7 +2544,7 @@ canvas.sec-attr{height:172px;margin-top:8px;}
           <div class="seg">
             <button class="segbtn" id="wbInvertBtn" title="Flip trace polarity (display only - the collected samples are not modified)">Invert</button>
           </span>
-          <label class="ctl-lbl" title="How sample values map to the wiggle swing, in the same words the File Viewer uses. Record max = the loudest collected trace sets the level for all of them; Record pct = ignore the few loudest so the rest stay readable; Per trace = every trace scaled to itself, which hides a weak or dead geophone.">Scale
+          <label class="ctl-lbl" title="How sample values map to the wiggle swing, in the same words the File Viewer uses. Record max = the loudest collected trace sets the level for all of them; Record pct = ignore the few loudest so the rest stay readable; Per trace = every trace scaled to itself, which destroys any comparison of amplitude between traces.">Scale
             <select id="wbScaleMode" class="ctl" style="width:126px">
               <option value="max">Record max</option>
               <option value="pct" selected>Record pct</option>

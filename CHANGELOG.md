@@ -5,6 +5,51 @@ All notable changes to SeisConv are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.8.1] - 2026-09-08
+
+### Changed
+
+- **The 0.8.0 entry below states that AGC and Equalise traces (RMS) hide a weak
+  or dying geophone, and that is wrong.** The entry is left standing below as
+  published, and corrected here in the open rather than edited away. A dying
+  element loses signal and keeps its noise floor. Both laws divide each trace
+  by that trace's own level, so on a failing channel it is the noise floor that
+  gets stretched toward full scale: the channel does not go quiet under them,
+  and it is not painted as healthy. What the two laws actually destroy is the
+  amplitude evidence. After either of them, brightness cannot compare one
+  channel against another in any direction, and only the per-trace attribute
+  profile, measured on the stored samples, still carries that information. The
+  wording has been corrected in every place the product made the claim: the
+  gain-law note under the picker and the display-state strip in the File
+  Viewer, the Attributes and Trace Workbench Scale tooltips, the in-app manual
+  and the generated `MANUAL.md`, the getting-started chapter of the PDF manual,
+  the README, and the source comments in the renderer and in
+  `core/dsp/gain.ts`.
+
+### Fixed
+
+- **The per-trace attribute profile was painted into a box 3.6 times taller
+  than the picture drawn inside it.** The strip renders a 172 px tall bitmap
+  and its own rule set that height, but the generic `.canvas{height:60vh}` is
+  declared later in the same sheet at equal specificity and therefore won.
+  Measured on a 1180 px window: a 1476x172 bitmap stretched into a 1478x619
+  box, so every line, dot and label in the panel was drawn 3.6 times too tall.
+  A more specific `canvas.sec-attr` selector now wins and the strip draws 1:1.
+  Nothing about the drawing itself changed.
+- **A run of one or two measured traces in the attribute profile read as a
+  broken line, or disappeared from the panel altogether.** A single value drew
+  as a 1.8 px square and a pair as a bare dash, so a genuine isolated
+  measurement looked like a stroke fault rather than a reading. Such a run is
+  now ringed, and only where the scan bounded it, so a sampling gap in a
+  1-in-N scan is not dressed up as an isolated measurement. Separately, below
+  the trace density at which individual dots can be drawn, the dot pass was
+  skipped entirely; an isolated value is a move with no line after it and
+  strokes nothing, so a trace that WAS measured left no pixels at all in the
+  panel whose whole purpose is to show a channel misbehaving. Short runs now
+  collapse to one mark per pixel column, drawn as a bar from the lowest to the
+  highest value that landed in that column, because at that density the
+  outlier is the entire reason to look at the panel.
+
 ## [0.8.0] - 2026-09-08
 
 A viewer release. The theme running through it is that a picture of seismic data

@@ -3489,8 +3489,8 @@ function secScaleMode(): SecScaleMode {
 
 // -- Display GAIN LAW (Seismic Unix `sugain` family) ---------------------------
 // The viewer had a flat multiplier and AGC, which sit at opposite extremes: AGC
-// normalises every window to the same level, so a weak or dying geophone looks
-// exactly as healthy as its neighbours. The time laws below correct with a factor
+// divides every window by its own level, which destroys the amplitude evidence:
+// no channel can be compared by brightness. The time laws below correct with a factor
 // that depends only on TIME and is identical on every trace, so relative amplitude
 // between channels survives and a bad channel still reads as bad. That is the
 // capability spread QC was missing.
@@ -3526,7 +3526,7 @@ const SEC_GAIN_LAW_NOTE: Record<SecGainLaw, string> = {
   tpow: 'Brightens later arrivals to offset spreading loss. Same correction on every trace, so a weak channel still looks weak.',
   epow: 'Stronger late-time boost, for heavily attenuated data.',
   gpow: 'Squashes the loud and quiet range so weak events show without flattening them. Polarity and the order of amplitudes are kept.',
-  pbal: 'Warning: every trace ends at the same level. Like AGC, this hides a weak or dying geophone, so do not use it for spread QC.',
+  pbal: 'Warning: every trace ends at the same level. Like AGC, this destroys the amplitude evidence, so channels cannot be compared.',
 };
 
 /** Short name for the state strip. */
@@ -4774,7 +4774,8 @@ function drawSecStateStrip(
   // and every word spent here is a word taken off the clip and flattened items
   // further along the line. The reasoning behind each law lives in the picker's
   // note; the strip only has to state WHICH transform is standing in front of the
-  // data - except for Equalise, whose whole danger is that it looks fine.
+  // data - except for Equalise, which must also say that the amplitudes it paints
+  // can no longer be compared between channels.
   const lawTxt = law === 'tpow'
     ? `Gain law Time gain t^${secGainLawExp('tpow').toFixed(1)}`
     : law === 'epow'
@@ -4782,7 +4783,7 @@ function drawSecStateStrip(
       : law === 'gpow'
         ? `Gain law Amplitude compression, power ${secGainLawExp('gpow').toFixed(2)}`
         : law === 'pbal'
-          ? 'Gain law Equalise traces (RMS), which HIDES a weak geophone'
+          ? 'Gain law Equalise traces (RMS): amplitudes NOT comparable'
           : law === 'none'
             ? 'Gain law None, true amplitude'
             : 'Gain law Fixed gain';
@@ -5883,9 +5884,9 @@ function secDrawHealthOverlay(cv: HTMLCanvasElement, sec: SectionData, rect: Sec
 // A line profile beside the section, on the SAME trace axis, showing each trace's
 // peak, its RMS, and a SEPARATE pre-first-break noise RMS. The point is that these
 // are NUMBERS that do not depend on the display normalisation, which is exactly
-// what per-trace scaling and AGC hide: under 'Per trace' a dead-quiet geophone and
-// a healthy one are painted at the same brightness, and this profile is where the
-// difference stays visible.
+// the evidence per-trace scaling and AGC destroy: under 'Per trace' a dead-quiet
+// geophone and a healthy one are painted at the same brightness, and this profile
+// is where the difference stays visible.
 //
 // The numbers are the trace-health scan's OWN evidence (rms / peak / rmsPre),
 // read back out of the cached buffer - not a second computation. Two sources of
@@ -8021,9 +8022,9 @@ function wbSyncScaleControls() {
  *  against under the active Scale mode.
  *
  *  Naming this is the whole point: 'Per trace' balances every trace to itself,
- *  which is legitimate and is also exactly what makes a weak or dead geophone
- *  look healthy. The other two modes share ONE level across the collection, so a
- *  quiet trace stays visibly quiet. Every returned level is finite and > 0, so
+ *  which is legitimate and is also exactly what destroys any comparison of
+ *  amplitude between traces. The other two modes share ONE level across the
+ *  collection, so a quiet trace stays visibly quiet. Every returned level is finite and > 0, so
  *  no NaN can reach the wiggle path. */
 // Single-slot memo for the per-trace window levels. Unlike the Inspector's whole
 // -trace basis these DO move with the window, so the window is part of the key and

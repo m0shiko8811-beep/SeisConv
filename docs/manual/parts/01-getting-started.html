@@ -233,10 +233,12 @@
 
   <p class="note">AGC is a <i>display</i> setting. It changes how the picture looks, never the
   samples in the file, and nothing you export is affected by it. It also has a cost worth
-  knowing on day one: AGC rescales every window of every trace to the same level, so a weak or
-  dying geophone is painted exactly as healthy as a good one. When you are checking the spread
-  rather than looking for a deep reflector, use a time gain instead, or read the attribute
-  profile under the Health panel, which is measured on the stored samples.</p>
+  knowing on day one: AGC divides every window of every trace by its own level, so a dying
+  geophone does not go quiet under it - its own noise floor is what gets stretched toward full
+  scale - and what is destroyed is the amplitude evidence, since brightness can no longer tell
+  a weak channel from a healthy one. When you are checking the spread rather than looking for a
+  deep reflector, use a time gain instead, or read the attribute profile under the Health
+  panel, which is measured on the stored samples.</p>
 
   <p>If the file sits in a folder of similar files, <span class="kbd">[</span> and
   <span class="kbd">]</span> step to the previous and next file in that folder without going

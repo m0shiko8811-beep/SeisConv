@@ -1,9 +1,11 @@
 // seisconv-core / dsp - display gain family (Seismic Unix `sugain` semantics).
 //
 // WHY this exists: the app had only two display gains, at opposite extremes -
-// a flat multiplier, and AGC. AGC normalises every window to the same level, so
-// a weak or dying geophone looks exactly as healthy as a good one. That is fatal
-// for spread QC. `tpow`/`epow` brighten late arrivals with a factor that depends
+// a flat multiplier, and AGC. AGC divides every window by its OWN level, so a
+// dying geophone does not go quiet under it: its noise floor is what gets
+// stretched toward full scale. What is destroyed is the amplitude evidence -
+// brightness can no longer tell a weak channel from a healthy one, in either
+// direction. That is fatal for spread QC. `tpow`/`epow` brighten late arrivals with a factor that depends
 // ONLY on time, identically for every trace, so relative amplitude BETWEEN
 // channels survives and a bad channel still reads as bad.
 //
@@ -237,7 +239,8 @@ export function gainGpow(samples: Float32Array, gpow: number, out?: Float32Array
  * `normAcrossTraces` (model.ts:49), which is a percentile ACROSS per-trace norms
  * for the whole record. Percentile-of-|x| and RMS are different statistics, so
  * nothing is reused here. Like AGC, this mode equalises traces and therefore
- * HIDES a weak geophone; it is not a QC mode.
+ * DESTROYS the amplitude evidence: channels can no longer be compared by
+ * brightness, in either direction. It is not a QC mode.
  */
 export function gainPbal(samples: Float32Array, out?: Float32Array): Float32Array {
   return applyGain(samples, 0, 0, { pbal: true }, out);

@@ -1,6 +1,6 @@
 {
   "name": "seisconv",
-  "version": "0.8.0",
+  "version": "0.8.1",
   "description": "SeisConv - desktop seismic data converter & toolkit for SEG-Y, SEG-D, SEG-2, SU and SPS survey geometry",
   "author": {
     "name": "Moshe Fridin",

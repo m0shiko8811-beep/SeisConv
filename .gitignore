@@ -25,3 +25,9 @@ docs/manual/out/
 # are a few kB, they are what the manual prose references, and a diff of them shows when
 # a control moved. Regenerate the images before rendering the PDF.
 docs/manual/img/*.png
+
+# README design candidates: multi-MB base64 preview HTML, never publish these
+design/readme-options/
+
+# Retracted figures: false claims baked into pixels, must never be published
+design/_retracted/
