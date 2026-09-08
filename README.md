@@ -444,7 +444,7 @@ will give you different figures.
 | What | Measured |
 |---|---|
 | Core unit tests | **484 passed, 0 failed, 4 skipped** without local sample data (`npm run test:core`) |
-| Pixel render oracle | **196 display states** hashed and compared, so a refactor cannot silently change a drawing |
+| Pixel render oracle | **197 display states** hashed and compared, so a refactor cannot silently change a drawing |
 | File Viewer section redraw | **234 ms down to 43 ms** after the display rework, on the same record |
 | Near-trace gather | **116 records** of a real field folder read and drawn in about **2 seconds** |
 
@@ -491,10 +491,10 @@ The same reference is inside the application under **Help**, and in
 ```
 .                   # repo root - the `main` branch is the app itself
 +-- core/           Pure TypeScript engine - no Electron or DOM dependency
-|   +-- binary/     Typed buffer readers (big/little-endian, IBM float)
-|   +-- detect/     Format and byte-order auto-detection
+|   +-- binary.ts   Typed buffer readers (big/little-endian, IBM float)
+|   +-- detect.ts   Format and byte-order auto-detection
 |   +-- formats/    segy · segd · seg2 · su · tapeimage parsers + writers
-|   +-- coords/     TM / UTM / ITM + Helmert 7-parameter transforms
+|   +-- coords.ts   TM / UTM / ITM + Helmert 7-parameter transforms
 |   +-- dsp/        AGC · interpolation · NMO semblance · Hann FFT ·
 |   |               avgspectrum · spectrogram · fk · correlate ·
 |   |               sweepgen (vibroseis) · hilbert · firstbreak/fbassist ·
@@ -517,7 +517,7 @@ The same reference is inside the application under **Help**, and in
 |   +-- field/      WiFiSync host process - engine · UDP discovery · TCP transport ·
 |                   fs watcher · file utils · Windows Mobile-Hotspot control
 +-- renderer/       esbuild-bundled TypeScript UI (12-tab shell) - one
-                    ~1.06 MB app.ts plus a separate manual.ts module
+                    ~1.04 MB app.ts plus a separate manual.ts module
 ```
 
 The `core/` package has no Electron or DOM imports - it can run in Node, a worker thread, or a browser. The WiFiSync protocol lives in `core/field` as pure, testable algorithms; the OS-facing sockets, file-watching, and hotspot control live in `electron/field`.
