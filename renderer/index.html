@@ -291,6 +291,15 @@ html[data-theme="dark"] .rail .nav-item .lbl{color:#0c1726;background:var(--teal
   background:linear-gradient(180deg,var(--teal),var(--cyan));
 }
 .rail .spacer{flex:1;}
+/* Quiet "an update is known" dot on the Help button. Absolutely positioned inside
+   the already-relative .nav-item, so it is out of flow and moves NO layout; it is
+   hidden unless app.ts has a remembered newer version to report. Red only for a
+   release whose notes carried the authored SEISCONV_CRITICAL: marker. */
+.rail .nav-item .updot{
+  position:absolute;top:6px;right:6px;width:8px;height:8px;border-radius:50%;
+  background:var(--teal);border:1.5px solid var(--card);pointer-events:none;
+}
+.rail .nav-item .updot.crit{background:var(--red);}
 
 /* ===========================================================================
    MAIN
@@ -749,6 +758,40 @@ table.olog-grid tr.olog-row-pending:hover td:not(.olog-rowhdr){background:rgba(2
 .confirm-modal .mbody{font-size:13px;color:var(--ink-2);line-height:1.5;}
 .confirm-modal .mh.confirm-foot{border-bottom:none;border-top:1px solid var(--hair-soft);}
 .confirm-modal .mh.confirm-foot{display:flex;align-items:center;gap:10px;padding:14px 20px;}
+
+/* ---- Help / Manual footer: which version is running, and the on-demand update
+       check. A third .mh row on the same flex column as the header + body; both
+       .mh rows are flex:none, so the scrolling body simply gets shorter. ---- */
+.modal .mh.help-foot{border-bottom:none;border-top:1px solid var(--hair-soft);padding:11px 20px;gap:10px;}
+.help-foot .hf-ver{font-size:11.5px;color:var(--ink-3);font-family:var(--mono);}
+.help-foot .hf-note{font-size:11.5px;font-weight:700;color:var(--teal-deep);}
+.help-foot .hf-note.crit{color:var(--red);}
+
+/* ---- Update-check result (a compact .modal variant). Text only: this dialog
+       reports what a release says, it never downloads or runs anything. ---- */
+.upd-modal{width:min(560px,100%);}
+.upd-modal .mbody{font-size:13px;color:var(--ink-2);line-height:1.5;}
+/* Same footer bar as the confirm/prompt dialogs (whose rule is scoped to
+   .confirm-modal), re-stated here rather than widening theirs. */
+.upd-modal .mh.confirm-foot{
+  border-bottom:none;border-top:1px solid var(--hair-soft);
+  display:flex;align-items:center;gap:10px;padding:14px 20px;
+}
+.upd-lead{margin:0 0 10px;color:var(--ink);}
+.upd-kv{display:flex;gap:10px;font-size:12.5px;margin:3px 0;}
+.upd-kv .k{color:var(--ink-3);min-width:104px;flex:none;}
+.upd-kv .v{color:var(--ink);font-weight:600;}
+.upd-crit{
+  border:1px solid var(--red);border-left-width:3px;border-radius:8px;
+  padding:9px 12px;margin:0 0 12px;background:var(--red-tint);color:var(--ink);font-weight:600;
+}
+html[data-theme="dark"] .upd-crit{background:transparent;}
+.upd-notes{
+  margin:11px 0 0;padding:10px 12px;background:var(--surface);border:1px solid var(--hair);
+  border-radius:8px;font-size:12px;line-height:1.5;white-space:pre-wrap;overflow:auto;
+  max-height:210px;color:var(--ink-2);
+}
+.upd-url{font-family:var(--mono);font-size:11.5px;color:var(--ink-2);word-break:break-all;}
 
 /* ---- Provenance: Undo snackbar (transient, bottom-centre) ---- */
 .undo-toast{
@@ -1403,6 +1446,9 @@ canvas.sec-attr{height:172px;margin-top:8px;}
     <button class="nav-item" id="railHelp" title="Help / Manual">
       <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><circle cx="12" cy="12" r="9"/><path d="M9.5 9a2.5 2.5 0 0 1 4.4 1.6c0 1.6-2.4 2-2.4 3.4" stroke-linecap="round"/><circle cx="12" cy="17" r=".6" fill="currentColor"/></svg>
       <span class="lbl">Help / Manual</span>
+      <!-- Quiet marker: a PREVIOUS manual update check found a newer version.
+           Out of flow (absolute), hidden until app.ts has something to report. -->
+      <span class="updot hidden" id="railUpdateDot"></span>
     </button>
   </nav>
 
@@ -3133,6 +3179,42 @@ canvas.sec-attr{height:172px;margin-top:8px;}
       <nav class="help-nav" id="manualNav" aria-label="Help topics"></nav>
       <!-- Selected topic's content; injected by app.ts renderManual() -->
       <div class="help-content" id="manualContent"></div>
+    </div>
+    <!-- Which version is running, plus the ON-DEMAND update check. The button is
+         revealed by app.ts only in a build that carries the check (it is compiled
+         out of the Microsoft Store build); the version read-out is always shown. -->
+    <div class="mh help-foot">
+      <span class="hf-ver" id="manualVersion">SeisConv</span>
+      <span class="hf-note" id="manualUpdateNote"></span>
+      <span style="flex:1"></span>
+      <button class="btn sm hidden" id="checkUpdatesBtn" type="button"
+              title="Ask GitHub once, now, whether a newer SeisConv has been released. Nothing is downloaded or installed, and nothing is checked unless you press this.">Check for updates</button>
+    </div>
+  </div>
+</div>
+
+<!-- ============================ UPDATE-CHECK RESULT MODAL ============================ -->
+<!-- Reports what the check found, as text. It downloads nothing, installs nothing
+     and blocks nothing: every outcome is dismissible, including a critical one. -->
+<div class="modal-back" id="updateBack" role="dialog" aria-modal="true" aria-labelledby="updateTitle">
+  <div class="modal upd-modal">
+    <div class="mh">
+      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="var(--teal-deep)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" id="updateIcon"><path d="M21 12a9 9 0 1 1-2.6-6.4"/><path d="M21 3v6h-6"/></svg>
+      <h2 id="updateTitle">Check for updates</h2>
+      <button class="mclose" id="updateClose" title="Close" aria-label="Close">
+        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M18 6 6 18M6 6l12 12"/></svg>
+      </button>
+    </div>
+    <!-- Filled by app.ts with DOM nodes + textContent only: the release notes are
+         untrusted text off the network and are NEVER written as HTML. -->
+    <div class="mbody" id="updateBody"></div>
+    <div class="mh confirm-foot">
+      <button class="btn sm hidden" id="updateHideBtn" type="button"
+              title="Stop showing the dot for this version. A newer release found by a later check brings it back.">Hide this reminder</button>
+      <span style="flex:1"></span>
+      <button class="btn sm" id="updateCloseBtn" type="button">Close</button>
+      <button class="btn btn-primary sm hidden" id="updateOpenBtn" type="button"
+              title="Open the release page in your browser. SeisConv does not download or install anything.">Open release page</button>
     </div>
   </div>
 </div>

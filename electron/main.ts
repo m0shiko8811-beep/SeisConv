@@ -6,7 +6,7 @@
 // only through the typed `seisconvAPI` in preload.
 
 import { app, BrowserWindow, dialog, ipcMain, Menu, nativeImage, screen, shell } from 'electron';
-import { writeFile, readFile, readdir, stat, unlink, open } from 'node:fs/promises';
+import { writeFile, readFile, readdir, rename, stat, unlink, open } from 'node:fs/promises';
 import { createWriteStream, watch, type FSWatcher } from 'node:fs';
 import { spawn, type ChildProcess } from 'node:child_process';
 import { Worker } from 'node:worker_threads';
@@ -22,6 +22,7 @@ import * as dns from 'node:dns';
 import * as path from 'node:path';
 import JSZip from 'jszip';
 import { writeTapeVolHeader, writeTapeEnd, parseUdpTrigger, parseTriggerLine, parseScsLogLine, scsLogKey, isScsTrigTouch, SCS_TRIG_WINDOW_MS, TRIGGER_TEXT_MAX } from '../core';
+import { isNewerVersion, parseVersion, parseCriticalReason, releaseNotesText, updateBadgeVisible, MAX_VERSION_TAG, MAX_CRITICAL_REASON } from '../core/version';
 import { RateLimiter, TCP_FILE_PORT, complementRole, type Role as FieldRole } from '../core/field';
 import {
   SyncEngine, FileServer, DiscoveryService, HistoryLog,
@@ -437,6 +438,243 @@ ipcMain.handle('seisconv:sendFeedback', async (_e, args: { subject?: string; bod
     return { ok: false, error: (e as Error).message };
   }
 });
+
+// -- Check for updates (ON DEMAND ONLY) --------------------------------------
+// SeisConv is a field tool whose promise is that it runs offline, so NOTHING in
+// here ever runs by itself: no startup check, no timer, no polling, no telemetry.
+// The single request below happens only when the user clicks "Check for updates"
+// in Help. It downloads and installs NOTHING - it reads the newest release's tag
+// and notes and, if the user asks, hands the release PAGE to the OS browser. A
+// crew on a metered link never sees the app reach the network unasked.
+//
+// __UPDATE_CHECK__ is an esbuild compile-time define. The default build sets it
+// true; `npm run build:store` sets it false and adds --minify-syntax, which folds
+// this whole block away - URL, helpers and handlers alike - so the Microsoft Store
+// (appx) build carries no update-check code at all. That is a Store requirement:
+// a Store app must not update itself outside the Store.
+declare const __UPDATE_CHECK__: boolean;
+
+if (__UPDATE_CHECK__) {
+  const UPDATE_REPO = 'm0shiko8811-beep/SeisConv';
+  const UPDATE_API_URL = `https://api.github.com/repos/${UPDATE_REPO}/releases/latest`;
+  const UPDATE_RELEASES_URL = `https://github.com/${UPDATE_REPO}/releases`;
+  /** Only a URL under this prefix may be handed to the browser: html_url comes off
+   *  the network, so it is allow-listed rather than trusted. */
+  const UPDATE_URL_PREFIX = `${UPDATE_RELEASES_URL}/`;
+  const UPDATE_TIMEOUT_MS = 10000;
+  /** Response cap. The real payload is a few kB; anything past this is refused
+   *  mid-stream rather than buffered. */
+  const UPDATE_MAX_BYTES = 256 * 1024;
+  const UPDATE_STATE_MAX_BYTES = 8 * 1024;
+  const UPDATE_NOTES_MAX = 4000;
+
+  /** What a manual check LEARNED, remembered so the answer survives a restart.
+   *  Remembering an answer is not asking a question: nothing here checks anything.
+   *  Kept in its own file beside the app's other userData state (WiFiSync's
+   *  settings/history live there too) - wifisync_settings.json cannot hold it,
+   *  since loadSettings() drops every key outside DEFAULT_SETTINGS by design. */
+  interface StoredUpdate {
+    latest: string;         // newest release tag seen by a manual check
+    publishedAt: string;    // its publish date, ISO, as GitHub reported it
+    url: string;            // its release page (allow-listed)
+    notes: string;          // its notes, bounded plain text
+    critical: boolean;      // notes carried an authored SEISCONV_CRITICAL: line
+    criticalReason: string;
+    dismissed: string;      // the tag the user dismissed ('' = none)
+    checkedAt: string;      // when that check ran (local ISO)
+  }
+  const EMPTY_UPDATE: StoredUpdate = {
+    latest: '', publishedAt: '', url: '', notes: '',
+    critical: false, criticalReason: '', dismissed: '', checkedAt: '',
+  };
+  const capStr = (v: unknown, max: number): string =>
+    (typeof v === 'string' ? v.slice(0, max) : '');
+  const updateStatePath = (): string => path.join(app.getPath('userData'), 'update_state.json');
+
+  /** Read the remembered answer. Bounded, validated field by field, and never
+   *  throwing: a missing or corrupt file simply means "nothing remembered". */
+  async function readUpdateState(): Promise<StoredUpdate> {
+    try {
+      const p = updateStatePath();
+      const st = await stat(p);
+      if (!st.isFile() || st.size > UPDATE_STATE_MAX_BYTES) return { ...EMPTY_UPDATE };
+      const raw = JSON.parse(await readFile(p, 'utf-8')) as Record<string, unknown>;
+      if (!raw || typeof raw !== 'object') return { ...EMPTY_UPDATE };
+      return {
+        latest: capStr(raw.latest, MAX_VERSION_TAG),
+        publishedAt: capStr(raw.publishedAt, 40),
+        url: capStr(raw.url, 300),
+        notes: capStr(raw.notes, UPDATE_NOTES_MAX),
+        critical: raw.critical === true,
+        criticalReason: capStr(raw.criticalReason, MAX_CRITICAL_REASON + 1),
+        dismissed: capStr(raw.dismissed, MAX_VERSION_TAG),
+        checkedAt: capStr(raw.checkedAt, 40),
+      };
+    } catch {
+      return { ...EMPTY_UPDATE };
+    }
+  }
+
+  /** Persist the remembered answer (tmp + rename, as the WiFiSync settings do). */
+  async function writeUpdateState(s: StoredUpdate): Promise<void> {
+    try {
+      const p = updateStatePath();
+      const tmp = p + '.tmp';
+      await writeFile(tmp, JSON.stringify(s, null, 2), 'utf-8');
+      await rename(tmp, p);
+    } catch { /* a badge that cannot be remembered is not worth an error */ }
+  }
+
+  /** The quiet badge: shown only while the remembered tag really is newer than
+   *  the running build AND the user has not dismissed that exact tag. So it
+   *  clears itself after an update, and a later, greater release brings it back. */
+  function badgeFor(s: StoredUpdate) {
+    const current = app.getVersion();
+    const newer = isNewerVersion(s.latest, current);
+    return {
+      show: updateBadgeVisible(s.latest, current, s.dismissed),
+      current,
+      latest: s.latest,
+      publishedAt: s.publishedAt,
+      notes: s.notes,
+      critical: newer && s.critical,
+      criticalReason: s.criticalReason,
+      url: s.url || UPDATE_RELEASES_URL,
+      checkedAt: s.checkedAt,
+    };
+  }
+
+  /** Read a response body with a hard byte cap, cancelling the stream the moment
+   *  it is exceeded. Returns null when the cap is hit. */
+  async function readCapped(res: Response, max: number): Promise<string | null> {
+    if (!res.body) return '';
+    const reader = res.body.getReader();
+    const chunks: Uint8Array[] = [];
+    let total = 0;
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      if (!value) continue;
+      total += value.byteLength;
+      if (total > max) { await reader.cancel().catch(() => { /* ignore */ }); return null; }
+      chunks.push(value);
+    }
+    return Buffer.concat(chunks).toString('utf-8');
+  }
+
+  // The check itself. Never throws: every failure resolves { ok:false, error },
+  // because offline is the NORMAL case in the field, not an error condition.
+  ipcMain.handle('seisconv:checkForUpdates', async () => {
+    const current = app.getVersion();
+    const stored = await readUpdateState();
+    const fail = (error: string) => ({
+      ok: false, error, current, url: UPDATE_RELEASES_URL, badge: badgeFor(stored),
+    });
+
+    let text: string | null = null;
+    // ONE deadline over the whole exchange, headers AND body: the timer is cleared
+    // in `finally`, not when the headers land, so a server that answers and then
+    // dribbles the body cannot leave the check hanging for ever.
+    const ctrl = new AbortController();
+    const timer = setTimeout(() => ctrl.abort(), UPDATE_TIMEOUT_MS);
+    try {
+      const res = await fetch(UPDATE_API_URL, {
+        signal: ctrl.signal,
+        redirect: 'follow',
+        headers: {
+          'Accept': 'application/vnd.github+json',
+          'X-GitHub-Api-Version': '2022-11-28',
+          'User-Agent': `SeisConv/${current} (desktop seismic toolkit)`,
+        },
+      });
+      if (res.status === 404) return fail('GitHub has no published release for SeisConv yet.');
+      if (res.status === 403 || res.status === 429) return fail('GitHub declined the request (rate limit). Try again later.');
+      if (!res.ok) return fail(`GitHub answered ${res.status}.`);
+      text = await readCapped(res, UPDATE_MAX_BYTES);
+      if (text === null) return fail('The reply from GitHub was larger than expected and was refused.');
+    } catch (e) {
+      const msg = (e as Error)?.name === 'AbortError'
+        ? `No reply within ${Math.round(UPDATE_TIMEOUT_MS / 1000)} seconds.`
+        : 'Could not reach GitHub. You may be offline.';
+      return fail(msg);
+    } finally {
+      clearTimeout(timer);
+    }
+
+    // Untrusted JSON: fixed field names only, each validated and bounded. Nothing
+    // that comes back is executed, and the release page is allow-listed below.
+    let rel: Record<string, unknown>;
+    try {
+      rel = JSON.parse(text) as Record<string, unknown>;
+      if (!rel || typeof rel !== 'object') throw new Error('not an object');
+    } catch {
+      return fail('The reply from GitHub was not readable.');
+    }
+    const tag = capStr(rel.tag_name, MAX_VERSION_TAG).trim();
+    if (!parseVersion(tag)) return fail('GitHub reported a release whose version could not be read.');
+    const htmlUrl = capStr(rel.html_url, 300);
+    const url = htmlUrl.startsWith(UPDATE_URL_PREFIX) ? htmlUrl : UPDATE_RELEASES_URL;
+    const publishedAt = capStr(rel.published_at, 40);
+    const notes = releaseNotesText(capStr(rel.body, UPDATE_NOTES_MAX * 4), UPDATE_NOTES_MAX);
+    const newer = isNewerVersion(tag, current);
+    const criticalReason = parseCriticalReason(notes);
+    // Critical only counts when the release is ALSO newer than what is running.
+    const critical = newer && criticalReason !== null;
+
+    // Remember what we learned. `dismissed` is deliberately carried over: a later,
+    // greater release therefore shows its badge again without the user doing
+    // anything, while the tag they dismissed stays dismissed.
+    const next: StoredUpdate = {
+      latest: tag,
+      publishedAt,
+      url,
+      notes,
+      critical: criticalReason !== null,
+      criticalReason: criticalReason ?? '',
+      dismissed: stored.dismissed,
+      checkedAt: new Date().toISOString(),
+    };
+    await writeUpdateState(next);
+
+    return {
+      ok: true,
+      current,
+      latest: tag,
+      newer,
+      critical,
+      criticalReason: criticalReason ?? '',
+      publishedAt,
+      notes,
+      url,
+      badge: badgeFor(next),
+    };
+  });
+
+  // The remembered answer, for the badge at startup. FILE ONLY - this handler
+  // touches no network, which is the whole point of persisting the result.
+  ipcMain.handle('seisconv:updateBadge', async () => badgeFor(await readUpdateState()));
+
+  // Dismiss the badge for the version currently remembered. Hides it for THAT
+  // version only; a newer one found later brings it back.
+  ipcMain.handle('seisconv:updateDismiss', async () => {
+    const s = await readUpdateState();
+    if (s.latest) { s.dismissed = s.latest; await writeUpdateState(s); }
+    return badgeFor(s);
+  });
+
+  // Open the release page in the user's own browser. The URL is never taken from
+  // the renderer: main re-reads the allow-listed one it stored.
+  ipcMain.handle('seisconv:openReleasePage', async () => {
+    try {
+      const s = await readUpdateState();
+      const url = s.url.startsWith(UPDATE_URL_PREFIX) ? s.url : UPDATE_RELEASES_URL;
+      await shell.openExternal(url);
+      return { ok: true, url };
+    } catch (e) {
+      return { ok: false, url: UPDATE_RELEASES_URL, error: (e as Error).message };
+    }
+  });
+}
 
 // -- IPC --
 ipcMain.handle('seisconv:openAndParse', async () => {

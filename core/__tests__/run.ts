@@ -162,6 +162,10 @@ import {
   buildXlsx,
   type SheetTable,
 } from '../index';
+import {
+  parseVersion, compareVersions, isNewerVersion, parseCriticalReason, releaseNotesText,
+  updateBadgeVisible, MAX_VERSION_TAG, MAX_CRITICAL_REASON,
+} from '../version';
 import { GOLDEN_PROJ } from './golden-proj';
 import { GOLDEN_TM } from './golden-tmutm';
 import { paramsFrom, projectForward, projectInverse } from '../projections';
@@ -7349,5 +7353,114 @@ function traceAxisTests(): void {
   });
 }
 
+// -----------------------------------------------------------------------------
+// Release-version comparison (core/version.ts) - the pure half of the on-demand
+// "Check for updates" action. Nothing here touches the network.
+// -----------------------------------------------------------------------------
+function versionTests(): void {
+  console.log('\n== core/version - release tag comparison ==');
+
+  test('version: a newer tag beats the running one, in every component', () => {
+    assert.equal(compareVersions('0.8.2', '0.8.1'), 1);
+    assert.equal(compareVersions('0.9.0', '0.8.9'), 1);
+    assert.equal(compareVersions('1.0.0', '0.99.99'), 1);
+    assert.ok(isNewerVersion('v0.9.0', '0.8.1'));      // leading 'v' tolerated
+    assert.ok(isNewerVersion('0.8.10', '0.8.9'));      // numeric, not lexical
+  });
+
+  test('version: an older tag never reads as newer', () => {
+    assert.equal(compareVersions('0.8.0', '0.8.1'), -1);
+    assert.equal(compareVersions('0.7.11', '0.8.1'), -1);
+    assert.equal(isNewerVersion('v0.8.0', '0.8.1'), false);
+    assert.equal(isNewerVersion('0.8.9', '0.8.10'), false);
+  });
+
+  test('version: the same version is equal, however it is written', () => {
+    assert.equal(compareVersions('0.8.1', '0.8.1'), 0);
+    assert.equal(compareVersions('v0.8.1', '0.8.1'), 0);
+    assert.equal(compareVersions('0.8', '0.8.0'), 0);           // missing patch = 0
+    assert.equal(compareVersions('1.2.3+build.7', '1.2.3'), 0); // build metadata ignored
+    assert.equal(isNewerVersion('0.8.1', '0.8.1'), false);      // up to date, no nag
+  });
+
+  test('version: a prerelease ranks BELOW its own release, and orders sanely', () => {
+    assert.equal(compareVersions('0.9.0-beta.1', '0.9.0'), -1);
+    assert.equal(compareVersions('0.9.0', '0.9.0-beta.1'), 1);
+    assert.equal(compareVersions('0.9.0-beta.2', '0.9.0-beta.1'), 1);
+    assert.equal(compareVersions('0.9.0-alpha', '0.9.0-beta'), -1);
+    assert.equal(compareVersions('0.9.0-beta', '0.9.0-beta.1'), -1);   // longer wins on a tie
+    assert.equal(compareVersions('0.9.0-1', '0.9.0-alpha'), -1);       // numeric ranks below alnum
+    // A prerelease of a HIGHER version is still newer than the running release.
+    assert.ok(isNewerVersion('0.9.0-beta.1', '0.8.1'));
+    assert.equal(isNewerVersion('0.9.0-beta.1', '0.9.0'), false);
+    assert.deepEqual(parseVersion('0.9.0-beta.1')!.pre, ['beta', '1']);
+  });
+
+  test('version: a malformed tag parses to null and is never called newer', () => {
+    for (const bad of ['', '   ', 'v', 'latest', 'nightly', 'release-2026', '1.2.3.4',
+                       '-1.0.0', '0.8.1-', 'x.y.z', '٣.٠.٠', 'v'.padEnd(MAX_VERSION_TAG + 1, '9')]) {
+      assert.equal(parseVersion(bad), null, `expected null for ${JSON.stringify(bad)}`);
+      assert.equal(compareVersions(bad, '0.8.1'), null);
+      assert.equal(compareVersions('0.8.1', bad), null);
+      assert.equal(isNewerVersion(bad, '0.8.1'), false);
+      assert.equal(isNewerVersion('9.9.9', bad), false);
+    }
+    assert.equal(parseVersion(null as unknown as string), null);
+    assert.equal(parseVersion(undefined as unknown as string), null);
+  });
+
+  test('version: the critical marker is read only when it was authored', () => {
+    assert.equal(parseCriticalReason('Routine fixes.\nNothing special.'), null);
+    assert.equal(parseCriticalReason(''), null);
+    assert.equal(
+      parseCriticalReason('Fixes.\nSEISCONV_CRITICAL: SEG-D export wrote a bad sample interval\nMore notes.'),
+      'SEG-D export wrote a bad sample interval',
+    );
+    // Release notes are markdown: a bulleted or quoted marker line still counts.
+    assert.equal(parseCriticalReason('- SEISCONV_CRITICAL: data loss on batch convert'), 'data loss on batch convert');
+    assert.equal(parseCriticalReason('  > SEISCONV_CRITICAL:   spaced   out   '), 'spaced out');
+    // A marker with no reason, or only mentioned mid-sentence, is not critical.
+    assert.equal(parseCriticalReason('SEISCONV_CRITICAL:'), null);
+    assert.equal(parseCriticalReason('we use SEISCONV_CRITICAL: to flag releases'), null);
+    // Untrusted text: control characters out, length capped.
+    assert.equal(parseCriticalReason('SEISCONV_CRITICAL: bad\u001b[31mescape'), 'bad[31mescape');
+    const long = parseCriticalReason('SEISCONV_CRITICAL: ' + 'x'.repeat(500))!;
+    assert.ok(long.length <= MAX_CRITICAL_REASON + 1, `reason not capped: ${long.length}`);
+  });
+
+  test('version: the remembered-update badge shows only while it is still true', () => {
+    // Nothing remembered, or nothing newer: no marker.
+    assert.equal(updateBadgeVisible('', '0.8.1', ''), false);
+    assert.equal(updateBadgeVisible('0.8.1', '0.8.1', ''), false);
+    assert.equal(updateBadgeVisible('0.8.0', '0.8.1', ''), false);
+    // A newer release, never dismissed: shown.
+    assert.equal(updateBadgeVisible('v0.9.0', '0.8.1', ''), true);
+    // Dismissed that exact version: hidden.
+    assert.equal(updateBadgeVisible('v0.9.0', '0.8.1', 'v0.9.0'), false);
+    // A LATER, greater release brings it back with no click.
+    assert.equal(updateBadgeVisible('v0.9.1', '0.8.1', 'v0.9.0'), true);
+    // A dismissal covers everything at or below it: a release pulled after being
+    // dismissed cannot resurrect the marker by reappearing as a lower tag.
+    assert.equal(updateBadgeVisible('v0.9.0', '0.8.1', 'v0.9.1'), false);
+    // It clears itself once the running build catches up - dismissal irrelevant.
+    assert.equal(updateBadgeVisible('v0.9.0', '0.9.0', ''), false);
+    assert.equal(updateBadgeVisible('v0.9.0', '1.0.0', 'v0.9.0'), false);
+    // Unreadable tags stay quiet rather than nagging; a corrupt `dismissed` must
+    // not silence a real update either.
+    assert.equal(updateBadgeVisible('nightly', '0.8.1', ''), false);
+    assert.equal(updateBadgeVisible('v0.9.0', 'not-a-version', ''), false);
+    assert.equal(updateBadgeVisible('v0.9.0', '0.8.1', 'garbage'), true);
+  });
+
+  test('version: release notes come back as bounded plain text', () => {
+    assert.equal(releaseNotesText('line one\r\nline two'), 'line one\nline two');
+    assert.equal(releaseNotesText('a\n\n\n\n\nb'), 'a\n\nb');
+    assert.equal(releaseNotesText('drop\u0000the\u0007bell'), 'dropthebell');
+    assert.equal(releaseNotesText(''), '');
+    assert.ok(releaseNotesText('y'.repeat(9000), 500).length <= 502);
+  });
+}
+
 reduceTests();
 traceAxisTests();
+versionTests();

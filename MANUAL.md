@@ -24,6 +24,7 @@ SeisConv is an offline desktop toolkit for seismic field data: convert between f
 - **Theme toggle** - switch between light and dark UI.
 - **UI size** (status bar, bottom) - make the whole interface bigger or smaller: drag the slider, or use **-** / **+**. The percentage next to it shows the current size and clicking it resets to 100%. The same thing as `Ctrl +` / `Ctrl -` / `Ctrl 0`, and it is remembered between sessions. The range is 50% to 250%: drop to 70-80% if the app feels too big on a small laptop screen, or push it up on a bright site where the text is hard to read.
 - **Icon rail** (left) - switch between the tabs; the active one is highlighted. The **?** at the bottom opens this manual.
+- **Check for updates** (at the foot of the Help panel) - asks GitHub, once, whether a newer SeisConv has been released, and shows what changed. It runs only when you press it: there is no check at startup, no timer and no polling in the background. Nothing is downloaded and nothing is installed - when there is a newer release, **Open release page** hands it to your browser and the rest is your decision. A check that found one leaves a quiet dot on the **?** until you dismiss it or the running build catches up; the dot is remembered, not re-checked. The Microsoft Store build has no such button, because the Store handles its own updates.
 
 ### The tabs at a glance
 
@@ -90,7 +91,7 @@ SeisConv is an offline desktop toolkit for seismic field data: convert between f
 ### Good to know
 
 - Amplitude in SEG-Y/SEG-D carries no physical unit - SeisConv labels it “Amplitude (sample value)” and never invents volts or millivolts.
-- SeisConv is offline-first. The SPS “Real map” basemap is the only feature that uses the internet (to fetch map tiles); everything else works with no connection.
+- SeisConv is offline-first. Four things can reach the internet, none of them required and none contacted unless you ask for it: the SPS “Real map” basemap and the optional basemap band in a GeoTIFF export (both fetch map tiles), the **NTP** time source in the Observer’s Log (queries a time server when you press **Sync**), and **Check for updates** at the foot of the Help panel (asks GitHub once, on your click). Everything else works with no connection.
 
 ---
 

@@ -722,6 +722,41 @@ export interface NtpSyncResult {
   error?: string;
 }
 
+/** What a PREVIOUS manual update check learned, remembered in userData so the
+ *  answer survives a restart. `show` is already resolved by main: true only while
+ *  `latest` is newer than the running build and the user has not dismissed that
+ *  exact version. Reading it contacts nothing. */
+export interface UpdateBadge {
+  show: boolean;
+  current: string;
+  latest: string;
+  publishedAt: string;
+  notes: string;
+  critical: boolean;
+  criticalReason: string;
+  url: string;
+  checkedAt: string;
+}
+
+/** Outcome of an on-demand "Check for updates". Exactly one of three readings:
+ *  ok && !newer (up to date), ok && newer (a release exists), !ok (the check did
+ *  not complete - offline is the normal case, so `error` reads as ordinary).
+ *  `url` is always safe to show as text; `notes` is PLAIN TEXT and must be
+ *  rendered with textContent, never as HTML. Nothing is ever downloaded. */
+export interface UpdateCheckResult {
+  ok: boolean;
+  current: string;
+  url: string;
+  badge: UpdateBadge;
+  latest?: string;
+  newer?: boolean;
+  critical?: boolean;
+  criticalReason?: string;
+  publishedAt?: string;
+  notes?: string;
+  error?: string;
+}
+
 /** One SPS source record exposed to the Observer Log for column-linking. The
  *  three optional SPSPoint fields (upholeMs/staticMs/srcType) are null when the
  *  survey didn't carry them. */
@@ -1085,6 +1120,26 @@ const api = {
    *  (the address lives only in main) and opens the OS default mail client. */
   sendFeedback: (args: { subject: string; body: string }): Promise<{ ok: boolean; error?: string }> =>
     ipcRenderer.invoke('seisconv:sendFeedback', args),
+
+  // -- Check for updates (only ever when the user clicks) --
+  // These four are channel names and nothing else: the request, the release-note
+  // parsing and the browser hand-off all live in main, which registers the
+  // handlers ONLY in a non-Store build (see __UPDATE_CHECK__ in electron/main.ts).
+  // The renderer's own button is compiled out of that build too, so it never calls
+  // a handler that is not there.
+  /** Ask GitHub for the newest release ONCE, now. Downloads and installs nothing;
+   *  never rejects on a network failure - offline resolves { ok:false, error }. */
+  checkForUpdates: (): Promise<UpdateCheckResult> => ipcRenderer.invoke('seisconv:checkForUpdates'),
+  /** The remembered result of the last manual check, for the quiet badge. Reads a
+   *  file in userData; contacts nothing. */
+  updateBadge: (): Promise<UpdateBadge> => ipcRenderer.invoke('seisconv:updateBadge'),
+  /** Hide the badge for the version currently remembered (that version only - a
+   *  newer one found by a later check brings it back). Returns the new state. */
+  updateDismiss: (): Promise<UpdateBadge> => ipcRenderer.invoke('seisconv:updateDismiss'),
+  /** Open the remembered release page in the user's own browser. Main re-reads the
+   *  allow-listed URL it stored; the renderer cannot pass one in. */
+  openReleasePage: (): Promise<{ ok: boolean; url: string; error?: string }> =>
+    ipcRenderer.invoke('seisconv:openReleasePage'),
 
   // -- Observer Log "Trigger Watch" (live row on shot trigger) --
   /** Configure + (re)start the trigger sources; `null` stops everything. Main

@@ -38,6 +38,7 @@ export const MANUAL: Record<string, HelpTopic> = {
       '<b>Theme toggle</b> - switch between light and dark UI.',
       '<b>UI size</b> (status bar, bottom) - make the whole interface bigger or smaller: drag the slider, or use <b>-</b> / <b>+</b>. The percentage next to it shows the current size and clicking it resets to 100%. The same thing as <span class="kbd">Ctrl&nbsp;+</span> / <span class="kbd">Ctrl&nbsp;-</span> / <span class="kbd">Ctrl&nbsp;0</span>, and it is remembered between sessions. The range is 50% to 250%: drop to 70-80% if the app feels too big on a small laptop screen, or push it up on a bright site where the text is hard to read.',
       '<b>Icon rail</b> (left) - switch between the tabs; the active one is highlighted. The <b>?</b> at the bottom opens this manual.',
+      '<b>Check for updates</b> (at the foot of the Help panel) - asks GitHub, once, whether a newer SeisConv has been released, and shows what changed. It runs only when you press it: there is no check at startup, no timer and no polling in the background. Nothing is downloaded and nothing is installed - when there is a newer release, <b>Open release page</b> hands it to your browser and the rest is your decision. A check that found one leaves a quiet dot on the <b>?</b> until you dismiss it or the running build catches up; the dot is remembered, not re-checked. The Microsoft Store build has no such button, because the Store handles its own updates.',
     ],
     steps: [
       'Open a seismic file from the header, or load files inside a tab (e.g. SPS files on the SPS tab).',
@@ -98,7 +99,7 @@ export const MANUAL: Record<string, HelpTopic> = {
     ],
     notes: [
       'Amplitude in SEG-Y/SEG-D carries no physical unit - SeisConv labels it “Amplitude (sample value)” and never invents volts or millivolts.',
-      'SeisConv is offline-first. The SPS “Real map” basemap is the only feature that uses the internet (to fetch map tiles); everything else works with no connection.',
+      'SeisConv is offline-first. Four things can reach the internet, none of them required and none contacted unless you ask for it: the SPS “Real map” basemap and the optional basemap band in a GeoTIFF export (both fetch map tiles), the <b>NTP</b> time source in the Observer’s Log (queries a time server when you press <b>Sync</b>), and <b>Check for updates</b> at the foot of the Help panel (asks GitHub once, on your click). Everything else works with no connection.',
     ],
   },
   conv: {

@@ -243,6 +243,39 @@ type WorkerProgress = {
   downloadDone?: boolean;
 };
 
+// What a PREVIOUS "Check for updates" learned, remembered by main in userData so
+// the answer outlives the session. `show` is already resolved there: true only
+// while `latest` is newer than the running build AND the user has not dismissed
+// that exact version. Reading it contacts nothing.
+type UpdateBadgeInfo = {
+  show: boolean;
+  current: string;
+  latest: string;
+  publishedAt: string;
+  notes: string;
+  critical: boolean;
+  criticalReason: string;
+  url: string;
+  checkedAt: string;
+};
+// Outcome of one on-demand check: ok && !newer (up to date), ok && newer (a
+// release exists), or !ok (the check did not complete - offline is the normal
+// case in the field). `notes` is PLAIN TEXT off the network and is only ever
+// written with textContent, never as HTML.
+type UpdateCheckInfo = {
+  ok: boolean;
+  current: string;
+  url: string;
+  badge: UpdateBadgeInfo;
+  latest?: string;
+  newer?: boolean;
+  critical?: boolean;
+  criticalReason?: string;
+  publishedAt?: string;
+  notes?: string;
+  error?: string;
+};
+
 // The renderer is the sole owner of the `window.seisconvAPI` type. The preload
 // backend implements the SAME contract (channel names + signatures) in parallel;
 // declaring the shape here keeps the renderer compiling even if the backend
@@ -464,6 +497,13 @@ declare global {
       // Send Feedback: composes a mailto: in the main process (the feedback inbox
       // lives there) and opens the OS default mail client via shell.openExternal.
       sendFeedback(args: { subject: string; body: string }): Promise<{ ok: boolean; error?: string }>;
+      // -- Check for updates (ONLY when the user clicks; nothing is downloaded) --
+      // Registered by main only in a non-Store build; the UI below is compiled out
+      // of that build too, so these are never called when they are absent.
+      checkForUpdates(): Promise<UpdateCheckInfo>;
+      updateBadge(): Promise<UpdateBadgeInfo>;
+      updateDismiss(): Promise<UpdateBadgeInfo>;
+      openReleasePage(): Promise<{ ok: boolean; url: string; error?: string }>;
       // -- Observer Log "Trigger Watch" (live row on shot trigger) --
       triggerWatch(cfg: TrigWatchIpcCfg | null): Promise<TrigWatchStartResult>;
       triggerPickFolder(): Promise<string | null>;
@@ -725,6 +765,211 @@ async function copyFeedback() {
     infoToast('Feedback copied to clipboard.');
   } catch {
     setStatus('feedbackStatus', 'Copy failed - select the text manually.', 'err');
+  }
+}
+
+// -- Check for updates (ON DEMAND ONLY) --------------------------------------
+// SeisConv runs offline, and nothing here changes that: there is no check at
+// startup, no timer, no polling and no telemetry. The one request happens when
+// the user presses "Check for updates" in Help, it is made by the MAIN process
+// (this renderer is sandboxed with default-src 'none' and stays that way), and it
+// downloads and installs NOTHING - it reports what the newest release says and,
+// if asked, hands the release PAGE to the default browser.
+//
+// The result of a check is remembered by main (userData) so a user who checked
+// once still sees a quiet dot on the Help button next session. Remembering an
+// answer is not asking a question: nothing is contacted to paint that dot.
+//
+// __UPDATE_CHECK__ is an esbuild compile-time define. `npm run build:store` sets
+// it false and adds --minify-syntax, folding every branch below out of the
+// bundle; the button in index.html then simply stays hidden, because a Microsoft
+// Store app must not offer its own update path.
+declare const __UPDATE_CHECK__: boolean;
+
+/** The badge state main last reported, so the dot, the Help note and the
+ *  "Hide this reminder" button always speak about the same version. */
+let updateBadgeState: UpdateBadgeInfo | null = null;
+let updateChecking = false;
+
+function updateModalOpen(): boolean { return !!$opt('updateBack')?.classList.contains('open'); }
+function closeUpdateModal() { $opt('updateBack')?.classList.remove('open'); }
+
+/** A release tag as a plain version for display ("v0.9.0" → "0.9.0"), so it can be
+ *  read against the running build without a stray "v" between them. Only the
+ *  leading v of a numeric tag is dropped; the tag itself is never altered. */
+function verLabel(tag: string): string { return tag.replace(/^[vV](?=\d)/, ''); }
+
+/** A release date as "08 Sep 2026"; '' when the API sent nothing readable. */
+function fmtReleaseDate(iso: string): string {
+  if (!iso) return '';
+  const d = new Date(iso);
+  const t = d.getTime();
+  if (!Number.isFinite(t)) return '';
+  return `${ts2(d.getDate())} ${TS_MON[d.getMonth()]} ${d.getFullYear()}`;
+}
+
+/** Paint the quiet marker: the dot on the rail's Help button and the one-line
+ *  note in the Help footer. Whether to show it was decided in main (newer than
+ *  the running build, and not dismissed); the renderer only reflects it. */
+function paintUpdateBadge(b: UpdateBadgeInfo | null) {
+  updateBadgeState = b;
+  const show = !!b?.show;
+  const crit = show && !!b?.critical;
+  const dot = $opt('railUpdateDot');
+  if (dot) {
+    // The `.hidden` utility, not the `hidden` attribute: an author `display` rule
+    // beats the UA's [hidden] rule, which is exactly how a "hidden" button ends
+    // up on screen. Everything here is shown/hidden the same way.
+    dot.classList.toggle('hidden', !show);
+    dot.classList.toggle('crit', crit);
+  }
+  const note = $opt('manualUpdateNote');
+  if (note) {
+    note.textContent = show ? `${crit ? 'Critical update' : 'Update'} available: ${verLabel(b!.latest)}` : '';
+    note.classList.toggle('crit', crit);
+    // The reason travels with the note so it is readable OFFLINE, from what the
+    // last check stored - no second request to see why a release was critical.
+    note.setAttribute('title', crit && b!.criticalReason ? b!.criticalReason : '');
+  }
+}
+
+/** Ask main for the remembered answer. Reads a file in userData; contacts
+ *  nothing. Silent on failure - a badge is never worth an error in the log. */
+async function loadUpdateBadge() {
+  try { paintUpdateBadge(await api.updateBadge()); } catch { /* nothing remembered */ }
+}
+
+/** One "label: value" row in the update modal (built as nodes, never as HTML). */
+function updRow(host: HTMLElement, label: string, value: string) {
+  if (!value) return;
+  const row = document.createElement('div'); row.className = 'upd-kv';
+  const k = document.createElement('span'); k.className = 'k'; k.textContent = label;
+  const v = document.createElement('span'); v.className = 'v'; v.textContent = value;
+  row.appendChild(k); row.appendChild(v); host.appendChild(row);
+}
+
+/**
+ * Show one of the three outcomes. EVERYTHING that came off the network is written
+ * with textContent, never innerHTML: the release body is untrusted text.
+ * Every outcome is dismissible and none of them installs anything.
+ */
+function renderUpdateResult(r: UpdateCheckInfo) {
+  const body = $opt('updateBody');
+  const openBtn = $opt('updateOpenBtn') as HTMLButtonElement | null;
+  const hideBtn = $opt('updateHideBtn') as HTMLButtonElement | null;
+  if (!body) return;
+  body.innerHTML = '';
+  const newer = r.ok && r.newer === true;
+  const crit = newer && r.critical === true;
+
+  setText('updateTitle', !r.ok ? 'Update check' : crit ? 'Critical update available' : newer ? 'Update available' : 'Up to date');
+  // "Open release page" and "Hide this reminder" only mean anything when there IS
+  // a newer release; up to date and could-not-check just close.
+  openBtn?.classList.toggle('hidden', !newer);
+  hideBtn?.classList.toggle('hidden', !newer);
+
+  const lead = document.createElement('p'); lead.className = 'upd-lead';
+  if (!r.ok) {
+    // Offline is the ORDINARY case for a field tool, so this reads as a plain
+    // fact, not as an error: no red, no alarm, and the address given as text.
+    lead.textContent = 'No answer from GitHub, so this build could not be compared with the latest release.';
+    body.appendChild(lead);
+    updRow(body, 'Reason', r.error || 'The check did not complete.');
+    updRow(body, 'This build', `SeisConv ${r.current}`);
+    const p = document.createElement('p');
+    p.style.margin = '11px 0 4px';
+    p.textContent = 'Nothing is wrong with the app. You can look at the releases yourself whenever you have a connection:';
+    body.appendChild(p);
+    const u = document.createElement('div'); u.className = 'upd-url'; u.textContent = r.url;
+    body.appendChild(u);
+  } else if (!newer) {
+    lead.textContent = `SeisConv ${r.current} is the newest published release.`;
+    body.appendChild(lead);
+    updRow(body, 'Latest release', verLabel(r.latest || '-'));
+    updRow(body, 'Published', fmtReleaseDate(r.publishedAt || ''));
+  } else {
+    if (crit && r.criticalReason) {
+      const c = document.createElement('div'); c.className = 'upd-crit';
+      c.textContent = `Marked critical by the release notes: ${r.criticalReason}`;
+      body.appendChild(c);
+    }
+    lead.textContent = crit
+      ? 'This one is worth taking. SeisConv will not install it for you, and you can keep working.'
+      : 'A newer release exists. SeisConv downloads and installs nothing - the release page opens in your browser.';
+    body.appendChild(lead);
+    updRow(body, 'This build', r.current);
+    updRow(body, 'Newest release', verLabel(r.latest || '-'));
+    updRow(body, 'Published', fmtReleaseDate(r.publishedAt || ''));
+    if (r.notes) {
+      const n = document.createElement('div'); n.className = 'upd-notes';
+      n.textContent = r.notes;            // plain text, capped in main
+      body.appendChild(n);
+    }
+  }
+  body.scrollTop = 0;
+  $opt('updateBack')?.classList.add('open');
+}
+
+/** The check itself - the ONLY thing in SeisConv that reaches api.github.com,
+ *  and only from this click. */
+async function runUpdateCheck() {
+  if (updateChecking) return;
+  const btn = $opt('checkUpdatesBtn') as HTMLButtonElement | null;
+  updateChecking = true;
+  if (btn) { btn.disabled = true; btn.textContent = 'Checking…'; }
+  try {
+    const r = await api.checkForUpdates();
+    paintUpdateBadge(r.badge ?? updateBadgeState);
+    renderUpdateResult(r);
+  } catch (e) {
+    renderUpdateResult({
+      ok: false,
+      current: APP_VERSION,
+      url: 'https://github.com/m0shiko8811-beep/SeisConv/releases',
+      badge: updateBadgeState ?? {
+        show: false, current: APP_VERSION, latest: '', publishedAt: '', notes: '',
+        critical: false, criticalReason: '', url: '', checkedAt: '',
+      },
+      error: (e as Error)?.message || 'The check could not be started.',
+    });
+  } finally {
+    updateChecking = false;
+    if (btn) { btn.disabled = false; btn.textContent = 'Check for updates'; }
+  }
+}
+
+/** Hide the dot for the version currently remembered - that version only. A
+ *  newer release found by a later check brings it back on its own. */
+async function hideUpdateReminder() {
+  try { paintUpdateBadge(await api.updateDismiss()); } catch { /* leave the badge */ }
+  closeUpdateModal();
+  infoToast('Reminder hidden for this version.');
+}
+
+/** Hand the release page to the default browser. Main re-reads the URL it stored
+ *  and allow-listed; the renderer cannot pass one in. */
+async function openReleasePage() {
+  try {
+    const r = await api.openReleasePage();
+    if (!r.ok) infoToast('Could not open a browser - the address is shown above.');
+  } catch {
+    infoToast('Could not open a browser - the address is shown above.');
+  }
+}
+
+/** Wire the Help footer. The version read-out is painted in EVERY build; only the
+ *  check itself is compiled out of the Store build. */
+function initUpdates() {
+  setText('manualVersion', `SeisConv ${APP_VERSION}`);
+  if (__UPDATE_CHECK__) {
+    const btn = $opt('checkUpdatesBtn') as HTMLButtonElement | null;
+    if (btn) { btn.classList.remove('hidden'); btn.addEventListener('click', () => { void runUpdateCheck(); }); }
+    $opt('updateClose')?.addEventListener('click', closeUpdateModal);
+    $opt('updateCloseBtn')?.addEventListener('click', closeUpdateModal);
+    $opt('updateBack')?.addEventListener('click', (e) => { if (e.target === $opt('updateBack')) closeUpdateModal(); });
+    $opt('updateHideBtn')?.addEventListener('click', () => { void hideUpdateReminder(); });
+    $opt('updateOpenBtn')?.addEventListener('click', () => { void openReleasePage(); });
+    void loadUpdateBadge();
   }
 }
 
@@ -21032,6 +21277,9 @@ function init() {
   $opt('feedbackBack')?.addEventListener('click', (e) => { if (e.target === $opt('feedbackBack')) closeFeedback(); });
   $opt('feedbackSend')?.addEventListener('click', () => void sendFeedback());
   $opt('feedbackCopy')?.addEventListener('click', () => void copyFeedback());
+  // -- Check for updates (Help footer) -- paints the version read-out in every
+  // build, and wires the on-demand check + its remembered badge where it exists.
+  initUpdates();
   const slider = $('traceSlider') as HTMLInputElement;
   slider.addEventListener('input', () => {
     traceIndex = parseInt(slider.value, 10) || 0;
@@ -21361,6 +21609,8 @@ function onKeyDown(e: KeyboardEvent) {
   if (e.key === 'Escape' && $opt('ologRenumBack')?.classList.contains('open')) { closeRenumberModal(); return; }
   if (e.key === 'Escape' && $opt('otwCfgBack')?.classList.contains('open')) { closeTrigCfgModal(); return; }
   if (e.key === 'Escape' && $opt('otwCatchBack')?.classList.contains('open')) { closeTrigCatchup(); return; }
+  // The update-result modal opens ON TOP of Help, so it takes Esc first.
+  if (__UPDATE_CHECK__ && e.key === 'Escape' && updateModalOpen()) { closeUpdateModal(); return; }
   if (e.key === 'Escape' && manualOpen()) { closeManual(); return; }
   if (e.key === 'Escape' && feedbackOpen()) { closeFeedback(); return; }
   if (e.key === 'Escape' && $opt('undoToast')?.classList.contains('show')) { hideUndoToast(); return; }

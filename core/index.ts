@@ -37,6 +37,7 @@ export * from './dsp/semblance';
 export * from './dsp/avgspectrum';
 export * from './dsp/spectrogram';
 export * from './dsp/fk';
+export * from './version';
 export * from './render/colormaps';
 export * from './render/model';
 export * from './sps/parse';
