@@ -5,7 +5,7 @@
 // sandboxed (contextIsolation, no nodeIntegration); it reaches privileged work
 // only through the typed `seisconvAPI` in preload.
 
-import { app, BrowserWindow, dialog, ipcMain, Menu, nativeImage, shell } from 'electron';
+import { app, BrowserWindow, dialog, ipcMain, Menu, nativeImage, screen, shell } from 'electron';
 import { writeFile, readFile, readdir, stat, unlink, open } from 'node:fs/promises';
 import { createWriteStream, watch, type FSWatcher } from 'node:fs';
 import { spawn, type ChildProcess } from 'node:child_process';
@@ -316,10 +316,63 @@ function sntpQuery(server: string): Promise<{ ok: boolean; offsetMs?: number; se
   });
 }
 
+/** QA-only window placement (no effect for a normal user, who never sets these).
+ *  SEISCONV_QA_WINDOW_POS accepts 'secondary' (default target for the QA
+ *  harness), 'primary', or an explicit 'x,y' in screen coordinates. The result
+ *  is always validated against the real displays: if the requested display does
+ *  not exist, or the resulting rect would not be substantially visible on any
+ *  display, we fall back to centring on the primary display, so a harness can
+ *  never open a window nobody can see. Returns null (Electron's own default
+ *  placement) when the variable is unset. Size is never touched: the pixel
+ *  oracle depends on the exact 1240x860 geometry. */
+function qaWindowPosition(width: number, height: number): { x: number; y: number } | null {
+  const raw = (process.env.SEISCONV_QA_WINDOW_POS || '').trim();
+  if (!raw) return null;
+  let displays: Electron.Display[] = [];
+  let primary: Electron.Display | null = null;
+  try {
+    displays = screen.getAllDisplays();
+    primary = screen.getPrimaryDisplay();
+  } catch { return null; }
+  if (!primary || !displays.length) return null;
+
+  const centreOn = (d: Electron.Display) => ({
+    x: Math.round(d.workArea.x + (d.workArea.width - width) / 2),
+    y: Math.round(d.workArea.y + (d.workArea.height - height) / 2),
+  });
+  // "Visible enough" = at least a 200x120 overlap with some display's work area,
+  // which is plenty to grab and move the window by hand.
+  const visible = (x: number, y: number) => displays.some((d) => {
+    const a = d.workArea;
+    return Math.min(x + width, a.x + a.width) - Math.max(x, a.x) >= 200
+      && Math.min(y + height, a.y + a.height) - Math.max(y, a.y) >= 120;
+  });
+
+  let want: { x: number; y: number } | null = null;
+  const lower = raw.toLowerCase();
+  if (lower === 'primary') {
+    want = centreOn(primary);
+  } else if (lower === 'secondary') {
+    const other = displays.find((d) => d.id !== primary!.id);
+    want = centreOn(other || primary); // single display -> primary, still visible
+  } else {
+    const m = /^(-?\d+)\s*,\s*(-?\d+)$/.exec(raw);
+    if (m) want = { x: Number(m[1]), y: Number(m[2]) };
+  }
+  if (!want || !Number.isFinite(want.x) || !Number.isFinite(want.y)) return centreOn(primary);
+  if (!visible(want.x, want.y)) {
+    console.warn(`[qa] SEISCONV_QA_WINDOW_POS=${raw} is off-screen; centring on the primary display`);
+    return centreOn(primary);
+  }
+  return want;
+}
+
 function createWindow(): void {
+  const qaPos = qaWindowPosition(1240, 860);
   win = new BrowserWindow({
     width: 1240,
     height: 860,
+    ...(qaPos ? { x: qaPos.x, y: qaPos.y } : {}),
     minWidth: 760,
     minHeight: 560,
     backgroundColor: '#0d1f33',
@@ -338,7 +391,11 @@ function createWindow(): void {
       sandbox: true,
     },
   });
-  win.once('ready-to-show', () => win?.show());
+  // QA can ask for the window to appear WITHOUT taking OS focus, so a test run
+  // does not steal the keyboard from whatever the user is doing. Playwright drives
+  // the window over CDP, which does not need OS focus, so this is safe for drivers.
+  const qaInactive = process.env.SEISCONV_QA_WINDOW_INACTIVE === '1';
+  win.once('ready-to-show', () => { if (qaInactive) win?.showInactive(); else win?.show(); });
   // Kill every live trigger source with the window - nothing may keep watching
   // folders / listening on sockets once the UI that owns the watch is gone.
   win.on('closed', () => { stopTriggerWatch(true); void fieldHub.stop(); win = null; });

@@ -65,6 +65,22 @@ under `SEISCONV_QA_DATA_ROOT`** (no default; set it to wherever your sample data
 | `SEISCONV_QA_LE`   | `le`   | `<DATA_ROOT>/example-le.sgy` (a little-endian SEG-Y) | Workbench + LE re-open |
 | `SEISCONV_QA_SPS`  | `sps`  | `<DATA_ROOT>/example.{s01,r01,x01}` (`;`-separated) | SPS tab (multiSelections) |
 
+### Where the test window opens
+
+Every driver that launches through `harness.launch()` (and `qa/drive.mjs`) puts
+the app window on the **secondary display** and shows it **without taking focus**,
+so a run does not interrupt whoever is working on the primary screen. The window
+SIZE is never changed - the render-golden pixel oracle depends on 1240x860.
+
+| Variable | Values | Default |
+|---|---|---|
+| `SEISCONV_QA_WINDOW_POS` | `secondary` / `primary` / `x,y` | `secondary` |
+| `SEISCONV_QA_WINDOW_INACTIVE` | `1` (show without focus) / `0` | `1` |
+
+`electron/main.ts` validates the request against the real displays: with a single
+display, or an `x,y` that would leave the window off-screen, it centres on the
+primary display instead, so a run can never open a window nobody can see.
+
 The defaults are placeholder names, not files that ship with the repo: bring your
 own SEG-Y and SPS triplet. Nothing here names a real survey, site or job, and
 nothing that does may ever be committed. If an input is missing the harness

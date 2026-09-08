@@ -99,6 +99,7 @@ import {
   scanTraceHealth,
   classifyTrace,
   thresholdsForSensitivity,
+  NOISE_MAX_SIG_FRAC,
   defaultThresholds,
   readEvidence,
   writeEvidence,
@@ -869,7 +870,8 @@ test('trace-health: tunability - a borderline trace flips flagged↔clear with s
   const mkEv = (over: Record<string, number | boolean> = {}) => ({
     n: 500, std: 0.3, rms: 0.3, peak: 1, rmsGated: 0.3, zcr: 0.1, flatRatio: 0.3, deadRel: 1, deadBaseline: 0.3,
     rmsZ: 0, ampBaseline: 0.3, localN: 8, specScore: 0, domFreqHz: 30, hfFrac: 0.1, oneBinDom: 0.05,
-    clipRunFrac: 0, spikeScore: 1.5, polarityCoef: 0.9, polarityConf: 0.8, polarityRan: true, rmsPre: 0.05, ...over,
+    clipRunFrac: 0, spikeScore: 1.5, polarityCoef: 0.9, polarityConf: 0.8, polarityRan: true, rmsPre: 0.05,
+    rmsPreSigFrac: 0.05, rmsPreTrusted: true, ...over,
   });
   // A trace at z=+5σ AND 3.3× the local median (so the amplitude-ratio guard is met):
   // cleared at LOW amp sensitivity (hotZ=9), flagged at HIGH (hotZ=4).
@@ -889,7 +891,7 @@ test('trace-health: tunability - a borderline trace flips flagged↔clear with s
   assert.doesNotThrow(() => scanTraceHealth([null, undefined, new Float32Array(0), garbage], 2000));
 });
 test('trace-health: evidence round-trips through the flat transport buffer (incl. NaN polarity)', () => {
-  const ev = { n: 480, std: 1.5, rms: 1.6, peak: 4.2, rmsGated: 1.1, zcr: 0.12, flatRatio: 0.36, deadRel: 0.9, deadBaseline: 1.2, rmsZ: 2.3, ampBaseline: 1.4, localN: 7, specScore: 1.1, domFreqHz: 28, hfFrac: 0.2, oneBinDom: 0.08, clipRunFrac: 0.01, spikeScore: 4, polarityCoef: NaN, polarityConf: 0, polarityRan: false, rmsPre: 0.42 };
+  const ev = { n: 480, std: 1.5, rms: 1.6, peak: 4.2, rmsGated: 1.1, zcr: 0.12, flatRatio: 0.36, deadRel: 0.9, deadBaseline: 1.2, rmsZ: 2.3, ampBaseline: 1.4, localN: 7, specScore: 1.1, domFreqHz: 28, hfFrac: 0.2, oneBinDom: 0.08, clipRunFrac: 0.01, spikeScore: 4, polarityCoef: NaN, polarityConf: 0, polarityRan: false, rmsPre: 0.42, rmsPreSigFrac: 0.31, rmsPreTrusted: true };
   const flat = new Float32Array(EVIDENCE_STRIDE * 2);
   writeEvidence(flat, 1, ev);
   const back = readEvidence(flat, 1);
@@ -899,6 +901,11 @@ test('trace-health: evidence round-trips through the flat transport buffer (incl
   assert.ok(Number.isNaN(back.polarityCoef), 'NaN polarity survives the Float32 transport');
   assert.ok(Math.abs(back.rmsZ - 2.3) < 1e-4 && Math.abs(back.peak - 4.2) < 1e-4);
   assert.ok(Math.abs(back.rmsPre - 0.42) < 1e-4, 'the pre-first-break noise RMS round-trips');
+  assert.ok(Math.abs(back.rmsPreSigFrac - 0.31) < 1e-4, 'the noise-window signal fraction round-trips');
+  assert.equal(back.rmsPreTrusted, true, 'the noise-window trust flag round-trips as a boolean');
+  // The untrusted state must survive too - a 1/0 column read back with >= 0.5.
+  writeEvidence(flat, 0, { ...ev, rmsPreSigFrac: 0.97, rmsPreTrusted: false });
+  assert.equal(readEvidence(flat, 0).rmsPreTrusted, false, 'an untrusted noise window round-trips as false');
 });
 test('trace-health: the pre-first-break noise RMS is the quiet head, and NaN with no pick', () => {
   // A quiet head followed by a strong onset: rmsPre must measure the head only,
@@ -919,6 +926,99 @@ test('trace-health: the pre-first-break noise RMS is the quiet head, and NaN wit
   assert.ok(a.rmsPre > 0, 'the quiet head is not silent, so its RMS is above zero');
   assert.ok(a.rmsPre < a.rms, `noise RMS ${a.rmsPre} should be below the whole-trace RMS ${a.rms}`);
   assert.ok(Number.isNaN(res.evidence[1].rmsPre), 'a flat line has no pick, so its noise RMS is NaN, not a made-up zero');
+});
+test('trace-health: a pre-first-break window full of arrival is reported but marked untrusted', () => {
+  // WHY this test exists: the pre-break window is [0, firstBreak - guard). On a
+  // NEAR-OFFSET trace the direct arrival is at t near zero, where the STA/LTA
+  // picker's LTA window is not yet established, so the pick latches onto a LATER
+  // event and the true onset ends up INSIDE the window that gets called "noise".
+  // The sample count is healthy in that case, so only an AMPLITUDE test can see it.
+  const si = 2000;
+  const n = 1000;
+  const mk = (f: (i: number) => number) => { const a = new Float32Array(n); for (let i = 0; i < n; i++) a[i] = f(i); return a; };
+  const quiet = (i: number) => 0.01 * Math.sin(i * 0.7);           // deterministic low-level noise
+  const wav = (i: number, t0: number, amp: number, tau: number) =>  // decaying wavelet from t0
+    (i < t0 ? 0 : amp * Math.sin((i - t0) * 0.5) * Math.exp(-(i - t0) / tau));
+
+  // (a) FAR offset: a long quiet head then one clear onset - the honest case.
+  const far = mk((i) => quiet(i) + wav(i, 400, 4, 120));
+  // (b) NEAR offset: the arrival sits at sample 1, with a later reflection the
+  //     picker latches onto instead, so the window swallows the whole arrival.
+  const near = mk((i) => quiet(i) + wav(i, 1, 4, 30) + wav(i, 200, 0.5, 30));
+  // (c) No confident pick at all - a flat line. Unchanged behaviour: no value.
+  const flat = new Float32Array(n);
+  const res = scanTraceHealth([far, near, flat], si);
+
+  const a = res.evidence[0];
+  assert.ok(Number.isFinite(a.rmsPre) && a.rmsPreTrusted, 'a long clean pre-break window is trusted');
+  assert.ok(a.rmsPreSigFrac < 0.05, `a clean window holds almost none of the trace peak (got ${a.rmsPreSigFrac})`);
+
+  const b = res.evidence[1];
+  assert.ok(Number.isFinite(b.rmsPre), 'the near-offset value is still REPORTED, not suppressed');
+  assert.equal(b.rmsPreTrusted, false, 'a window holding the arrival is marked untrusted');
+  assert.ok(b.rmsPreSigFrac > NOISE_MAX_SIG_FRAC, `the window holds most of the trace peak (got ${b.rmsPreSigFrac})`);
+  // And the damage the flag exists to warn about: the "noise" level is ~100x the
+  // real background, which is the arrival, not noise.
+  assert.ok(b.rmsPre > 20 * a.rmsPre, `the untrusted noise RMS ${b.rmsPre} is inflated vs the honest ${a.rmsPre}`);
+
+  const c = res.evidence[2];
+  assert.ok(Number.isNaN(c.rmsPre), 'no pick still means no noise RMS');
+  assert.ok(Number.isNaN(c.rmsPreSigFrac), 'no noise RMS means no signal fraction either');
+  assert.equal(c.rmsPreTrusted, false, 'a value that does not exist is not a trusted value');
+});
+test('trace-health: the noise-window trust threshold is tested from both sides', () => {
+  // Same construction on both traces; ONLY the near-arrival amplitude differs, so
+  // the pre-window's share of the trace peak is the single moving part. A late
+  // dominant event fixes the trace peak, keeping the ratio the only variable.
+  const si = 2000;
+  const n = 1000;
+  const mk = (f: (i: number) => number) => { const a = new Float32Array(n); for (let i = 0; i < n; i++) a[i] = f(i); return a; };
+  const quiet = (i: number) => 0.01 * Math.sin(i * 0.7);
+  const wav = (i: number, t0: number, amp: number, tau: number) =>
+    (i < t0 ? 0 : amp * Math.sin((i - t0) * 0.5) * Math.exp(-(i - t0) / tau));
+  const build = (early: number) => mk((i) =>
+    quiet(i) + wav(i, 1, early, 30) + wav(i, 200, 0.5, 30) + wav(i, 600, 8, 30));
+  const res = scanTraceHealth([build(4.0), build(4.2)], si);
+  const under = res.evidence[0], over = res.evidence[1];
+  assert.ok(under.rmsPreSigFrac <= NOISE_MAX_SIG_FRAC, `just under the cutoff (got ${under.rmsPreSigFrac})`);
+  assert.equal(under.rmsPreTrusted, true, 'at or below the cutoff the window is still trusted');
+  assert.ok(over.rmsPreSigFrac > NOISE_MAX_SIG_FRAC, `just over the cutoff (got ${over.rmsPreSigFrac})`);
+  assert.equal(over.rmsPreTrusted, false, 'above the cutoff the window is not trusted');
+  // Both windows are the SAME length, so nothing about duration separates them.
+  assert.ok(Number.isFinite(under.rmsPre) && Number.isFinite(over.rmsPre), 'both still report a value');
+});
+test('trace-health: the noise-window trust fields do not change classifyTrace at all', () => {
+  // Honesty of REPORTING only. classifyTrace must not read the new fields, so
+  // flipping them on a representative evidence set must leave its output identical.
+  const base = {
+    n: 500, std: 0.3, rms: 0.3, peak: 1, rmsGated: 0.3, zcr: 0.1, flatRatio: 0.3, deadRel: 1, deadBaseline: 0.3,
+    rmsZ: 0, ampBaseline: 0.3, localN: 8, specScore: 0, domFreqHz: 30, hfFrac: 0.1, oneBinDom: 0.05,
+    clipRunFrac: 0, spikeScore: 1.5, polarityCoef: 0.9, polarityConf: 0.8, polarityRan: true,
+    rmsPre: 0.05, rmsPreSigFrac: 0.05, rmsPreTrusted: true,
+  };
+  const cases = [
+    base,                                            // clean
+    { ...base, rmsZ: 6, rms: 1.0 },                  // hot
+    { ...base, rmsZ: -6, rms: 0.05 },                // weak
+    { ...base, flatRatio: 0.001 },                   // dead (flat)
+    { ...base, deadRel: 0.01 },                      // dead (relative)
+    { ...base, clipRunFrac: 0.2 },                   // clipped
+    { ...base, spikeScore: 40 },                     // spike
+    { ...base, polarityCoef: -0.9 },                 // reversed
+    { ...base, specScore: 20, zcr: 0.4 },            // noisy
+    { ...base, n: 0, std: 0, rms: 0, peak: 0 },      // empty
+  ];
+  for (const sens of ['low', 'med', 'high'] as const) {
+    const thr = thresholdsForSensitivity({ amp: sens, dead: sens, noisy: sens, clipped: sens, reversed: sens });
+    for (let i = 0; i < cases.length; i++) {
+      const ev = cases[i];
+      const withTrust = classifyTrace({ ...ev, rmsPreSigFrac: 0.02, rmsPreTrusted: true }, i, thr);
+      const noTrust = classifyTrace({ ...ev, rmsPreSigFrac: 0.99, rmsPreTrusted: false }, i, thr);
+      const noValue = classifyTrace({ ...ev, rmsPre: NaN, rmsPreSigFrac: NaN, rmsPreTrusted: false }, i, thr);
+      assert.deepEqual(noTrust, withTrust, `case ${i} at ${sens}: trust flag must not change classification`);
+      assert.deepEqual(noValue, withTrust, `case ${i} at ${sens}: a missing noise window must not change classification`);
+    }
+  }
 });
 test('color maps hit known anchors', () => {
   assert.deepEqual(colorSeismic(0), [255, 255, 255]);

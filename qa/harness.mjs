@@ -77,6 +77,23 @@ export const SPS = qaPaths('sps', [
 
 export const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
+/** Environment for every QA _electron.launch: keeps the test window OFF the
+ *  primary display and out of the way. By default the window opens on the
+ *  SECONDARY monitor and is shown without taking OS focus, so a run does not
+ *  interrupt whoever is working. Both are overridable (SEISCONV_QA_WINDOW_POS =
+ *  'secondary' | 'primary' | 'x,y'; SEISCONV_QA_WINDOW_INACTIVE = '1' | '0'), and
+ *  main.ts validates the request against the real displays, falling back to the
+ *  primary one when there is no second display or the position is off-screen.
+ *  The window SIZE is never touched - the pixel oracle depends on 1240x860. */
+export function launchEnv(extra = {}) {
+  return {
+    ...process.env,
+    SEISCONV_QA_WINDOW_POS: process.env.SEISCONV_QA_WINDOW_POS ?? 'secondary',
+    SEISCONV_QA_WINDOW_INACTIVE: process.env.SEISCONV_QA_WINDOW_INACTIVE ?? '1',
+    ...extra,
+  };
+}
+
 /** Launch the BUILT app; returns { app, win, errors } where errors collects
  *  pageerrors + console.error for the whole session. */
 export async function launch() {
@@ -85,7 +102,7 @@ export async function launch() {
   // settings). Set SEISCONV_QA_USER_DATA_DIR to a temp path to enable.
   const udd = process.env.SEISCONV_QA_USER_DATA_DIR;
   const args = udd ? ['.', `--user-data-dir=${udd}`] : ['.'];
-  const app = await electron.launch({ args, cwd: APP_DIR });
+  const app = await electron.launch({ args, cwd: APP_DIR, env: launchEnv() });
   const win = await app.firstWindow();
   const errors = [];
   win.on('pageerror', (e) => errors.push('pageerror: ' + (e.message || e)));

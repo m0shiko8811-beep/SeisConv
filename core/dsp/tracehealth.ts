@@ -88,6 +88,8 @@ export interface TraceEvidence {
   peak: number;         // peak |amplitude| (sample value)
   rmsGated: number;     // RMS within the early/first-break gate (sample value)
   rmsPre: number;       // RMS of the PRE-first-break noise window (sample value); NaN = no confident pick
+  rmsPreSigFrac: number;// peak|pre-window| / peak|trace| (NaN when rmsPre is NaN)
+  rmsPreTrusted: boolean;// is rmsPre a defensible NOISE level? (see NOISE_MAX_SIG_FRAC)
   zcr: number;          // zero-crossing rate (sign changes / sample)
   flatRatio: number;    // std / peak (≈0 ⇒ flat line)
   deadRel: number;      // rmsGated / deadBaseline (live-neighbour median, gated)
@@ -177,6 +179,15 @@ const NOISE_MIN_SAMPLES = 8;
  *  showing, and quoting a second hard-coded number there would be a second source
  *  of truth for the same measurement. */
 export const NOISE_GUARD_MS = DEAD_GATE_PRE_MS;
+/** Largest share of the trace's OWN peak amplitude the pre-first-break window may
+ *  contain and still be quoted as a noise level. Above it the window is measuring
+ *  something as big as the trace's largest excursion, which no noise window does.
+ *  Measured, not assumed: on the synthetic promo record the far-offset windows sit
+ *  at 0.009..0.050 of trace peak while the two straddling the source sit at 1.000,
+ *  so 0.5 has a 10x margin on the clean side and a 2x margin on the bad side.
+ *  Exported for the same reason as NOISE_GUARD_MS: a panel that marks the value
+ *  untrustworthy has to be able to quote the cutoff without restating it. */
+export const NOISE_MAX_SIG_FRAC = 0.5;
 // REVERSED polarity window: a TIGHT window on the first-break wavelet only - wide
 // gates let adjacent-trace moveout decorrelate normal neighbours (so a flip can't be
 // told from poor coherence). Kept short so normal neighbours correlate strongly +
@@ -329,6 +340,20 @@ function basicStats(samples: Float32Array | null | undefined, clipPeakRatio: num
     spikeScore: Number.isFinite(spikeScore) ? spikeScore : 0,
     n: N,
   };
+}
+
+/** Peak |amplitude| of `samples` over the half-open window [g0, g1). Finite-guarded.
+ *  Used to ask whether a window that is CALLED noise actually contains the trace's
+ *  own largest excursion. */
+function peakWindow(samples: Float32Array, g0: number, g1: number): number {
+  const lo = Math.max(0, g0 | 0);
+  const hi = Math.min(samples.length, g1 | 0);
+  let peak = 0;
+  for (let i = lo; i < hi; i++) {
+    const v = samples[i];
+    if (Number.isFinite(v)) { const a = v < 0 ? -v : v; if (a > peak) peak = a; }
+  }
+  return peak;
 }
 
 /** RMS of `samples` over the half-open sample window [g0, g1). Finite-guarded. */
@@ -602,6 +627,7 @@ export function scanTraceHealth(
   const rms = new Float64Array(count);
   const rmsGated = new Float64Array(count);
   const rmsPre = new Float64Array(count);
+  const rmsPreFrac = new Float64Array(count);
   const fbSamp = new Int32Array(count);
   const domFreq = new Float64Array(count);
   const hfFrac = new Float64Array(count);
@@ -628,9 +654,17 @@ export function scanTraceHealth(
       // noise. This is a DIFFERENT measurement from rmsGated, which straddles the
       // first break and is a SIGNAL level. NaN when there is no confident pick or
       // the window is too short - a made-up noise level is worse than none.
-      rmsPre[i] = fb >= 0 && (fb - deadPre) >= NOISE_MIN_SAMPLES ? rmsWindow(s, 0, fb - deadPre) : NaN;
+      const preEnd = fb >= 0 ? fb - deadPre : -1;
+      const havePre = preEnd >= NOISE_MIN_SAMPLES;
+      rmsPre[i] = havePre ? rmsWindow(s, 0, preEnd) : NaN;
+      // How much of the trace's own peak lives inside the window we are about to
+      // call "noise". On a NEAR-OFFSET trace the direct arrival is at t near zero,
+      // and firstBreakSample can latch onto a later, larger excursion, which leaves
+      // the true onset INSIDE [0, fb - guard). The RMS is then the arrival, and the
+      // sample count says nothing about that - only the amplitude does.
+      rmsPreFrac[i] = havePre && st.peak > 0 ? peakWindow(s, 0, preEnd) / st.peak : NaN;
       if (doSpec && isLive) { const sp = specStats(s, siUs); domFreq[i] = sp.domFreqHz; hfFrac[i] = sp.hfFrac; oneBin[i] = sp.oneBinDom; }
-    } else { fbSamp[i] = -1; rmsGated[i] = 0; rmsPre[i] = NaN; }
+    } else { fbSamp[i] = -1; rmsGated[i] = 0; rmsPre[i] = NaN; rmsPreFrac[i] = NaN; }
   }
 
   // Robust survey-wide RMS floor (for the live predicate + a fallback baseline scale).
@@ -683,6 +717,10 @@ export function scanTraceHealth(
       peak,
       rmsGated: rmsGated[i],
       rmsPre: rmsPre[i],
+      rmsPreSigFrac: rmsPreFrac[i],
+      // Reported either way (Moshe's call): the number stays, the caveat rides with
+      // it, so a panel can show it MARKED rather than silently dropping evidence.
+      rmsPreTrusted: Number.isFinite(rmsPre[i]) && Number.isFinite(rmsPreFrac[i]) && rmsPreFrac[i] <= NOISE_MAX_SIG_FRAC,
       zcr: st.zcr,
       flatRatio: peak > 0 ? st.std / peak : (st.n === 0 ? 0 : 1),
       deadRel: Number.isFinite(deadRel) ? deadRel : NaN,
@@ -798,6 +836,7 @@ export const EVIDENCE_FIELDS = [
   // APPENDED, never inserted: the indices above are hard-coded in writeEvidence /
   // readEvidence, so a new field goes on the END and nothing else shifts.
   'rmsPre',
+  'rmsPreSigFrac', 'rmsPreTrusted',
 ] as const;
 export const EVIDENCE_STRIDE = EVIDENCE_FIELDS.length;
 
@@ -827,6 +866,8 @@ export function writeEvidence(flat: Float32Array, i: number, ev: TraceEvidence):
   flat[b + 19] = ev.polarityConf;
   flat[b + 20] = ev.polarityRan ? 1 : 0;
   flat[b + 21] = ev.rmsPre;
+  flat[b + 22] = ev.rmsPreSigFrac;
+  flat[b + 23] = ev.rmsPreTrusted ? 1 : 0;
 }
 
 /** Read one trace's evidence back out of the flat buffer at row `i`. */
@@ -855,5 +896,7 @@ export function readEvidence(flat: Float32Array, i: number): TraceEvidence {
     polarityConf: flat[b + 19],
     polarityRan: flat[b + 20] >= 0.5,
     rmsPre: flat[b + 21],
+    rmsPreSigFrac: flat[b + 22],
+    rmsPreTrusted: flat[b + 23] >= 0.5,
   };
 }

@@ -26,6 +26,7 @@ import { existsSync, readFileSync, rmSync } from 'node:fs';
 import {
   sleep, mockDialogs, gotoTab, openFile,
   APP_DIR, SHOTS, SEGY, sample, qaPath, qaPaths,
+  launchEnv,
 } from './harness.mjs';
 
 // -- Test files (override via env) ------------------------------------------
@@ -102,7 +103,7 @@ const globalPageErrors = [];
     // --user-data-dir so QA never fights the installed app's single-instance lock.
     const udd = process.env.SEISCONV_QA_USER_DATA_DIR;
     const launchArgs = udd ? ['.', `--user-data-dir=${udd}`] : ['.'];
-    app = await electron.launch({ args: launchArgs, cwd: APP_DIR });
+    app = await electron.launch({ args: launchArgs, cwd: APP_DIR, env: launchEnv() });
     win = await app.firstWindow();
   } catch (e) {
     console.error('\n[FATAL] _electron.launch failed - could NOT start the app.');
