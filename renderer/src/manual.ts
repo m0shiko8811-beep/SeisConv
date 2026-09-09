@@ -90,7 +90,7 @@ export const MANUAL: Record<string, HelpTopic> = {
         '<b>Backups</b> - snapshots taken automatically before destructive changes; restore the most recent if needed.',
       ] },
       { h: 'Send Feedback', items: [
-        'Pick a category, type your message and <b>Send</b> - SeisConv opens your default mail app with it pre-filled. <b>Copy to clipboard</b> is the fallback if no mail app is configured.',
+        'Pick a category, type your message and <b>Open GitHub issue</b> - SeisConv opens a pre-filled issue in your browser, which you review and submit yourself. Issues are public, so keep survey, client and station names, coordinates and file paths out of the message. No GitHub account? <b>Send it by email instead</b> opens your mail app with the same message, and <b>Copy to clipboard</b> is the fallback if neither can be opened.',
       ] },
       { h: 'Where things save', items: [
         'Converting, exporting or saving always asks you for the destination with a native Save dialog - nothing is written silently.',

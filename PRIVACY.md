@@ -1,6 +1,6 @@
 # SeisConv Privacy Policy
 
-Effective date: 2026-09-08. Describes SeisConv version 0.8.1.
+Effective date: 2026-09-09. Describes SeisConv version 0.8.2.
 
 SeisConv is a free, open source desktop application for converting and
 viewing seismic data (SEG-Y, SEG-D, SEG-2, SU) and working with SPS survey
@@ -82,14 +82,28 @@ request process to describe.
 
 ## Feedback
 
-"Send Feedback" in the app opens your own default email client with a
-message addressed to `moshef@gii.co.il`, pre-filled with what you typed.
-SeisConv does not send anything itself; whether the email goes anywhere is
-entirely up to you.
+"Send Feedback" in the app opens a **pre-filled GitHub issue** in your normal
+web browser, on the public SeisConv repository, carrying the category and the
+message you typed. SeisConv does not post anything itself: nothing reaches
+GitHub unless you sign in there and submit it yourself, and you can edit or
+abandon the draft first. Because that issue is public, the draft opens with a
+reminder to keep survey names, client names, station and line numbers,
+coordinates and machine paths out of it.
+
+If you have no GitHub account, the app can instead open your own default mail
+client with the same text, addressed to `m0shiko8811@gmail.com`, or copy the
+message to your clipboard. Those are the fallback routes, not the main one, and
+they behave the same way: SeisConv hands the message to software you control
+and sends nothing itself.
 
 ## Contact
 
-Questions about this policy or about SeisConv: `moshef@gii.co.il`.
+Questions about this policy or about SeisConv: open a thread in
+[Discussions](https://github.com/m0shiko8811-beep/SeisConv/discussions), or an
+[issue](https://github.com/m0shiko8811-beep/SeisConv/issues) if something is
+broken. For a security vulnerability, see
+[SECURITY.md](https://github.com/m0shiko8811-beep/SeisConv/blob/main/SECURITY.md).
+If you cannot use GitHub at all, `m0shiko8811@gmail.com` reaches the maintainer.
 
 ## License
 

@@ -74,7 +74,7 @@ SeisConv is an offline desktop toolkit for seismic field data: convert between f
 
 ### Send Feedback
 
-- Pick a category, type your message and **Send** - SeisConv opens your default mail app with it pre-filled. **Copy to clipboard** is the fallback if no mail app is configured.
+- Pick a category, type your message and **Open GitHub issue** - SeisConv opens a pre-filled issue in your browser, which you review and submit yourself. Issues are public, so keep survey, client and station names, coordinates and file paths out of the message. No GitHub account? **Send it by email instead** opens your mail app with the same message, and **Copy to clipboard** is the fallback if neither can be opened.
 
 ### Where things save
 

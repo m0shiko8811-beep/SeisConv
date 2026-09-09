@@ -109,6 +109,7 @@ If you are looking for an **open source alternative** to a commercial format con
 - [SEG standards note](#seg-standards-note)
 - [Coordinate reference systems and attribution](#coordinate-reference-systems-and-attribution)
 - [Roadmap](#roadmap)
+- [Feedback and support](#feedback-and-support)
 - [Acknowledgements](#acknowledgements)
 - [License](#license)
 
@@ -126,7 +127,7 @@ Two modes selected from the top of the tab.
 
 **Folder (batch):** pick a source folder - SeisConv lists every recognized seismic file. A short wizard asks for the output format and a destination folder, then runs the batch. A **live progress bar** tracks `Converting X / N · <filename> · FORMAT`. A per-file result list marks each file QUEUED → CONVERTING → DONE / ERROR. **Cancel** stops after the current file; completed files are kept. Choosing **Tape Image** combines the whole batch into **one multi-record tape** - written to disk file-by-file (memory-bounded), so multi-GB tapes work.
 
-Output names are assembled from a **checklist of variable parts** ({name}, {format}, {date}, {time}, {seq}, custom text) with live examples. An **Open folder** button at the end of both wizards jumps to the results. Additional controls: **Clear** (reset state and worker cache), in-app **Manual** (Help / `?`), **Send Feedback** (opens your mail app), light/dark theme toggle, OS-aware keyboard shortcuts.
+Output names are assembled from a **checklist of variable parts** ({name}, {format}, {date}, {time}, {seq}, custom text) with live examples. An **Open folder** button at the end of both wizards jumps to the results. Additional controls: **Clear** (reset state and worker cache), in-app **Manual** (Help / `?`), **Send Feedback** (opens a pre-filled GitHub issue in your browser), light/dark theme toggle, OS-aware keyboard shortcuts.
 
 ---
 
@@ -580,6 +581,32 @@ CRSs it cannot compute are still **listed and searchable**, but they are marked 
 - Vibrator attribute (VAPS/PSS) ingest for per-VP source QC
 
 Shipped work is tracked in the [CHANGELOG](CHANGELOG.md).
+
+---
+
+## Feedback and support
+
+Everything happens on this repository, in the open, so an answer helps the next
+person who hits the same thing. There is no mailing list to join.
+
+- **Something is broken.** [Open a bug report](https://github.com/m0shiko8811-beep/SeisConv/issues/new/choose)
+  with the version from the About / Audit panel, your OS, and the steps to
+  reproduce it.
+- **A question, or "how do I ...".** Ask in
+  [Discussions](https://github.com/m0shiko8811-beep/SeisConv/discussions) rather
+  than opening an issue.
+- **A feature you actually need.** [Open a feature request](https://github.com/m0shiko8811-beep/SeisConv/issues/new/choose),
+  or float it in Discussions first if you want to think it through out loud.
+- **A security vulnerability.** Do **not** open an issue. Use GitHub's private
+  vulnerability reporting, described in [SECURITY.md](SECURITY.md).
+
+Issues and discussions are **public**. Never paste a survey or client name, a
+coordinate, a station or line number, a dataset filename or a machine path.
+Attach synthetic sample data only.
+
+**Send Feedback** in the app header goes to the same place: it opens a
+pre-filled GitHub issue in your browser. The app posts nothing by itself, and
+nothing is submitted until you press the button on GitHub.
 
 ---
 

@@ -1,5 +1,8 @@
 blank_issues_enabled: false
 contact_links:
+  - name: Question, or how do I do X
+    url: https://github.com/m0shiko8811-beep/SeisConv/discussions/new?category=q-a
+    about: Ask in Discussions. Usage questions and how-do-I get answered there, not in the issue tracker.
   - name: Security vulnerability (do not file publicly)
     url: https://github.com/m0shiko8811-beep/SeisConv/blob/main/SECURITY.md
     about: Please report security issues privately. See SECURITY.md.

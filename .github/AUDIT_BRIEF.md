@@ -87,9 +87,15 @@ Published files and published pixels carry no real survey names, client names, c
 station or line numbers, dataset filenames, or machine paths. If you find one, **report its
 location without reproducing the value.**
 
-Two deliberate exceptions that must NOT be flagged as leaks: `moshef@gii.co.il` is the project
-contact address, and the README Acknowledgements section names an institute immediately followed
-by a disclaimer. Those two belong together and neither is a mistake.
+One deliberate exception that must NOT be flagged as a leak: the README Acknowledgements section
+names an institute immediately followed by a disclaimer. Those two belong together and neither is
+a mistake.
+
+The project contact is the GitHub repo itself: Issues for bugs, Discussions for questions, and
+GitHub private vulnerability reporting for security. The only email anywhere in the project is
+`m0shiko8811@gmail.com`, kept as a deliberate fallback for anyone with no GitHub account.
+`moshef@gii.co.il` is no longer a project address. If you find it anywhere in a published file,
+that is a finding: report it like any other leak.
 
 ## The report
 

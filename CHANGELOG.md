@@ -5,6 +5,26 @@ All notable changes to SeisConv are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Changed
+
+- **Send Feedback now opens a pre-filled GitHub issue in your browser instead of the OS mail
+  client.** You review it and press Submit yourself; the app still sends nothing on its own. The
+  pre-filled body carries one line asking you to keep survey, client and station names, line
+  numbers, coordinates and machine paths out of a public issue. A quiet "Send it by email instead"
+  fallback remains for anyone with no GitHub account, and it now goes to `m0shiko8811@gmail.com`.
+- **The project contact moved to the GitHub repo.** Bugs go to Issues, questions to Discussions,
+  and vulnerabilities to GitHub private vulnerability reporting. `m0shiko8811@gmail.com` is the
+  one remaining fallback address, for someone who cannot use GitHub at all.
+
+### Fixed
+
+- **A latent crash in Send Feedback.** The old cap on the feedback message length could cut a
+  UTF-16 surrogate pair in half, and `encodeURIComponent` throws `URIError` on an unpaired
+  surrogate. `electron/main.ts` now trims a dangling high surrogate after every length cap before
+  encoding (`trimLoneSurrogate`, applied to the subject and body at `electron/main.ts:493-494`).
+
 ## [0.8.2] - 2026-09-09
 
 Documentation catching up with the code, one display fix, and an update check

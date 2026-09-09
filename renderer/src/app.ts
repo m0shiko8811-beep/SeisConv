@@ -494,9 +494,13 @@ declare global {
       winMaximizeToggle(): void;
       winClose(): void;
       onWinMaximized(cb: (maximized: boolean) => void): () => void;
-      // Send Feedback: composes a mailto: in the main process (the feedback inbox
-      // lives there) and opens the OS default mail client via shell.openExternal.
-      sendFeedback(args: { subject: string; body: string }): Promise<{ ok: boolean; error?: string }>;
+      // Send Feedback: main assembles the destination (it owns both the issue URL
+      // and the fallback inbox) and opens it with shell.openExternal. mode
+      // 'github' (the default) prefills a GitHub issue; 'mail' opens a mailto:.
+      // `fallback` comes back true when the prefilled link failed and main opened
+      // the plain issues page instead.
+      sendFeedback(args: { subject: string; body: string; mode?: 'github' | 'mail' }):
+        Promise<{ ok: boolean; fallback?: boolean; error?: string }>;
       // -- Check for updates (ONLY when the user clicks; nothing is downloaded) --
       // Registered by main only in a non-Store build; the UI below is compiled out
       // of that build too, so these are never called when they are absent.
@@ -717,9 +721,10 @@ function manualOpen(): boolean { return !!$opt('manualBack')?.classList.contains
 // App version: SINGLE SOURCE OF TRUTH is package.json ("version"). The renderer
 // build (npm run build:renderer) injects it with esbuild --define:__APP_VERSION__,
 // so it can never drift; the literal below is only the fallback for a bundle built
-// without that define. The feedback inbox address lives ONLY in electron/main.ts
-// (FEEDBACK_EMAIL) - the renderer just composes the subject + body and hands them
-// to the main process to open via mailto:.
+// without that define. The feedback destinations live ONLY in electron/main.ts
+// (FEEDBACK_ISSUE_URL, FEEDBACK_EMAIL) - the renderer just composes the subject +
+// body and asks main to open a prefilled GitHub issue, or a mailto: for the
+// no-GitHub-account fallback.
 declare const __APP_VERSION__: string;
 const APP_VERSION = (typeof __APP_VERSION__ === 'string' && __APP_VERSION__) ? __APP_VERSION__ : '0.7.10';
 function feedbackOpen(): boolean { return !!$opt('feedbackBack')?.classList.contains('open'); }
@@ -740,23 +745,36 @@ function composeFeedback(): { subject: string; body: string } | null {
     body: `${msg}\n\n-\nSeisConv ${APP_VERSION} · ${api.platform}`,
   };
 }
-/** Send: open the OS default mail app (via main → shell.openExternal) with the
- *  message pre-filled, toast, then close + clear. */
-async function sendFeedback() {
+/** Send: hand the composed message to main, which opens either a prefilled GitHub
+ *  issue (the primary path) or a mailto: (the fallback for anyone with no GitHub
+ *  account). Toast the outcome, then close + clear. Nothing is sent by the app:
+ *  the user still submits it themselves in the browser or the mail client. */
+async function sendFeedback(mode: 'github' | 'mail' = 'github') {
   const c = composeFeedback();
   if (!c) { setStatus('feedbackStatus', 'Enter a message first.', 'err'); return; }
+  const failed = mode === 'mail'
+    ? 'Could not open a mail app - use Copy to clipboard.'
+    : 'Could not open your browser - use Copy to clipboard.';
   try {
-    const r = await api.sendFeedback(c);
-    if (r.ok) infoToast('Opened your mail app - pick one to send.');
-    else infoToast('Could not open a mail app - use Copy to clipboard.');
+    const r = await api.sendFeedback({ ...c, mode });
+    if (r.ok) {
+      infoToast(mode === 'mail'
+        ? 'Opened your mail app - pick one to send.'
+        : 'Opened a GitHub issue in your browser - review it, then submit.');
+    } else if (r.fallback && mode !== 'mail') {
+      infoToast('Could not prefill the issue - opened the issues page instead.');
+    } else {
+      infoToast(failed);
+    }
   } catch {
-    infoToast('Could not open a mail app - use Copy to clipboard.');
+    infoToast(failed);
   }
   closeFeedback();
   const ta = $opt('feedbackMsg') as HTMLTextAreaElement | null;
   if (ta) ta.value = '';
 }
-/** Fallback when no mail client is configured: copy the composed message. */
+/** Fallback when neither a browser nor a mail client can be opened: copy the
+ *  composed message so it can be pasted anywhere. */
 async function copyFeedback() {
   const c = composeFeedback();
   if (!c) { setStatus('feedbackStatus', 'Enter a message first.', 'err'); return; }
@@ -21275,7 +21293,8 @@ function init() {
   $opt('feedbackClose')?.addEventListener('click', closeFeedback);
   $opt('feedbackCancel')?.addEventListener('click', closeFeedback);
   $opt('feedbackBack')?.addEventListener('click', (e) => { if (e.target === $opt('feedbackBack')) closeFeedback(); });
-  $opt('feedbackSend')?.addEventListener('click', () => void sendFeedback());
+  $opt('feedbackSend')?.addEventListener('click', () => void sendFeedback('github'));
+  $opt('feedbackMail')?.addEventListener('click', () => void sendFeedback('mail'));
   $opt('feedbackCopy')?.addEventListener('click', () => void copyFeedback());
   // -- Check for updates (Help footer) -- paints the version read-out in every
   // build, and wires the on-demand check + its remembered badge where it exists.

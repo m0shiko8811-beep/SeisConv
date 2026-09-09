@@ -59,9 +59,10 @@ representative at an online or offline event.
 ## Enforcement
 
 Instances of abusive, harassing, or otherwise unacceptable behavior may be
-reported privately to the maintainer, by e-mail to **moshef@gii.co.il**. Please
-do not use the security "report a vulnerability" channel for conduct reports -
-that channel is for software vulnerabilities only.
+reported privately to the maintainer, by e-mail to
+**m0shiko8811@gmail.com**. Please do not use the security "report a
+vulnerability" channel for conduct reports - that channel is for software
+vulnerabilities only.
 
 All complaints will be reviewed and investigated promptly and fairly.
 

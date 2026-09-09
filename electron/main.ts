@@ -33,9 +33,23 @@ import {
 
 const WORKER_PATH = path.join(__dirname, 'parse.worker.js');
 
-// The project owner's contact inbox; centralized in one place so it stays
-// swappable for any rebuilt or forked distribution.
-const FEEDBACK_EMAIL = 'moshef@gii.co.il';
+// Where feedback goes. The PRIMARY path is a prefilled GitHub issue, so a report
+// lands where the work is tracked and the next person hitting the same thing can
+// find it. The inbox below is the SECONDARY path, for anyone without a GitHub
+// account. Both are centralized here so they stay swappable for any rebuilt or
+// forked distribution.
+const FEEDBACK_EMAIL = 'm0shiko8811@gmail.com';
+const FEEDBACK_ISSUE_URL = 'https://github.com/m0shiko8811-beep/SeisConv/issues/new?template=bug_report.md';
+// Where we send the user when the prefilled link cannot be built or opened: the
+// plain new-issue page, which still gets them to a form.
+const FEEDBACK_ISSUES_URL = 'https://github.com/m0shiko8811-beep/SeisConv/issues/new';
+// GitHub practically refuses a prefilled issue link much past this length, so the
+// ASSEMBLED url is capped and the BODY (never the title) is what gets shortened.
+const FEEDBACK_URL_MAX = 8000;
+const FEEDBACK_TRUNCATED = '\n\n[Message truncated by SeisConv: it was too long for a prefilled link. Paste the rest here.]';
+// One line, above the user's own text, github path only: the issue is public.
+const FEEDBACK_PRIVACY =
+  'Please keep survey, client and station names, line numbers, coordinates and machine paths out of this report - the issue is public.';
 
 const SEISMIC_FILTERS = [
   { name: 'Seismic files', extensions: ['segy', 'sgy', 'segd', 'seg', 'su', 'seg2', 'dat', 'bat'] },
@@ -423,19 +437,75 @@ ipcMain.on('seisconv:win-maximize-toggle', () => {
 ipcMain.on('seisconv:win-close', () => win?.close());
 
 // -- Send Feedback --
-// The renderer composes the subject + body; MAIN owns the inbox address (so it
-// stays out of the renderer bundle) and opens the OS default mail client via a
-// mailto: URL. shell.openExternal lets the user pick their mail app. Inputs are
-// length-capped before URL-encoding; nothing is sent automatically.
-ipcMain.handle('seisconv:sendFeedback', async (_e, args: { subject?: string; body?: string }) => {
+// The renderer composes the subject + body; MAIN owns the destinations (so they
+// stay out of the renderer bundle) and hands the assembled URL to the OS.
+//   mode 'github' (default) - a PREFILLED GITHUB ISSUE in the user's browser.
+//   mode 'mail'             - a mailto: for anyone with no GitHub account.
+// Nothing is sent automatically either way: the user still presses Submit (or
+// Send) themselves. Inputs are length-capped, and this handler never throws - on
+// any failure it falls back to the plain new-issue page (or the bare address).
+
+/** Drop a trailing lone high surrogate left by a .slice(): encodeURIComponent
+ *  THROWS URIError on an unpaired surrogate, and this path must never throw. */
+function trimLoneSurrogate(s: string): string {
+  return /[\uD800-\uDBFF]$/.test(s) ? s.slice(0, -1) : s;
+}
+
+/** The longest prefix of `s` whose URL-encoding fits in `max` characters. The
+ *  encoding of a prefix is a prefix of the encoding, so the length is monotonic
+ *  and a binary search is exact - which matters because encoding is what costs:
+ *  a newline is 3 characters and a non-ASCII one can be 12. */
+function fitEncoded(s: string, max: number): string {
+  if (max <= 0) return '';
+  if (encodeURIComponent(s).length <= max) return s;
+  let lo = 0;
+  let hi = s.length;
+  while (lo < hi) {
+    const mid = (lo + hi + 1) >> 1;
+    if (encodeURIComponent(trimLoneSurrogate(s.slice(0, mid))).length <= max) lo = mid;
+    else hi = mid - 1;
+  }
+  return trimLoneSurrogate(s.slice(0, lo));
+}
+
+/** `base` + an encoded title + body, with the ASSEMBLED url kept under
+ *  FEEDBACK_URL_MAX. Only the body is ever shortened, and when it is, a one-line
+ *  note says so. */
+function buildFeedbackUrl(base: string, titleParam: string, title: string, body: string): string {
+  const prefix = `${base}${base.includes('?') ? '&' : '?'}${titleParam}=${encodeURIComponent(title)}&body=`;
+  const budget = FEEDBACK_URL_MAX - prefix.length;
+  if (budget <= 0) return base;                                   // the title alone filled the cap
+  if (encodeURIComponent(body).length <= budget) return prefix + encodeURIComponent(body);
+  const noteRoom = budget - encodeURIComponent(FEEDBACK_TRUNCATED).length;
+  const kept = noteRoom > 0 ? fitEncoded(body, noteRoom) : '';
+  // No room for the note, or nothing of the message left beside it: take a hard
+  // cut instead. A link carrying only "the rest was cut" tells the reader nothing.
+  if (!kept) return prefix + encodeURIComponent(fitEncoded(body, budget));
+  return prefix + encodeURIComponent(kept + FEEDBACK_TRUNCATED);
+}
+
+ipcMain.handle('seisconv:sendFeedback', async (
+  _e,
+  args: { subject?: string; body?: string; mode?: string },
+) => {
+  const mail = args?.mode === 'mail';
   try {
-    const subject = String(args?.subject ?? '').slice(0, 998);
-    const body = String(args?.body ?? '').slice(0, 8000);
-    const url = `mailto:${FEEDBACK_EMAIL}?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`;
+    const subject = trimLoneSurrogate(String(args?.subject ?? '').slice(0, 998));
+    const body = trimLoneSurrogate(String(args?.body ?? '').slice(0, 20000));
+    const url = mail
+      ? buildFeedbackUrl(`mailto:${FEEDBACK_EMAIL}`, 'subject', subject, body)
+      : buildFeedbackUrl(FEEDBACK_ISSUE_URL, 'title', subject, `${FEEDBACK_PRIVACY}\n\n${body}`);
     await shell.openExternal(url);
     return { ok: true };
   } catch (e) {
-    return { ok: false, error: (e as Error).message };
+    // Leave the user somewhere useful rather than with nothing, and swallow a
+    // second failure too so the handler itself can never reject.
+    try {
+      await shell.openExternal(mail ? `mailto:${FEEDBACK_EMAIL}` : FEEDBACK_ISSUES_URL);
+      return { ok: false, fallback: true, error: (e as Error).message };
+    } catch (e2) {
+      return { ok: false, error: (e2 as Error).message };
+    }
   }
 });
 

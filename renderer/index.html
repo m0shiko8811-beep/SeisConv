@@ -759,6 +759,15 @@ table.olog-grid tr.olog-row-pending:hover td:not(.olog-rowhdr){background:rgba(2
 .confirm-modal .mh.confirm-foot{border-bottom:none;border-top:1px solid var(--hair-soft);}
 .confirm-modal .mh.confirm-foot{display:flex;align-items:center;gap:10px;padding:14px 20px;}
 
+/* ---- Send Feedback: the quiet mail fallback under the primary GitHub action.
+       Same text-button form as the status-bar zoom percentage, scoped to this
+       modal so nothing else picks it up. ---- */
+#feedbackBack .fb-mail{
+  background:none;border:none;padding:0;font-family:inherit;font-size:inherit;
+  font-weight:700;color:var(--teal-deep);cursor:pointer;
+}
+#feedbackBack .fb-mail:hover{color:var(--teal);}
+
 /* ---- Help / Manual footer: which version is running, and the on-demand update
        check. A third .mh row on the same flex column as the header + body; both
        .mh rows are flex:none, so the scrolling body simply gets shorter. ---- */
@@ -3283,14 +3292,15 @@ canvas.sec-attr{height:172px;margin-top:8px;}
         <span class="eyebrow">Message</span>
         <textarea id="feedbackMsg" class="ctl" rows="6" style="width:100%;height:auto;resize:vertical;font-family:inherit;line-height:1.5;" placeholder="What happened, or what would help?"></textarea>
       </label>
-      <div class="muted">Opens your email app with the message pre-filled - nothing is sent automatically.</div>
+      <div class="muted">Opens a pre-filled GitHub issue in your browser - you review it and submit it there, nothing is sent automatically. Issues are public, so keep survey, client and station names, coordinates and file paths out of the message.</div>
+      <div class="muted" style="margin-top:6px;">No GitHub account? <button class="fb-mail" id="feedbackMail" type="button" title="Open your mail app instead">Send it by email instead</button></div>
       <div class="status" id="feedbackStatus" style="margin-top:6px;"></div>
     </div>
     <div class="mh confirm-foot">
       <button class="btn sm" id="feedbackCopy" type="button">Copy to clipboard</button>
       <span style="flex:1"></span>
       <button class="btn sm" id="feedbackCancel" type="button">Cancel</button>
-      <button class="btn btn-primary sm" id="feedbackSend" type="button">Send</button>
+      <button class="btn btn-primary sm" id="feedbackSend" type="button">Open GitHub issue</button>
     </div>
   </div>
 </div>

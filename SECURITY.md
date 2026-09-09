@@ -8,9 +8,11 @@ security problems.
 
 Preferred reporting channel:
 
-- Use GitHub's **private vulnerability reporting** for this repository
-  (Security tab -> "Report a vulnerability"), if enabled.
-- Otherwise, email the maintainer at **moshef@gii.co.il** with `SeisConv
+- Use GitHub's **private vulnerability reporting** for this repository:
+  [**Report a vulnerability**](https://github.com/m0shiko8811-beep/SeisConv/security/advisories/new).
+  The report stays private between you and the maintainer until a fix is
+  published, and GitHub handles the disclosure workflow.
+- If you cannot use GitHub, email **m0shiko8811@gmail.com** with `SeisConv
   security` in the subject line.
 
 Please include:

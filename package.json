@@ -1,10 +1,10 @@
 {
   "name": "seisconv",
   "version": "0.8.2",
-  "description": "SeisConv - desktop seismic data converter & toolkit for SEG-Y, SEG-D, SEG-2, SU and SPS survey geometry",
+  "description": "SeisConv - desktop seismic data converter and toolkit for SEG-Y, SEG-D, SEG-2, SU and SPS survey geometry",
   "author": {
     "name": "Moshe Fridin",
-    "email": "moshef@gii.co.il"
+    "email": "m0shiko8811@gmail.com"
   },
   "license": "AGPL-3.0-or-later",
   "private": true,
@@ -17,8 +17,7 @@
     "url": "git+https://github.com/m0shiko8811-beep/SeisConv.git"
   },
   "bugs": {
-    "url": "https://github.com/m0shiko8811-beep/SeisConv/issues",
-    "email": "moshef@gii.co.il"
+    "url": "https://github.com/m0shiko8811-beep/SeisConv/issues"
   },
   "main": "dist/main.js",
   "scripts": {
@@ -33,6 +32,7 @@
     "qc:realdata": "tsx scripts/realdata-qc.ts",
     "qc:positioning": "tsx scripts/positioning-qc.ts",
     "qa": "node qa/drive.mjs",
+    "qa:oracle": "node qa/oracle/compare.mjs",
     "verify": "node qa/verify.mjs",
     "qa:render-golden": "node qa/render-golden.mjs",
     "typecheck": "tsc --noEmit",
@@ -92,9 +92,9 @@
       "allowElevation": true
     },
     "appx": {
-      "identityName": "REPLACE-WITH-PARTNER-CENTER-IDENTITY-NAME",
-      "publisher": "CN=REPLACE-WITH-PARTNER-CENTER-PUBLISHER-ID",
-      "publisherDisplayName": "REPLACE WITH PARTNER CENTER PUBLISHER DISPLAY NAME",
+      "identityName": "MosheFridin.SeisConv",
+      "publisher": "CN=FD8F9C0B-9789-4BB2-9695-152D89D690BC",
+      "publisherDisplayName": "Moshe Fridin",
       "applicationId": "SeisConv",
       "displayName": "SeisConv",
       "backgroundColor": "#192B42",

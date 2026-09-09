@@ -10,6 +10,8 @@ labels: bug
   personal information. Use synthetic or clearly public sample data only.
 -->
 
+> **Issues here are public**, so do not paste survey names, client names, coordinates, station or line numbers, dataset filenames or machine paths into this report.
+
 ## Description
 A clear description of the bug.
 
