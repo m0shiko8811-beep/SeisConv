@@ -60,13 +60,12 @@ Twelve tabs cover the full office-and-field workflow: format conversion includin
 
 If you are looking for an **open source alternative** to a commercial format converter or SEG-Y viewer, SeisConv is meant to complement rather than replace the established toolchain: it **complements Seismic Unix, OpendTect and ObsPy** for the specific jobs of format conversion, header and geometry QC, and survey positioning, and it puts those jobs in a graphical Windows application that needs no scripting environment to run.
 
-<details>
-<summary><b>More screenshots</b> - Converter, Trace Inspector, Spectrum, Velocity, Sweeps, SPS Creation, SPS</summary>
+<p align="center"><b>Seven more of the twelve tabs.</b></p>
 
 <table align="center">
   <tr>
     <td align="center" width="50%"><img src="design/screenshots/converter.png" alt="Converter"/><br/><sub><b>Converter</b> - auto-detect plus 8 single-file output writers</sub></td>
-    <td align="center" width="50%"><img src="design/screenshots/trace.png" alt="Trace Inspector"/><br/><sub><b>Trace Inspector</b> - waveform plus live SEG-Y trace header</sub></td>
+    <td align="center" width="50%"><img src="design/screenshots/trace.png" alt="Trace Inspector"/><br/><sub><b>Trace Inspector</b> - step through the record one trace at a time, waveform or spectrum</sub></td>
   </tr>
   <tr>
     <td align="center" width="50%"><img src="design/screenshots/spectrum.png" alt="Spectrum Analysis"/><br/><sub><b>Spectrum Analysis</b> - amplitude spectrum / FFT QC</sub></td>
@@ -82,8 +81,6 @@ If you are looking for an **open source alternative** to a commercial format con
   <img src="design/screenshots/sps.png" width="640" alt="SPS - survey geometry and QC"/>
 </p>
 <p align="center"><sub>SPS - multi-format survey geometry and QC (synthetic demo survey shown; no real coordinates pictured)</sub></p>
-
-</details>
 
 <details>
 <summary><b>Contents</b></summary>

@@ -10,8 +10,8 @@ abstract: >-
 authors:
   - family-names: "Fridin"
     given-names: "Moshe"
-version: "0.8.1"
-date-released: "2026-09-08"
+version: "0.8.2"
+date-released: "2026-09-09"
 license: AGPL-3.0-or-later
 repository-code: "https://github.com/m0shiko8811-beep/SeisConv"
 keywords:
