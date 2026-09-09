@@ -1,6 +1,6 @@
 # SeisConv Privacy Policy
 
-Effective date: 2026-09-09. Describes SeisConv version 0.8.2.
+Effective date: 2026-09-09. Describes SeisConv version 0.8.3.
 
 SeisConv is a free, open source desktop application for converting and
 viewing seismic data (SEG-Y, SEG-D, SEG-2, SU) and working with SPS survey

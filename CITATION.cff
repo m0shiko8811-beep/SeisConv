@@ -14,7 +14,7 @@ contact:
   - family-names: "Fridin"
     given-names: "Moshe"
     website: "https://github.com/m0shiko8811-beep/SeisConv"
-version: "0.8.2"
+version: "0.8.3"
 date-released: "2026-09-09"
 license: AGPL-3.0-or-later
 repository-code: "https://github.com/m0shiko8811-beep/SeisConv"
