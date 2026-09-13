@@ -1,8 +1,9 @@
 // seisconv-core - map projection methods beyond Transverse Mercator.
 //
 // Forward (geodetic -> E/N) and inverse (E/N -> geodetic) for the projection
-// methods that, together with the Transverse Mercator in ./coords, cover ~97 %
-// of the projected CRSs in the EPSG registry:
+// methods that, together with the Transverse Mercator in ./coords, cover ~96 %
+// of the projected CRSs in the EPSG registry (5,961 of the 6,188 rows in
+// core/sps/epsg-registry.json whose method is not GEO):
 //
 //   LCC     Lambert Conformal Conic, 1SP and 2SP   (EPSG 9801 / 9802)
 //   MERC    Mercator, variant A (k0) and B (lat_ts) (EPSG 9804 / 9805)
