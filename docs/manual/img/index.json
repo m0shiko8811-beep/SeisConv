@@ -29,70 +29,70 @@
       "image": "img/01a-converter-mode-single.png",
       "caption": "Converter, single-file mode, before a file is open",
       "callouts": 2,
-      "bytes": 143269
+      "bytes": 142963
     },
     {
       "name": "01b-converter-single-loaded",
       "image": "img/01b-converter-single-loaded.png",
       "caption": "Converter with a SEG-Y open: what was read, and the output format",
       "callouts": 3,
-      "bytes": 155129
+      "bytes": 154949
     },
     {
       "name": "01c-converter-output-name",
       "image": "img/01c-converter-output-name.png",
       "caption": "The same panel scrolled to the output-name builder and Convert",
       "callouts": 4,
-      "bytes": 137215
+      "bytes": 137061
     },
     {
       "name": "02-converter-batch",
       "image": "img/02-converter-batch.png",
       "caption": "Converter, folder (batch) mode with a folder scanned and a destination chosen",
       "callouts": 2,
-      "bytes": 149288
+      "bytes": 148844
     },
     {
       "name": "02b-converter-batch-run",
       "image": "img/02b-converter-batch-run.png",
       "caption": "The batch panel scrolled to the destination and the run button",
       "callouts": 3,
-      "bytes": 143870
+      "bytes": 143442
     },
     {
       "name": "03-trace-inspector",
       "image": "img/03-trace-inspector.png",
       "caption": "Trace Inspector on one channel of the synthetic shot",
       "callouts": 4,
-      "bytes": 210699
+      "bytes": 213780
     },
     {
       "name": "04a-section-agc-off",
       "image": "img/04a-section-agc-off.png",
       "caption": "File Viewer, variable density, AGC OFF - amplitude decays with time",
       "callouts": 3,
-      "bytes": 303893
+      "bytes": 304793
     },
     {
       "name": "04b-section-agc-on",
       "image": "img/04b-section-agc-on.png",
       "caption": "The same record with AGC ON - the deep reflectors become visible",
       "callouts": 4,
-      "bytes": 356207
+      "bytes": 356990
     },
     {
       "name": "05-section-health-scan",
       "image": "img/05-section-health-scan.png",
       "caption": "Trace health scan: every trace judged against its local neighbours",
       "callouts": 4,
-      "bytes": 370085
+      "bytes": 370985
     },
     {
       "name": "06a-spectrum-average",
       "image": "img/06a-spectrum-average.png",
       "caption": "Spectrum tab: average amplitude spectrum over a trace range",
       "callouts": 4,
-      "bytes": 170835
+      "bytes": 170756
     },
     {
       "name": "06b-spectrum-fk",
@@ -113,14 +113,14 @@
       "image": "img/08-workbench-overlay.png",
       "caption": "Trace Workbench: two collected traces overlaid for comparison",
       "callouts": 3,
-      "bytes": 235680
+      "bytes": 237369
     },
     {
       "name": "08b-workbench-collection",
       "image": "img/08b-workbench-collection.png",
       "caption": "The collected traces and the export row, further down the same panel",
       "callouts": 2,
-      "bytes": 162489
+      "bytes": 161230
     },
     {
       "name": "09a-sps-map",
@@ -260,7 +260,7 @@
       "image": "img/20-help-modal.png",
       "caption": "The in-app Help: the same source this manual's reference chapter is generated from",
       "callouts": 3,
-      "bytes": 269215
+      "bytes": 270434
     }
   ]
 }
