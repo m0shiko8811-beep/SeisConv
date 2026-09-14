@@ -77,6 +77,8 @@ jobs:
 
       - name: Release notes self-test
         if: steps.decide.outputs.mode != 'skip'
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: node scripts/release-notes.mjs --self-test
 
       - name: Warn on missing Store product id
@@ -464,7 +466,8 @@ jobs:
             "SeisConv-Setup-${VERSION}.exe" \
             "SeisConv-Manual-A4.pdf" \
             "SeisConv-Manual-Letter.pdf"
-          release_id=$(gh api "repos/${{ github.repository }}/releases/tags/$tag" --jq .id)
+          release_id=$(gh api "repos/${{ github.repository }}/releases" --paginate --jq ".[] | select(.tag_name==\"$tag\") | .id" | head -n1)
+          if [ -z "$release_id" ]; then echo "::error::could not find release for tag $tag"; exit 1; fi
           echo "release_id=$release_id" >> "$GITHUB_ENV"
           echo "tag=$tag" >> "$GITHUB_ENV"
 
@@ -552,7 +555,8 @@ jobs:
               "SeisConv-Manual-Letter.pdf"
           fi
 
-          rel_id=$(gh api "repos/${{ github.repository }}/releases/tags/$tag" --jq .id)
+          rel_id=$(gh api "repos/${{ github.repository }}/releases" --paginate --jq ".[] | select(.tag_name==\"$tag\") | .id" | head -n1)
+          if [ -z "$rel_id" ]; then echo "::error::could not find release for tag $tag"; exit 1; fi
           data=$(gh api "repos/${{ github.repository }}/releases/${rel_id}")
           count=$(echo "$data" | jq '.assets | length')
           if [ "$count" != "3" ]; then echo "expected 3 assets, got $count"; exit 1; fi
