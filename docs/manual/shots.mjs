@@ -746,6 +746,12 @@ async function main() {
       wc.send('seisconv:fieldEvent', { type: 'peer', action: 'pending', ip: '192.168.137.87', port: 47824, role: 'slave' });
     });
     await sleep(700);
+    // The second peer row can render a moment after the fieldEvent above is handled - wait
+    // for it directly instead of trusting the fixed sleep, or the capture races the table.
+    await waitFor(win, () => {
+      const cell = document.querySelector('#fldPeerBody tr:nth-child(2) td:nth-child(4)');
+      return !!cell && cell.offsetParent !== null;
+    }, null, 10000);
     await capture(win, '19-wifisync', 'WiFiSync: move files between two field machines with no network', [
       { sel: '#fldPickFolder', label: 'The folder kept mirror-identical with the peer' },
       { sel: '#fldStartBtn', label: 'Start WiFiSync on this machine' },

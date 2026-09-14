@@ -499,7 +499,28 @@ jobs:
         run: |
           set -euo pipefail
           tag="dryrun-v${VERSION}-${{ github.run_id }}"
-          gh release delete "$tag" --repo "${{ github.repository }}" --yes --cleanup-tag || true
+
+          ids=$(gh api "repos/${{ github.repository }}/releases" --paginate --jq ".[] | select(.tag_name==\"$tag\") | .id")
+          if [ -z "$ids" ]; then
+            echo "no dry run draft to clean up"
+            exit 0
+          fi
+
+          for id in $ids; do
+            gh api -X DELETE "repos/${{ github.repository }}/releases/$id"
+          done
+
+          remaining=$(gh api "repos/${{ github.repository }}/releases" --paginate --jq ".[] | select(.tag_name==\"$tag\") | .id")
+          if [ -n "$remaining" ]; then
+            echo "::error::dry run draft $tag was not deleted"
+            exit 1
+          fi
+          echo "deleted dry run draft $tag"
+
+          ref_count=$(gh api "repos/${{ github.repository }}/git/matching-refs/tags/$tag" --jq "map(select(.ref==\"refs/tags/$tag\")) | length")
+          if [ "$ref_count" = "1" ]; then
+            gh api -X DELETE "repos/${{ github.repository }}/git/refs/tags/$tag"
+          fi
 
       - name: Real release
         if: needs.check.outputs.mode == 'release'
