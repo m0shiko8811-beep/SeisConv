@@ -76,3 +76,21 @@ export function scanText(txt, list) {
   for (const re of list) { const m = String(txt).match(re); if (m) hits.push(m[0]); }
   return [...new Set(hits)];
 }
+
+/**
+ * Same scan as scanText(), but reports WHICH pattern matched rather than the text it
+ * matched - for logs and sidecars that must never repeat a leaked value. buildForbidden()
+ * puts the site patterns first, so index i below siteCount is `site#i`; everything after
+ * is a generic pattern, `generic#(i - siteCount)`. Never returns matched text.
+ * @param {string} txt
+ * @param {RegExp[]} list
+ * @param {number} siteCount
+ */
+export function scanTextIds(txt, list, siteCount) {
+  const s = String(txt);
+  const ids = [];
+  list.forEach((re, i) => {
+    if (re.test(s)) ids.push(i < siteCount ? `site#${i}` : `generic#${i - siteCount}`);
+  });
+  return [...new Set(ids)];
+}

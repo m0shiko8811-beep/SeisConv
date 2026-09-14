@@ -46,7 +46,11 @@
     "test:all": "npm run typecheck && npm run test:core && npm run test:fuzz && npm run test:crossformat && npm run qa",
     "manual": "tsx docs/manual/build.ts",
     "manual:shots": "node docs/manual/shots.mjs",
-    "manual:pdf": "electron docs/manual/render-pdf.mjs"
+    "manual:pdf": "electron docs/manual/render-pdf.mjs",
+    "release:prep": "node scripts/release-prep.mjs",
+    "release:check": "node scripts/release-check.mjs",
+    "release:notes": "node scripts/release-notes.mjs",
+    "release:install": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/install-latest.ps1"
   },
   "dependencies": {
     "@types/leaflet": "^1.9.21",

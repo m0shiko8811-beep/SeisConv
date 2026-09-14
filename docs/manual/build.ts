@@ -20,6 +20,10 @@ import { REPO, pkg, writers, epsgStats, shortcuts, tabs, testCounts, todo } from
 const HERE = join(REPO, 'docs', 'manual');
 const OUT = join(HERE, 'out');
 const fast = process.argv.includes('--fast');
+/** --strict: exit 1 with the reasons listed, one per line, if the manual came out
+ *  incomplete - a missing/unknown figure, unavailable test counts, or a leftover
+ *  [TO SOURCE: ...] marker other than the page-number one render-pdf.mjs fills in. */
+const strict = process.argv.includes('--strict');
 
 /** Same topic order the Help modal's nav uses: 'general' first, then app tab order. */
 const ORDER = ['general', 'conv', 'trace', 'section', 'sps', 'spscreate', 'vel',
@@ -91,6 +95,8 @@ const figNo = new Map<string, number>();
 const figMissing: string[] = [];
 const figUnknown: string[] = [];
 let figCount = 0;
+/** Set by aboutHtml() when the core test counts could not be read (--strict reason). */
+let testCountsMissing = false;
 
 function figures(html: string): string {
   return html.replace(/<!--FIG:([a-z0-9-]+)-->/gi, (_m, name: string) => figureHtml(name));
@@ -151,6 +157,7 @@ function aboutHtml(): string {
   const chipsRead = single.length > 0 && w.some((x) => x.batch);
   const epsg = epsgStats();
   const tc = fast ? null : testCounts();
+  if (!tc) testCountsMissing = true;
   const where = (x: typeof w[number]) => x.single && x.batch ? 'Single file and folder'
     : x.batch ? 'Folder (batch) only' : x.single ? 'Single file only' : 'Registered, not offered in the Converter';
   const rows = w.map((x) => `    <tr><td>${esc(x.label)}</td><td class="mono">.${esc(x.ext)}</td><td class="mono">${esc(x.id)}</td><td>${esc(where(x))}</td></tr>`).join('\n');
@@ -302,3 +309,20 @@ const words = html.replace(/<[^>]+>/g, ' ').split(/\s+/).filter(Boolean).length;
 console.log(`docs/manual/out/manual.html written - ${seen.size} generated reference topics, ${nodes.filter((n) => n.kind === 'chapter').length} chapters, ~${words} words${fast ? ' (--fast: test counts left as a placeholder)' : ''}`);
 console.log(`  figures: ${figCount} placed` + (figMissing.length ? `, ${figMissing.length} WITHOUT AN IMAGE (placeholder shown): ${figMissing.join(', ')} - run npm run manual:shots` : ', every image present') + (figUnknown.length ? ` | ${figUnknown.length} UNKNOWN figure name(s): ${figUnknown.join(', ')}` : ''));
 console.log('Render the PDF with:  npm run manual:pdf   (launches Electron)');
+
+if (strict) {
+  // Every [TO SOURCE: ...] marker other than the page-number one is a scaffold that was
+  // never filled in; the page-number one is expected here (render-pdf.mjs fills it in).
+  const badMarkers = (html.match(/\[TO SOURCE:[^\]]*\]/g) ?? [])
+    .filter((m) => m !== '[TO SOURCE: page number]');
+  const reasons: string[] = [];
+  if (figMissing.length) reasons.push(`${figMissing.length} figure(s) without an image: ${figMissing.join(', ')}`);
+  if (figUnknown.length) reasons.push(`${figUnknown.length} unknown figure name(s): ${figUnknown.join(', ')}`);
+  if (testCountsMissing) reasons.push('core test counts are unavailable - regenerate without --fast');
+  if (badMarkers.length) reasons.push(`${badMarkers.length} unfilled [TO SOURCE: ...] marker(s): ${[...new Set(badMarkers)].join(', ')}`);
+  if (reasons.length) {
+    console.log('\n--strict: the manual is not complete:');
+    for (const r of reasons) console.log('  ' + r);
+    process.exit(1);
+  }
+}

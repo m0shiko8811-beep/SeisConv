@@ -43,7 +43,7 @@ import { fileURLToPath } from 'node:url';
 import { tmpdir } from 'node:os';
 import { launch, mockDialogs, gotoTab, sleep, APP_DIR } from '../../qa/harness.mjs';
 import { buildFixtures } from './fixtures.mjs';
-import { buildForbidden, scanText } from './frame-safety.mjs';
+import { buildForbidden, scanText, scanTextIds, siteTerms } from './frame-safety.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const argAfter = (name) => {
@@ -84,11 +84,26 @@ const only = (() => {
  * term, so it lives in the per-machine list rather than here.
  */
 const FORBIDDEN = buildForbidden();
+/** SEISCONV_REDACT_LEAKS=1: report which pattern matched, never the matched text itself. */
+const REDACT_LEAKS = process.env.SEISCONV_REDACT_LEAKS === '1';
+const SITE_COUNT = siteTerms().length;
 
 async function scanFrame(win) {
   const txt = await win.evaluate(() => document.body.innerText || '');
-  return scanText(txt, FORBIDDEN);
+  return REDACT_LEAKS ? scanTextIds(txt, FORBIDDEN, SITE_COUNT) : scanText(txt, FORBIDDEN);
 }
+
+/** SEISCONV_SHOTS_STRICT=1: a map tile timeout fails the step instead of being swallowed. */
+const STRICT = process.env.SEISCONV_SHOTS_STRICT === '1';
+
+/** SEISCONV_SHOTS_MIN_SIZE=WIDTHxHEIGHT: fail the run if the real window came out smaller. */
+const MIN_SIZE = (() => {
+  const raw = process.env.SEISCONV_SHOTS_MIN_SIZE;
+  if (!raw) return null;
+  const m = raw.match(/^(\d+)x(\d+)$/i);
+  if (!m) throw new Error(`SEISCONV_SHOTS_MIN_SIZE: ${JSON.stringify(raw)} is not WIDTHxHEIGHT`);
+  return { w: Number(m[1]), h: Number(m[2]) };
+})();
 
 // ---------------------------------------------------------------- callouts
 /**
@@ -220,9 +235,13 @@ async function setCheck(win, sel, want) {
   return !is;
 }
 
-/** Wait for a predicate in the page, quietly (a slow step is reported, not thrown). */
+/** Wait for a predicate in the page, quietly (a slow step is reported, not thrown) unless
+ *  SEISCONV_SHOTS_STRICT=1, in which case a timeout throws through the failure path. */
 async function waitFor(win, fnBody, arg = null, timeout = 30000) {
-  return win.waitForFunction(fnBody, arg, { timeout }).then(() => true).catch(() => false);
+  return win.waitForFunction(fnBody, arg, { timeout }).then(() => true).catch((e) => {
+    if (STRICT) throw e;
+    return false;
+  });
 }
 
 async function main() {
@@ -262,6 +281,9 @@ async function main() {
 
   const size = await win.evaluate(() => ({ w: innerWidth, h: innerHeight, dpr: devicePixelRatio }));
   console.log(`window: ${size.w}x${size.h} @${size.dpr}x`);
+  if (MIN_SIZE && (size.w < MIN_SIZE.w || size.h < MIN_SIZE.h)) {
+    throw new Error(`window ${size.w}x${size.h} is smaller than the required SEISCONV_SHOTS_MIN_SIZE ${MIN_SIZE.w}x${MIN_SIZE.h}`);
+  }
 
   // =================================================================== CONVERTER
   await step('conv', async () => {

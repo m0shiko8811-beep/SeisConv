@@ -123,6 +123,7 @@ app.whenReady().then(async () => {
   });
 
   let bad = 0;
+  const pageCounts = {};
   for (const p of PAGES) {
     // PASS 1 - the document with placeholders, rendered only to find out where things land.
     await win.loadURL(pathToFileURL(SRC).href);
@@ -152,7 +153,11 @@ app.whenReady().then(async () => {
     const flag = missed || drift.length ? '  !! ' + [missed ? `${missed} placeholder(s) left` : '', drift.length ? `page drift: ${drift.join(', ')}` : ''].filter(Boolean).join('; ') : '';
     if (missed || drift.length) bad++;
     console.log(`${join(HERE, 'out', p.out)} - ${check.pages} pages, ${(buf.length / 1024 / 1024).toFixed(2)} MB, ${filled}/${placeholders} TOC page numbers measured${flag}`);
+    pageCounts[p.size] = check.pages;
   }
+  // Both page sizes rendered: record the page counts other tooling (--strict, CI) can
+  // read without re-rendering the PDFs.
+  writeFileSync(join(HERE, 'out', 'pages.json'), JSON.stringify(pageCounts, null, 2));
   win.destroy();
   app.exit(bad ? 1 : 0);
 });
