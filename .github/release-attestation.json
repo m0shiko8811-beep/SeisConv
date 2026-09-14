@@ -1,0 +1,29 @@
+{
+  "schema": 1,
+  "version": "0.8.4",
+  "preparedAt": "2026-09-14T15:02:56.106Z",
+  "typecheck": "clean",
+  "coreTests": {
+    "passed": 493,
+    "failed": 0,
+    "skipped": 4
+  },
+  "qa": {
+    "passed": 12,
+    "total": 12,
+    "failed": 0,
+    "pageErrors": 0,
+    "consoleErrors": 0
+  },
+  "bound": {
+    "core": "eb50a80d3a58d59f36f3fc1b40ad4e963e9c567a",
+    "electron": "316707e5f84dbd1fa62591ee994ed736355e1ea5",
+    "renderer": "9391acad4e79f36b36b7551349576ecd897ec663",
+    "workers": "1c95cad8048754710ecbd7f77b80f9d34643d0c3",
+    "build": "26558a03e0ed6a8f6265d129d5c62717c77b6d8e",
+    "qa": "1ed252a34e9b728ae0524e321e2c4d9ebfa20dcc",
+    "scripts": "a2b9c66ab4aaaafca9ea4e188508d63095abddfd",
+    "docs": "b532e1d8d6e6e9a5536865b26da530864dcdd890",
+    "dependencies": "d481719b996268329961c974e70ac714a1e9194c1529b3d40f2b9a19e4b3dd3b"
+  }
+}

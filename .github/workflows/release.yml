@@ -1,0 +1,783 @@
+name: Release
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - package.json
+      - .github/release-attestation.json
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: Dry run (no real GitHub release, no real Store publish)
+        type: boolean
+        default: true
+      store_only:
+        description: Only run the Store publish job against an existing release tag
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+jobs:
+  check:
+    name: decide
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    outputs:
+      version: ${{ steps.decide.outputs.version }}
+      sha: ${{ steps.decide.outputs.sha }}
+      mode: ${{ steps.decide.outputs.mode }}
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          fetch-depth: 1
+
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
+        with:
+          node-version: "20"
+
+      - name: Decide release mode
+        id: decide
+        env:
+          GH_TOKEN: ${{ github.token }}
+          INPUT_DRY_RUN: ${{ inputs.dry_run }}
+          INPUT_STORE_ONLY: ${{ inputs.store_only }}
+        run: node scripts/release-check.mjs decide
+
+      - name: Checkout release tag for store_only
+        if: steps.decide.outputs.mode == 'store_only' || steps.decide.outputs.mode == 'store_only_dry'
+        env:
+          VERSION: ${{ steps.decide.outputs.version }}
+        run: |
+          set -euo pipefail
+          git fetch --depth 1 origin "refs/tags/v$VERSION:refs/tags/v$VERSION"
+          git checkout "v$VERSION"
+
+      - name: Agreement check
+        if: steps.decide.outputs.mode != 'skip'
+        run: node scripts/release-check.mjs agreement
+
+      - name: Attestation check
+        if: steps.decide.outputs.mode != 'skip'
+        env:
+          MODE: ${{ steps.decide.outputs.mode }}
+        run: |
+          set -euo pipefail
+          if [ "$MODE" = "dry_run" ]; then
+            node scripts/release-check.mjs attestation --warn-only
+          else
+            node scripts/release-check.mjs attestation
+          fi
+
+      - name: Release notes self-test
+        if: steps.decide.outputs.mode != 'skip'
+        run: node scripts/release-notes.mjs --self-test
+
+      - name: Warn on missing Store product id
+        if: vars.STORE_PRODUCT_ID == ''
+        run: echo "::notice::vars.STORE_PRODUCT_ID is not set; the store job will skip publishing."
+
+      - name: Job summary
+        env:
+          MODE: ${{ steps.decide.outputs.mode }}
+          VERSION: ${{ steps.decide.outputs.version }}
+          SHA: ${{ steps.decide.outputs.sha }}
+        run: |
+          {
+            echo "### Release decide"
+            echo "- mode: $MODE"
+            echo "- version: $VERSION"
+            echo "- sha: $SHA"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  build:
+    name: build
+    runs-on: windows-latest
+    timeout-minutes: 120
+    needs: check
+    if: needs.check.outputs.mode != 'skip'
+    environment: release
+    env:
+      VERSION: ${{ needs.check.outputs.version }}
+      SHA: ${{ needs.check.outputs.sha }}
+      MODE: ${{ needs.check.outputs.mode }}
+    steps:
+      - name: Disable autocrlf
+        shell: pwsh
+        run: git config --global core.autocrlf false
+
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          ref: ${{ (needs.check.outputs.mode == 'store_only' || needs.check.outputs.mode == 'store_only_dry') && format('v{0}', needs.check.outputs.version) || needs.check.outputs.sha }}
+          fetch-depth: 1
+
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
+        with:
+          node-version: "20"
+          cache: "npm"
+
+      - name: Cache Electron caches
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: |
+            ~/AppData/Local/electron/Cache
+            ~/AppData/Local/electron-builder/Cache
+          key: ${{ runner.os }}-electron-${{ hashFiles('package-lock.json') }}
+
+      - name: Install dependencies
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          npm ci
+          if ($LASTEXITCODE -ne 0) {
+            Write-Host "npm ci failed, retrying once"
+            npm ci
+            if ($LASTEXITCODE -ne 0) { throw "npm ci failed twice" }
+          }
+
+      - name: Typecheck
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          npm run typecheck
+          if ($LASTEXITCODE -ne 0) { throw "typecheck failed" }
+
+      - name: Build
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          npm run build
+          if ($LASTEXITCODE -ne 0) { throw "build failed" }
+
+      - name: Core unit tests
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          npm run test:core 2>&1 | Tee-Object -FilePath test-core.log
+          $testExit = $LASTEXITCODE
+          $summary = Select-String -Path test-core.log -Pattern 'passed:\s*(\d+)\s+failed:\s*(\d+)\s+skipped:\s*(\d+)' | Select-Object -Last 1
+          if (-not $summary) { throw "Could not find test:core summary line" }
+          $failed = [int]$summary.Matches[0].Groups[2].Value
+          Write-Host "core tests: $($summary.Line)"
+          if ($testExit -ne 0) { throw "test:core exited with code $testExit" }
+          if ($failed -gt 0) { throw "test:core reported $failed failed test(s)" }
+
+      - name: Display probe
+        if: needs.check.outputs.mode != 'store_only' && needs.check.outputs.mode != 'store_only_dry'
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Continue'
+          try {
+            Set-DisplayResolution -Width 1920 -Height 1080 -Force
+          } catch {
+            Write-Host "Set-DisplayResolution failed (continuing): $_"
+          }
+          $ErrorActionPreference = 'Stop'
+          Add-Type -AssemblyName System.Windows.Forms
+          $primary = $null
+          foreach ($s in [System.Windows.Forms.Screen]::AllScreens) {
+            Write-Host "Screen: Bounds=$($s.Bounds) WorkingArea=$($s.WorkingArea) Primary=$($s.Primary)"
+            if ($s.Primary) { $primary = $s }
+          }
+          if (-not $primary) { throw "No primary screen found" }
+          if ($primary.WorkingArea.Width -lt 1600 -or $primary.WorkingArea.Height -lt 1000) {
+            throw "Primary working area $($primary.WorkingArea.Width)x$($primary.WorkingArea.Height) is smaller than 1600x1000"
+          }
+
+      - name: Create demo fixtures folder
+        if: needs.check.outputs.mode != 'store_only' && needs.check.outputs.mode != 'store_only_dry'
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $root = (Get-Item $env:GITHUB_WORKSPACE).PSDrive.Root
+          New-Item -ItemType Directory -Force -Path (Join-Path $root 'SeisConvDemo') | Out-Null
+
+      - name: Check forbidden terms secret is set
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $isSet = '${{ secrets.SEISCONV_FORBIDDEN_TERMS != '' }}'
+          if ($isSet -ne 'true') {
+            if ($env:MODE -eq 'dry_run' -or $env:MODE -eq 'store_only_dry') {
+              Write-Host "::warning::secrets.SEISCONV_FORBIDDEN_TERMS is empty (dry run, continuing)"
+            } else {
+              throw "secrets.SEISCONV_FORBIDDEN_TERMS is empty for a real release"
+            }
+          }
+
+      - name: Manual screenshots
+        if: needs.check.outputs.mode != 'store_only' && needs.check.outputs.mode != 'store_only_dry'
+        shell: pwsh
+        env:
+          SEISCONV_REDACT_LEAKS: "1"
+          SEISCONV_SHOTS_STRICT: "1"
+          SEISCONV_SHOTS_MIN_SIZE: "1600x1000"
+          SEISCONV_FORBIDDEN_TERMS: ${{ secrets.SEISCONV_FORBIDDEN_TERMS }}
+          SEISCONV_QA_WINDOW_POS: primary
+          SEISCONV_QA_WINDOW_INACTIVE: "1"
+          SEISCONV_QA_USER_DATA_DIR: ${{ runner.temp }}\qa-profile
+        run: |
+          $ErrorActionPreference = 'Stop'
+          npm run manual:shots
+          if ($LASTEXITCODE -ne 0) {
+            Write-Host "manual:shots failed, retrying once"
+            npm run manual:shots
+            if ($LASTEXITCODE -ne 0) { throw "manual:shots failed twice" }
+          }
+
+      - name: Sidecar warnings
+        if: needs.check.outputs.mode != 'store_only' && needs.check.outputs.mode != 'store_only_dry'
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Continue'
+          node scripts/release-check.mjs sidecars docs/manual/img
+
+      - name: Generate manual and check drift
+        if: needs.check.outputs.mode != 'store_only' && needs.check.outputs.mode != 'store_only_dry'
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          npm run gen:manual
+          if ($LASTEXITCODE -ne 0) { throw "gen:manual failed" }
+          git diff --exit-code -- MANUAL.md
+          if ($LASTEXITCODE -ne 0) { throw "MANUAL.md is out of date; run npm run gen:manual and commit" }
+
+      - name: Manual strict build
+        if: needs.check.outputs.mode != 'store_only' && needs.check.outputs.mode != 'store_only_dry'
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          npm run manual -- --strict
+          if ($LASTEXITCODE -ne 0) { throw "manual --strict failed" }
+
+      - name: Manual PDFs
+        if: needs.check.outputs.mode != 'store_only' && needs.check.outputs.mode != 'store_only_dry'
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          npm run manual:pdf
+          if ($LASTEXITCODE -ne 0) { throw "manual:pdf failed" }
+          New-Item -ItemType Directory -Force -Path out/gh | Out-Null
+          Copy-Item docs/manual/out/SeisConv-Manual-A4.pdf out/gh/SeisConv-Manual-A4.pdf
+          Copy-Item docs/manual/out/SeisConv-Manual-Letter.pdf out/gh/SeisConv-Manual-Letter.pdf
+
+      - name: Build NSIS installer
+        if: needs.check.outputs.mode != 'store_only' && needs.check.outputs.mode != 'store_only_dry'
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          if (Test-Path dist) { Remove-Item -Recurse -Force dist }
+          npm run dist
+          if ($LASTEXITCODE -ne 0) { throw "npm run dist failed" }
+          New-Item -ItemType Directory -Force -Path out/gh | Out-Null
+          $exe = Get-ChildItem "dist/SeisConv Setup *.exe" | Select-Object -First 1
+          if (-not $exe) { throw "No NSIS installer produced in dist/" }
+          $sizeMb = $exe.Length / 1MB
+          if ($sizeMb -lt 80 -or $sizeMb -gt 160) { throw "Installer size $sizeMb MB is out of the 80-160 MB range" }
+          Copy-Item $exe.FullName "out/gh/SeisConv-Setup-$($env:VERSION).exe"
+
+      - name: Assert update check present
+        if: needs.check.outputs.mode != 'store_only' && needs.check.outputs.mode != 'store_only_dry'
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          node scripts/release-check.mjs update-check-presence dist/main.js --expect present
+
+      - name: Build Store package
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          if (Test-Path dist) { Remove-Item -Recurse -Force dist }
+          npm run dist:store
+          if ($LASTEXITCODE -ne 0) { throw "npm run dist:store failed" }
+          $appx = Get-ChildItem dist/*.appx
+          if (@($appx).Count -ne 1) { throw "Expected exactly one .appx in dist/, found $(@($appx).Count)" }
+          New-Item -ItemType Directory -Force -Path out/store | Out-Null
+          Copy-Item $appx.FullName (Join-Path 'out/store' $appx.Name)
+
+      - name: Check Store package identity
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $appx = (Get-ChildItem out/store/*.appx | Select-Object -First 1).FullName
+          node scripts/release-check.mjs appx-identity $appx --version $env:VERSION
+
+      - name: Assert update check absent
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          node scripts/release-check.mjs update-check-presence dist/main.js --expect absent
+
+      - name: Build facts.json
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $facts = @{ version = $env:VERSION; commit = $env:SHA }
+
+          $testLog = Select-String -Path test-core.log -Pattern 'passed:\s*(\d+)\s+failed:\s*(\d+)\s+skipped:\s*(\d+)' | Select-Object -Last 1
+          $facts.coreTests = @{
+            passed = [int]$testLog.Matches[0].Groups[1].Value
+            failed = [int]$testLog.Matches[0].Groups[2].Value
+            skipped = [int]$testLog.Matches[0].Groups[3].Value
+          }
+
+          if (Test-Path .github/release-attestation.json) {
+            $attestation = Get-Content .github/release-attestation.json -Raw | ConvertFrom-Json
+            $facts.qa = $attestation.qa
+          } else {
+            $facts.qa = @{ passed = 0; total = 0; failed = 0; pageErrors = 0; consoleErrors = 0 }
+          }
+
+          if (Test-Path docs/manual/out/pages.json) {
+            $pages = Get-Content docs/manual/out/pages.json -Raw | ConvertFrom-Json
+            $facts.pages = @{ A4 = $pages.A4; Letter = $pages.Letter }
+          } else {
+            $facts.pages = @{ A4 = 0; Letter = 0 }
+          }
+
+          function Get-Sha256($path) {
+            (Get-FileHash -Algorithm SHA256 -Path $path).Hash.ToLower()
+          }
+
+          $exe = Get-ChildItem "out/gh/SeisConv-Setup-$($env:VERSION).exe" -ErrorAction SilentlyContinue
+          if ($exe) {
+            $facts.installer = @{ name = $exe.Name; size = $exe.Length; sha256 = (Get-Sha256 $exe.FullName) }
+          }
+
+          $appx = Get-ChildItem out/store/*.appx -ErrorAction SilentlyContinue | Select-Object -First 1
+          if ($appx) {
+            $facts.appx = @{ name = $appx.Name; size = $appx.Length; sha256 = (Get-Sha256 $appx.FullName) }
+          }
+
+          $facts | ConvertTo-Json -Depth 10 | Set-Content -Encoding utf8 facts.json
+
+          if ($env:MODE -ne 'store_only' -and $env:MODE -ne 'store_only_dry') {
+            Copy-Item facts.json out/gh/facts.json
+          }
+
+      - name: Generate GitHub release notes
+        if: needs.check.outputs.mode != 'store_only' && needs.check.outputs.mode != 'store_only_dry'
+        shell: pwsh
+        env:
+          SEISCONV_FORBIDDEN_TERMS: ${{ secrets.SEISCONV_FORBIDDEN_TERMS }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          node scripts/release-notes.mjs $env:VERSION --github --facts facts.json --out out/gh/notes-github.md
+          if ($LASTEXITCODE -ne 0) { throw "release-notes --github failed" }
+
+      - name: Generate Store release notes
+        shell: pwsh
+        env:
+          SEISCONV_FORBIDDEN_TERMS: ${{ secrets.SEISCONV_FORBIDDEN_TERMS }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          node scripts/release-notes.mjs $env:VERSION --store --facts facts.json --out out/store/notes-store.txt
+          if ($LASTEXITCODE -ne 0) { throw "release-notes --store failed" }
+
+      - name: Write SHA256SUMS
+        if: needs.check.outputs.mode != 'store_only' && needs.check.outputs.mode != 'store_only_dry'
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $targets = @("SeisConv-Setup-$($env:VERSION).exe", "SeisConv-Manual-A4.pdf", "SeisConv-Manual-Letter.pdf")
+          $lines = @()
+          foreach ($f in $targets) {
+            $path = Join-Path 'out/gh' $f
+            if (-not (Test-Path $path)) { throw "Missing $f for checksum" }
+            $h = (Get-FileHash -Algorithm SHA256 -Path $path).Hash.ToLower()
+            $lines += "$h  $f"
+          }
+          $sumsPath = Join-Path (Join-Path (Get-Location) 'out/gh') 'SHA256SUMS'
+          $content = ($lines -join "`n") + "`n"
+          [System.IO.File]::WriteAllText($sumsPath, $content, [System.Text.UTF8Encoding]::new($false))
+
+      - name: Upload github-release artifact
+        if: needs.check.outputs.mode != 'store_only' && needs.check.outputs.mode != 'store_only_dry'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: github-release
+          retention-days: 14
+          compression-level: 0
+          path: out/gh/
+
+      - name: Upload store-package artifact
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: store-package
+          retention-days: 14
+          compression-level: 0
+          path: out/store/
+
+      - name: Upload manual-preview artifact
+        if: needs.check.outputs.mode == 'dry_run' || needs.check.outputs.mode == 'store_only_dry'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: manual-preview
+          retention-days: 3
+          path: |
+            docs/manual/out/manual.html
+            docs/manual/img
+
+  release:
+    name: github release
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    needs: [check, build]
+    if: needs.check.outputs.mode == 'release' || needs.check.outputs.mode == 'dry_run'
+    permissions:
+      contents: write
+    env:
+      VERSION: ${{ needs.check.outputs.version }}
+      SHA: ${{ needs.check.outputs.sha }}
+    steps:
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: github-release
+          path: artifacts
+
+      - name: Verify checksums
+        run: |
+          set -euo pipefail
+          cd artifacts
+          sha256sum -c SHA256SUMS
+
+      - name: Dry run release
+        if: needs.check.outputs.mode == 'dry_run'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          tag="dryrun-v${VERSION}-${{ github.run_id }}"
+          cd artifacts
+          gh release create "$tag" \
+            --repo "${{ github.repository }}" \
+            --draft \
+            --target "$SHA" \
+            --title "SeisConv dry run ${VERSION}" \
+            --notes-file notes-github.md \
+            "SeisConv-Setup-${VERSION}.exe" \
+            "SeisConv-Manual-A4.pdf" \
+            "SeisConv-Manual-Letter.pdf"
+          release_id=$(gh api "repos/${{ github.repository }}/releases/tags/$tag" --jq .id)
+          echo "release_id=$release_id" >> "$GITHUB_ENV"
+          echo "tag=$tag" >> "$GITHUB_ENV"
+
+      - name: Verify dry run assets
+        if: needs.check.outputs.mode == 'dry_run'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          cd artifacts
+          data=$(gh api "repos/${{ github.repository }}/releases/${release_id}")
+          count=$(echo "$data" | jq '.assets | length')
+          if [ "$count" != "3" ]; then echo "expected 3 assets, got $count"; exit 1; fi
+          for f in "SeisConv-Setup-${VERSION}.exe" "SeisConv-Manual-A4.pdf" "SeisConv-Manual-Letter.pdf"; do
+            local_sha=$(sha256sum "$f" | cut -d' ' -f1)
+            local_size=$(stat -c%s "$f")
+            asset=$(echo "$data" | jq -r --arg n "$f" '.assets[] | select(.name==$n)')
+            if [ -z "$asset" ]; then echo "missing asset $f"; exit 1; fi
+            remote_size=$(echo "$asset" | jq -r '.size')
+            remote_digest=$(echo "$asset" | jq -r '.digest // empty')
+            if [ "$remote_size" != "$local_size" ]; then echo "size mismatch for $f"; exit 1; fi
+            if [ -n "$remote_digest" ] && [ "$remote_digest" != "sha256:$local_sha" ]; then echo "digest mismatch for $f"; exit 1; fi
+          done
+
+      - name: Clean up dry run release
+        if: always() && needs.check.outputs.mode == 'dry_run'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          tag="dryrun-v${VERSION}-${{ github.run_id }}"
+          gh release delete "$tag" --repo "${{ github.repository }}" --yes --cleanup-tag || true
+
+      - name: Real release
+        if: needs.check.outputs.mode == 'release'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          cd artifacts
+          tag="v${VERSION}"
+          existing=$(gh api "repos/${{ github.repository }}/releases" --paginate --jq ".[] | select(.tag_name==\"$tag\")")
+
+          if [ -n "$existing" ]; then
+            published=$(echo "$existing" | jq -r '.draft == false')
+            if [ "$published" = "true" ]; then
+              rel_id=$(echo "$existing" | jq -r '.id')
+              data=$(gh api "repos/${{ github.repository }}/releases/${rel_id}")
+              ok=true
+              for f in "SeisConv-Setup-${VERSION}.exe" "SeisConv-Manual-A4.pdf" "SeisConv-Manual-Letter.pdf"; do
+                local_sha=$(sha256sum "$f" | cut -d' ' -f1)
+                local_size=$(stat -c%s "$f")
+                asset=$(echo "$data" | jq -r --arg n "$f" '.assets[] | select(.name==$n)')
+                remote_size=$(echo "$asset" | jq -r '.size // empty')
+                remote_digest=$(echo "$asset" | jq -r '.digest // empty')
+                if [ -z "$asset" ] || [ "$remote_size" != "$local_size" ] || { [ -n "$remote_digest" ] && [ "$remote_digest" != "sha256:$local_sha" ]; }; then
+                  ok=false
+                fi
+              done
+              if [ "$ok" = "true" ]; then
+                echo "::notice::Release $tag already published with matching assets; nothing to do."
+                exit 0
+              else
+                echo "::error::Release $tag is published but assets do not match this build. Not touching it."
+                exit 1
+              fi
+            fi
+            rel_id=$(echo "$existing" | jq -r '.id')
+            gh release upload "$tag" \
+              --repo "${{ github.repository }}" \
+              --clobber \
+              "SeisConv-Setup-${VERSION}.exe" \
+              "SeisConv-Manual-A4.pdf" \
+              "SeisConv-Manual-Letter.pdf"
+            gh release edit "$tag" --repo "${{ github.repository }}" --notes-file notes-github.md
+          else
+            gh release create "$tag" \
+              --repo "${{ github.repository }}" \
+              --draft \
+              --target "$SHA" \
+              --title "SeisConv ${VERSION}" \
+              --notes-file notes-github.md \
+              "SeisConv-Setup-${VERSION}.exe" \
+              "SeisConv-Manual-A4.pdf" \
+              "SeisConv-Manual-Letter.pdf"
+          fi
+
+          rel_id=$(gh api "repos/${{ github.repository }}/releases/tags/$tag" --jq .id)
+          data=$(gh api "repos/${{ github.repository }}/releases/${rel_id}")
+          count=$(echo "$data" | jq '.assets | length')
+          if [ "$count" != "3" ]; then echo "expected 3 assets, got $count"; exit 1; fi
+          for f in "SeisConv-Setup-${VERSION}.exe" "SeisConv-Manual-A4.pdf" "SeisConv-Manual-Letter.pdf"; do
+            local_sha=$(sha256sum "$f" | cut -d' ' -f1)
+            local_size=$(stat -c%s "$f")
+            asset=$(echo "$data" | jq -r --arg n "$f" '.assets[] | select(.name==$n)')
+            remote_size=$(echo "$asset" | jq -r '.size')
+            remote_digest=$(echo "$asset" | jq -r '.digest // empty')
+            if [ "$remote_size" != "$local_size" ]; then echo "size mismatch for $f"; exit 1; fi
+            if [ -n "$remote_digest" ] && [ "$remote_digest" != "sha256:$local_sha" ]; then echo "digest mismatch for $f"; exit 1; fi
+          done
+
+          gh release edit "$tag" --repo "${{ github.repository }}" --draft=false --latest
+
+          latest_tag=$(gh api "repos/${{ github.repository }}/releases/latest" --jq .tag_name)
+          if [ "$latest_tag" != "$tag" ]; then echo "releases/latest is $latest_tag, expected $tag"; exit 1; fi
+          ref_sha=$(gh api "repos/${{ github.repository }}/git/ref/tags/$tag" --jq .object.sha)
+          if [ "$ref_sha" != "$SHA" ]; then echo "tag $tag points at $ref_sha, expected $SHA"; exit 1; fi
+
+  store:
+    name: store publish
+    runs-on: windows-latest
+    timeout-minutes: 45
+    # The store environment's deployment branch policy only allows main, so a
+    # dry run dispatched from another branch fails here by design.
+    environment: store
+    needs: [check, build, release]
+    if: |
+      always() && needs.build.result == 'success' && needs.check.outputs.mode != 'skip' &&
+      contains(fromJSON('["success","skipped"]'), needs.release.result)
+    env:
+      VERSION: ${{ needs.check.outputs.version }}
+      MODE: ${{ needs.check.outputs.mode }}
+    steps:
+      - name: Preflight
+        id: preflight
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $tenant = '${{ secrets.AZURE_AD_TENANT_ID != '' }}'
+          $seller = '${{ secrets.SELLER_ID != '' }}'
+          $client = '${{ secrets.AZURE_AD_APPLICATION_CLIENT_ID != '' }}'
+          $secret = '${{ secrets.AZURE_AD_APPLICATION_SECRET != '' }}'
+          $product = '${{ vars.STORE_PRODUCT_ID != '' }}'
+          $missing = @()
+          if ($tenant -ne 'true') { $missing += 'AZURE_AD_TENANT_ID' }
+          if ($seller -ne 'true') { $missing += 'SELLER_ID' }
+          if ($client -ne 'true') { $missing += 'AZURE_AD_APPLICATION_CLIENT_ID' }
+          if ($secret -ne 'true') { $missing += 'AZURE_AD_APPLICATION_SECRET' }
+          if ($product -ne 'true') { $missing += 'STORE_PRODUCT_ID (var)' }
+          if ($missing.Count -gt 0) {
+            $list = $missing -join ', '
+            Write-Host "::notice::Store publish skipped, missing: $list"
+            "### Store publish skipped`nMissing: $list" | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
+            "ready=false" >> $env:GITHUB_OUTPUT
+          } else {
+            "ready=true" >> $env:GITHUB_OUTPUT
+          }
+
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        if: steps.preflight.outputs.ready == 'true'
+        with:
+          name: store-package
+          path: ${{ runner.temp }}\store\pkg
+
+      - name: Stage package and project
+        if: steps.preflight.outputs.ready == 'true'
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $appx = Get-ChildItem "$env:RUNNER_TEMP\store\pkg\*.appx"
+          if (@($appx).Count -ne 1) { throw "Expected exactly one .appx, found $(@($appx).Count)" }
+          $projectDir = "$env:RUNNER_TEMP\store\project"
+          New-Item -ItemType Directory -Force -Path $projectDir | Out-Null
+          '{"name":"seisconv-store-upload","private":true}' | Set-Content -Encoding utf8 (Join-Path $projectDir 'package.json')
+
+      - name: Install Microsoft Store Developer CLI
+        if: steps.preflight.outputs.ready == 'true'
+        uses: microsoft/microsoft-store-apppublisher@cc9910a8d59f2eb55cbb83df0a3800cf3b5300e0 # v1.4
+        with:
+          version: v0.4.2
+
+      - name: CLI info
+        if: steps.preflight.outputs.ready == 'true'
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          msstore info
+          if ($LASTEXITCODE -ne 0) { throw "msstore info failed" }
+
+      - name: Reconfigure CLI
+        if: steps.preflight.outputs.ready == 'true'
+        shell: pwsh
+        env:
+          MSSTORE_TENANT_ID: ${{ secrets.AZURE_AD_TENANT_ID }}
+          MSSTORE_SELLER_ID: ${{ secrets.SELLER_ID }}
+          MSSTORE_CLIENT_ID: ${{ secrets.AZURE_AD_APPLICATION_CLIENT_ID }}
+          MSSTORE_CLIENT_SECRET: ${{ secrets.AZURE_AD_APPLICATION_SECRET }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          msstore reconfigure --tenantId $env:MSSTORE_TENANT_ID --sellerId $env:MSSTORE_SELLER_ID --clientId $env:MSSTORE_CLIENT_ID --clientSecret $env:MSSTORE_CLIENT_SECRET
+          if ($LASTEXITCODE -ne 0) { throw "msstore reconfigure failed" }
+
+      - name: Check current submission state
+        if: steps.preflight.outputs.ready == 'true'
+        shell: pwsh
+        env:
+          STORE_PRODUCT_ID: ${{ vars.STORE_PRODUCT_ID }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $raw = msstore submission status $env:STORE_PRODUCT_ID
+          if ($LASTEXITCODE -ne 0) { throw "msstore submission status failed" }
+          $text = $raw | Out-String
+          $start = $text.IndexOf('{')
+          $end = $text.LastIndexOf('}')
+          $json = $text.Substring($start, $end - $start + 1) | ConvertFrom-Json
+          $status = $json.Status
+          Write-Host "Current submission status: $status"
+          $inProgress = @('CommitStarted', 'PreProcessing', 'Certification', 'PendingPublication', 'Publishing', 'Release')
+          if ($inProgress -contains $status) {
+            throw "A submission is already past draft ($status). Wait for it to finish or cancel it in Partner Center, then rerun with store_only."
+          }
+
+      - name: Publish package (no commit)
+        if: steps.preflight.outputs.ready == 'true'
+        shell: pwsh
+        env:
+          STORE_PRODUCT_ID: ${{ vars.STORE_PRODUCT_ID }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          msstore publish "$env:RUNNER_TEMP\store\project" -i "$env:RUNNER_TEMP\store\pkg" -id $env:STORE_PRODUCT_ID --noCommit
+          if ($LASTEXITCODE -ne 0) { throw "msstore publish --noCommit failed" }
+
+      - name: Update release notes on submission
+        if: steps.preflight.outputs.ready == 'true'
+        shell: pwsh
+        env:
+          STORE_PRODUCT_ID: ${{ vars.STORE_PRODUCT_ID }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $notes = Get-Content "$env:RUNNER_TEMP\store\pkg\notes-store.txt" -Raw
+
+          $raw = msstore submission get $env:STORE_PRODUCT_ID
+          if ($LASTEXITCODE -ne 0) { throw "msstore submission get failed" }
+          $text = $raw | Out-String
+          $start = $text.IndexOf('{')
+          $end = $text.LastIndexOf('}')
+          $sub = $text.Substring($start, $end - $start + 1) | ConvertFrom-Json
+
+          $sub.Listings.'en-us'.BaseListing.ReleaseNotes = $notes
+          $json = $sub | ConvertTo-Json -Depth 100 -Compress
+          Write-Host "Submission JSON length: $($json.Length) characters"
+          $json | Set-Content -Encoding utf8 "$env:RUNNER_TEMP\store\submission.json"
+
+          msstore submission update $env:STORE_PRODUCT_ID "$env:RUNNER_TEMP\store\submission.json"
+          if ($LASTEXITCODE -ne 0) { throw "msstore submission update failed" }
+
+          $verifyRaw = msstore submission get $env:STORE_PRODUCT_ID
+          if ($LASTEXITCODE -ne 0) { throw "msstore submission get (verify) failed" }
+          $verifyText = $verifyRaw | Out-String
+          $vStart = $verifyText.IndexOf('{')
+          $vEnd = $verifyText.LastIndexOf('}')
+          $verify = $verifyText.Substring($vStart, $vEnd - $vStart + 1) | ConvertFrom-Json
+
+          $persisted = ($verify.Listings.'en-us'.BaseListing.ReleaseNotes -replace "`r`n", "`n").Trim()
+          $expected = ($notes -replace "`r`n", "`n").Trim()
+          if ($persisted -ne $expected) { throw "Release notes did not persist after update" }
+
+      - name: Real publish (commit submission)
+        if: steps.preflight.outputs.ready == 'true' && (needs.check.outputs.mode == 'release' || needs.check.outputs.mode == 'store_only')
+        shell: pwsh
+        env:
+          STORE_PRODUCT_ID: ${{ vars.STORE_PRODUCT_ID }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          msstore submission publish $env:STORE_PRODUCT_ID
+          if ($LASTEXITCODE -ne 0) { throw "msstore submission publish failed" }
+
+      - name: Poll submission status
+        if: steps.preflight.outputs.ready == 'true' && (needs.check.outputs.mode == 'release' || needs.check.outputs.mode == 'store_only')
+        shell: pwsh
+        env:
+          STORE_PRODUCT_ID: ${{ vars.STORE_PRODUCT_ID }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $deadline = (Get-Date).AddMinutes(20)
+          $finalStatus = $null
+          while ((Get-Date) -lt $deadline) {
+            $raw = msstore submission status $env:STORE_PRODUCT_ID
+            if ($LASTEXITCODE -ne 0) { throw "msstore submission status failed" }
+            $text = $raw | Out-String
+            $start = $text.IndexOf('{')
+            $end = $text.LastIndexOf('}')
+            $json = $text.Substring($start, $end - $start + 1) | ConvertFrom-Json
+            $status = $json.Status
+            Write-Host "Submission status: $status"
+            if ($status -like '*Failed') { throw "Submission status is $status" }
+            if ($status -ne 'CommitStarted') {
+              $finalStatus = $status
+              Write-Host "::notice::Submission reached status $status. Check Partner Center: https://partner.microsoft.com/dashboard/products/$($env:STORE_PRODUCT_ID)/overview"
+              break
+            }
+            Start-Sleep -Seconds 60
+          }
+          if (-not $finalStatus) {
+            Write-Host "::warning::Timed out after 20 minutes still CommitStarted. Check Partner Center: https://partner.microsoft.com/dashboard/products/$($env:STORE_PRODUCT_ID)/overview"
+            "Store submission poll timed out while still CommitStarted after 20 minutes" | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
+          }
+
+      - name: Delete dry run submission
+        if: always() && steps.preflight.outputs.ready == 'true' && (needs.check.outputs.mode == 'dry_run' || needs.check.outputs.mode == 'store_only_dry')
+        shell: pwsh
+        env:
+          STORE_PRODUCT_ID: ${{ vars.STORE_PRODUCT_ID }}
+        run: |
+          $ErrorActionPreference = 'Continue'
+          msstore submission delete $env:STORE_PRODUCT_ID --no-confirm
+
+      - name: Job summary
+        if: always()
+        shell: pwsh
+        env:
+          READY: ${{ steps.preflight.outputs.ready }}
+        run: |
+          "### Store publish" | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
+          "- ready: $($env:READY)" | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
+          "- mode: $($env:MODE)" | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
