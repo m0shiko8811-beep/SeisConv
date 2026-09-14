@@ -33,6 +33,7 @@
     "qc:positioning": "tsx scripts/positioning-qc.ts",
     "qa": "node qa/drive.mjs",
     "qa:oracle": "node qa/oracle/compare.mjs",
+    "qa:conform": "tsx qa/conform/conform.mjs",
     "verify": "node qa/verify.mjs",
     "qa:render-golden": "node qa/render-golden.mjs",
     "typecheck": "tsc --noEmit",

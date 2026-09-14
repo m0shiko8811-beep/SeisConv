@@ -47,7 +47,7 @@ import {
 import { writeSEGY } from '../../core/formats/segy';
 import { writeSU } from '../../core/formats/su';
 import { writeCSV } from '../../core/formats/ascii';
-import type { ParsedFile } from '../../core/types';
+import { segdChanTypeIsSeismic, type ParsedFile, type SegdChanSet } from '../../core/types';
 import { buildXlsx, type SheetTable } from '../../core/export/xlsx';
 import { buildOds } from '../../core/export/ods';
 import JSZip from 'jszip';
@@ -82,6 +82,13 @@ type Summary = {
   // verbatim by the display-state strip - never translated to "normal/reverse".
   impulsePolarity?: number;
   vibratoryPolarity?: number;
+  // SEG-D channel-set descriptors, one entry per set, in file order. Absent for
+  // every other format and for a legacy SeisConv SEG-D export (its frozen decoder
+  // skips the descriptor blocks without decoding them).
+  chanSets?: SegdChanSet[];
+  // The file's textual header for the formats that carry one: 3200 characters of
+  // SEG-Y card image, the SEG-2 file-descriptor free-form block, otherwise absent.
+  textHeader?: string;
 };
 type TraceData = { index: number; nSamples: number; sampleInt: number; hdr: Record<string, number | string>; samples: Float32Array };
 // One trace pulled from an arbitrary file by the Trace Workbench (extractTrace):
@@ -1102,7 +1109,10 @@ let secHoverLastIdx = -1;
 let secHoverBaseText = '';
 let secHoverHdrTimer = 0;
 let secHoverHdrBusy = false;
-const secHoverHdrCache = new Map<number, string>();
+// The fetched header is cached alongside the suffix built from it, so the header
+// values panel can show the WHOLE header of a trace the cursor has already been
+// over without a second fetch of the same trace.
+const secHoverHdrCache = new Map<number, { suffix: string; hdr: Record<string, number | string> }>();
 // Trace Inspector box-zoom ("magnifier") mode + in-flight drag.
 let traceBoxMode = false;
 let traceBoxDrag: { x0: number; y0: number; x1: number; y1: number } | null = null;
@@ -1409,6 +1419,22 @@ function grp(n: number | null): string {
   if (n == null || !isFinite(n)) return '-';
   return Math.round(n).toLocaleString('en-US').replace(/,/g, ' ');
 }
+// -- Trace numbering: 0-based inside, 1-based on screen -------------------------
+// The canonical absolute trace index is 0-based EVERYWHERE internally - state,
+// api.* payloads, localStorage, sorting, RefLine.value, TraceFinding.absIndex,
+// fbPicks keys, SectionData.traceStart/traceEnd. The operator, however, counts
+// from one: the first trace of a file is trace 1. These two functions are the
+// ONLY boundary between the two conventions, and they belong at exactly two kinds
+// of place - where a number is turned into text for the screen, and where a
+// number is read out of (or written back into) an input field. A conversion
+// inside a comparison, a sort or an IPC payload means the boundary was put in the
+// wrong place.
+
+/** 0-based absolute trace index -> the number the operator sees. */
+function trNo(abs: number): number { return abs + 1; }
+/** The number the operator typed -> 0-based absolute trace index. */
+function trAbs(shown: number): number { return shown - 1; }
+
 function setText(id: string, txt: string) { const el = $opt(id); if (el) el.textContent = txt; }
 
 // -- Global operation progress --------------------------------------------------
@@ -1734,6 +1760,13 @@ function applyOpenedFile(s: Summary, keepSectionView = false) {
   // Drop any trace-health overlay/findings tied to the previous file.
   secHealthReset();
   fbReset(); // drop first-break picks/guide tied to the previous file (keep the mode)
+  // ... except when the new file is paged in blocks. The picker cannot run on it, so
+  // an armed mode would leave a crosshair and a live seed click on the very file
+  // whose bar now says the picker is unavailable, and the first click would replace
+  // that sentence with a pick line. fbUpdateButtons re-opens the bar with the reason
+  // straight after, so turning the mode off costs the operator no explanation.
+  if (fbMode && s.streamed) setFbMode(false);
+  secHdrReset(); // header values panel: unpin, and repaint it for the NEW file
   // Invalidate the Spectrum + Velocity caches: they're module-level and keyed to
   // the previously-open file, so stepping files with ]/[ on those tabs would keep
   // showing the OLD file's spectra/semblance. Drop the payloads, reset the
@@ -2555,6 +2588,7 @@ async function clearConverter() {
   closeZoom();          // close any open box-zoom viewer (its data is now gone)
   gatherReset();        // drop the near-trace gather (its folder went with the file)
   secAttrReset();       // hide the per-trace attribute profile (its scan went too)
+  secHdrReset();        // empty the header values panel (no file ⇒ no headers)
   secHoverHdrCache.clear(); secHoverLastIdx = -1; secHoverTrace = null; secHoverLast = null; // drop cached per-trace headers AND stored samples
   clearSecHover(); clearTraceHover();             // reset the hover captions
   traceIndex = 0;
@@ -2579,7 +2613,7 @@ async function clearConverter() {
   $('batchFileList').innerHTML = '';
   setStatus('batchStatus', '');
   setText('batchProgSub', '');
-  setText('wizFolderSub', 'Pick a folder; SeisConv lists every .segy/.sgy/.segd/.seg/.seg2/.dat/.bat/.su file in it.');
+  setText('wizFolderSub', 'Pick a folder; SeisConv lists every .segy/.sgy/.segd/.sgd/.seg/.seg2/.dat/.bat/.su file in it.');
   setText('wizDestSub', 'Where the converted files are written.');
   const fill = $opt('batchProgFill');
   if (fill) (fill as HTMLElement).style.width = '0%';
@@ -2673,8 +2707,10 @@ async function refreshTrace() {
     traceAmpRange = null; // a new trace starts on auto amplitude…
     traceManualX = false; traceManualY = false; // …and neither axis is pinned any more
     traceAxisRange?.clear(); // …so the boxes go back to reporting the live window
-    ($('traceSlider') as HTMLInputElement).max = String(summary.traceCount - 1);
-    ($('traceSlider') as HTMLInputElement).value = String(traceIndex);
+    // The slider is a surface the operator reads, so it runs 1..traceCount; the
+    // handler in init turns its value back into the 0-based traceIndex.
+    ($('traceSlider') as HTMLInputElement).max = String(summary.traceCount);
+    ($('traceSlider') as HTMLInputElement).value = String(trNo(traceIndex));
     renderTrace();
   } catch (e) {
     $('traceLabel').textContent = 'Trace read failed: ' + errMsg(e);
@@ -2686,7 +2722,7 @@ async function refreshTrace() {
 // returns on `lastTrace.hdr`. Field keys below MUST match the names populated by
 // the SEG-Y parser (core/formats/segy.ts) - anything absent is simply skipped.
 
-type HdrFmt = 'int' | 'raw' | 'scaled' | 'gain' | 'mute' | 'traceId';
+type HdrFmt = 'int' | 'raw' | 'scaled' | 'gain' | 'mute' | 'traceId' | 'chanType' | 'text';
 type HdrField = { key: string; label: string; fmt?: HdrFmt };
 type HdrGroup = { title: string; fields: HdrField[] };
 
@@ -2763,6 +2799,53 @@ function hdrNum(h: Record<string, number | string>, k: string): number | null {
 /** Two zero-padded digits. */
 function pad2(n: number): string { return String(n).padStart(2, '0'); }
 
+// -- How a header VALUE is turned into text ------------------------------------
+// ONE rule, for every numeric header field on every surface that shows one:
+//   * an integer-valued number groups its thousands, exactly as a count does -
+//     so every field that was already right stays byte-for-byte the same;
+//   * a NON-integer keeps up to HDR_SIG_DIGITS significant digits, trailing
+//     zeros trimmed, and its integer part grouped by the same code;
+//   * a value that arrived as a STRING is shown as the string it is and never
+//     reaches this function at all (the 'text' branch of fmtHdrField, and the
+//     string test in hdrOtherGroup that routes every string there).
+// grp() is a COUNT formatter - it rounds, because a count has nothing after the
+// point - and using it on every header value is what printed a SEG-D receiver
+// coordinate of 32.0853 as "32" (about 111 km of error stated as a fact), a
+// sensor sensitivity of 0.000285 as "0", and every sub-metre position-error
+// estimate as "0". A genuine zero still prints "0": Number.isInteger(0) takes
+// the integer branch, so the 'raw' group keeps showing the zeros it exists to
+// show.
+//
+// The 9-digit cap is set by the widest field. A SEG-D position coordinate is an
+// IEEE double carrying a latitude, where the ninth significant digit is about a
+// millimetre, and a UTM easting needs eight digits before it even reaches
+// centimetres - anything shorter would throw away resolution the file really
+// holds. It is also short enough to keep the other direction readable: a sensor
+// sensitivity read from an IEEE float32 and widened to a double stringifies in
+// full as "0.000028500000578908996", and 9 digits cuts that to "0.0000285000006".
+// The last digit or two there IS the float32 binary tail rather than anything the
+// instrument measured, and that is the honest cost of not knowing, at this point,
+// which on-disk field a value was read from. A wrong tail digit is a far smaller
+// lie than the "0" this used to print.
+const HDR_SIG_DIGITS = 9;
+
+/** One header value → display text at the precision the value really carries. */
+function hdrValTxt(n: number | null): string {
+  if (n == null || !isFinite(n)) return '-';
+  if (Number.isInteger(n)) return grp(n);
+  // toPrecision and back through Number drops the trailing zeros and the binary
+  // noise tail in one step; whatever is left integral is a count again.
+  const cut = Number(n.toPrecision(HDR_SIG_DIGITS));
+  if (Number.isInteger(cut)) return grp(cut);
+  const s = Math.abs(cut).toString();
+  const sign = cut < 0 ? '-' : '';
+  // An exponent is kept verbatim. A value like 2.85e-7 grouped as "0" would be
+  // the very omission this function exists to remove.
+  const dot = s.indexOf('.');
+  if (s.includes('e') || dot < 0) return sign + s;
+  return sign + grp(Number(s.slice(0, dot))) + '.' + s.slice(dot + 1);
+}
+
 /** Format one header field → display string, or null to omit (blank/zero where it carries no meaning). */
 function fmtHdrField(h: Record<string, number | string>, f: HdrField): string | null {
   // Composite recording time HH:MM:SS, built from hour/minute/second.
@@ -2772,22 +2855,47 @@ function fmtHdrField(h: Record<string, number | string>, f: HdrField): string | 
     if (!hh && !mm && !ss) return null;
     return `${pad2(hh ?? 0)}:${pad2(mm ?? 0)}:${pad2(ss ?? 0)}`;
   }
+  // Free-form text value - the SEG-2 trace header is the recorder's own words,
+  // so there is no number to format and the value is shown as it stands.
+  if (f.fmt === 'text') {
+    const raw = h[f.key];
+    const s = raw == null ? '' : String(raw).trim();
+    return s === '' ? null : s;
+  }
   const v = hdrNum(h, f.key);
   if (v == null) return null;
   switch (f.fmt) {
     case 'raw': // show even zeros (scalars/units/dates are meaningful at 0)
-      return grp(v);
+      return hdrValTxt(v);
     case 'traceId':
-      return TRACE_ID_LABEL[v] ? `${v} · ${TRACE_ID_LABEL[v]}` : grp(v);
+      return TRACE_ID_LABEL[v] ? `${v} · ${TRACE_ID_LABEL[v]}` : hdrValTxt(v);
     case 'gain':
-      return GAIN_TYPE_LABEL[v] ? `${v} · ${GAIN_TYPE_LABEL[v]}` : (v === 0 ? null : grp(v));
+      return GAIN_TYPE_LABEL[v] ? `${v} · ${GAIN_TYPE_LABEL[v]}` : (v === 0 ? null : hdrValTxt(v));
     case 'mute':
-      return v === 0 ? null : `${grp(v)} ms`;
+      return v === 0 ? null : `${hdrValTxt(v)} ms`;
+    case 'chanType':
+      // SEG-D channel type, which is a NIBBLE in rev <= 2 (seismic = 1) and a whole
+      // byte in rev 3 (seismic = 0x10), so the code cannot be named without
+      // knowing the revision the open file declares - see segdChanTypeIsSeismic in
+      // core/types.ts for both citations. Only the seismic code is named: the rest
+      // of the spec's code table is not decoded anywhere in this app, and printing
+      // a guessed name for a code nothing verified would be worse than printing
+      // the code.
+      return segdChanTypeIsSeismic(v, summary?.revision ?? 0) ? `${hdrValTxt(v)} · seismic` : hdrValTxt(v);
+    // Coordinate. Zero is the standard's own "unknown or unspecified" marker
+    // (SEG-Y Rev 2.1, October 2023, Table 3, footnote 11, page 16), so a zero is
+    // dropped instead of being drawn at the survey origin. NOTHING else is read
+    // as unset: the standard names no other sentinel, so a full-scale value such
+    // as 2147483647 is a number the file really stores and is shown as it stands.
     case 'scaled': // coordinate - apply the SEG-Y coordinate scalar, but only if set
       if (v === 0) return null;
-      return grp(applyCoordScalar(v, hdrNum(h, 'coordScalar')));
+      // A NEGATIVE scalar divides, so the scaled coordinate is routinely
+      // fractional (scalar -100 on an arc-second grid gives hundredths). Rounding
+      // it back to an integer threw away exactly the resolution the scalar was
+      // written to declare.
+      return hdrValTxt(applyCoordScalar(v, hdrNum(h, 'coordScalar')));
     default: // 'int' - omit unset (0) numeric fields to keep the table tidy
-      return v === 0 ? null : grp(v);
+      return v === 0 ? null : hdrValTxt(v);
   }
 }
 
@@ -2797,26 +2905,100 @@ function applyCoordScalar(v: number, scalar: number | null): number {
   return scalar > 0 ? v * scalar : v / -scalar;
 }
 
-/** Render the active trace's SEG-Y header into the grouped table. */
-function renderTraceHeader() {
-  const grid = $opt('traceHdrGrid');
-  const tag = $opt('traceHdrTrace');
-  if (!grid) return;
-  if (!summary || !lastTrace) {
-    grid.innerHTML = '<div class="hdr-empty">Open a file and pick a trace to view its header.</div>';
-    if (tag) tag.textContent = '-';
-    return;
+// -- "Other fields": every key the curated groups do not name ------------------
+// The curated groups above are a SEG-Y reading list. A SEG-D trace carries its
+// scan type, channel set and receiver line/point, and none of those appear in
+// them, so a table built from the groups alone omits real fields without ever
+// saying so. A header reader that hides fields is worse than none, so the panel
+// follows the curated groups with everything left over.
+//
+// "Left over" means the keys the groups NAME, not the keys they managed to
+// print: a curated field whose value is zero stays hidden exactly as it is in
+// the Workbench card, instead of reappearing down here under a second name.
+
+/** Human labels for the header keys no curated group names. Anything missing
+ *  falls back to the key with its word breaks restored, which stays readable:
+ *  a SEG-2 trace header is free-form and its keys are the recorder's own words. */
+const HDR_KEY_LABEL: Record<string, string> = {
+  trcNum: 'Trace number',
+  scanType: 'Scan type',
+  chanSet: 'Channel set',
+  theCount: 'Trace header extension blocks',
+  chanType: 'Channel type',
+  rcvLine: 'Receiver line',
+  rcvPoint: 'Receiver point',
+  rcvIdx: 'Receiver index at the point',
+};
+
+/** A header key turned into something a person reads: the curated label when
+ *  there is one, else the key with camelCase / UNDER_SCORES broken into words. */
+function hdrHumanLabel(key: string): string {
+  const known = HDR_KEY_LABEL[key];
+  if (known) return known;
+  const words = key.replace(/_+/g, ' ').replace(/([a-z0-9])([A-Z])/g, '$1 $2').trim().toLowerCase();
+  return words ? words.charAt(0).toUpperCase() + words.slice(1) : key;
+}
+
+/** Build the "Other fields" group for one header: every key present that no
+ *  group in `groups` names, in the order the header object carries them. Null
+ *  when the curated groups already cover the whole header. */
+function hdrOtherGroup(h: Record<string, number | string>, groups: HdrGroup[]): HdrGroup | null {
+  const named = new Set<string>();
+  for (const g of groups) for (const f of g.fields) named.add(f.key);
+  // The composite "Recording time" row is built from three keys that no field
+  // lists ('__time' is not a key at all), so they are spoken for already.
+  named.add('hour'); named.add('minute'); named.add('second');
+  const fields: HdrField[] = [];
+  for (const key of Object.keys(h)) {
+    if (named.has(key)) continue;
+    const raw = h[key];
+    // A value that arrived as a STRING is shown as the string it is, whatever it
+    // happens to look like. Testing whether it PARSES as a number and reformatting
+    // it when it does was wrong twice over: a SEG-2 sample interval is written
+    // "0.002000000" by our own writer and came back as "0", and an all-digit node
+    // serial "00123456" came back as "123 456" with its leading zeros gone and
+    // thousands separators inserted into a serial number. The writer's own text is
+    // the most precise form of it that exists, so it is the form that is shown.
+    //
+    // 'raw' rather than 'int' for the numbers, on purpose: a leftover field showing
+    // 0 is a fact about the file, and dropping it would be the omission this group
+    // exists to prevent.
+    const fmt: HdrFmt = key === 'chanType' ? 'chanType'
+      : typeof raw === 'string' ? 'text' : 'raw';
+    fields.push({ key, label: hdrHumanLabel(key), fmt });
   }
-  const h = lastTrace.hdr || {};
-  if (tag) tag.textContent = `Trace ${lastTrace.index + 1} / ${summary.traceCount}`;
-  grid.innerHTML = '';
+  return fields.length ? { title: 'Other fields', fields } : null;
+}
+
+/** What a caller can add on top of the plain grouped table. */
+type HdrRenderOpts = {
+  /** Line shown when not one field in any group produced a value. */
+  emptyText?: string;
+  /** Per-key provenance note, printed in small type beside that field's label.
+   *  Only the CALLER knows where a value came from - the File Viewer knows the
+   *  open file is SEG-D and that two of its trace fields are inherited from the
+   *  channel-set descriptor rather than read off the trace - so the note is
+   *  passed in and never guessed from the header object. */
+  notes?: Record<string, string>;
+};
+
+/** Render one header object into `target` as the grouped key/value table.
+ *
+ *  ONE renderer for every surface that shows header fields: the Trace Workbench
+ *  card and the File Viewer's headers panel both come through here, so the same
+ *  header can never be drawn two different ways. The group table is a parameter
+ *  because the two surfaces show different sets - the Workbench shows the curated
+ *  SEG-Y groups, the panel appends an "Other fields" group holding every key the
+ *  curated groups do not name. */
+function renderHdrGroups(target: HTMLElement, h: Record<string, number | string>, groups: HdrGroup[], opts: HdrRenderOpts = {}) {
+  target.innerHTML = '';
   let anyField = false;
-  for (const group of HDR_GROUPS) {
-    const rows: { label: string; value: string }[] = [];
+  for (const group of groups) {
+    const rows: { label: string; value: string; note?: string }[] = [];
     for (const f of group.fields) {
       const val = fmtHdrField(h, f);
       if (val == null) continue;
-      rows.push({ label: f.label, value: val });
+      rows.push({ label: f.label, value: val, note: opts.notes?.[f.key] });
     }
     if (!rows.length) continue;
     anyField = true;
@@ -2831,6 +3013,12 @@ function renderTraceHeader() {
       const k = document.createElement('span');
       k.className = 'k';
       k.textContent = r.label;
+      if (r.note) {
+        const note = document.createElement('span');
+        note.className = 'hdr-note';
+        note.textContent = r.note;
+        k.appendChild(note);
+      }
       const v = document.createElement('span');
       v.className = 'v mono';
       v.textContent = r.value;
@@ -2838,9 +3026,29 @@ function renderTraceHeader() {
       kv.appendChild(v);
       sec.appendChild(kv);
     }
-    grid.appendChild(sec);
+    target.appendChild(sec);
   }
-  if (!anyField) grid.innerHTML = '<div class="hdr-empty">This trace carries no populated header fields.</div>';
+  if (!anyField) {
+    const empty = document.createElement('div');
+    empty.className = 'hdr-empty';
+    empty.textContent = opts.emptyText || 'This trace carries no populated header fields.';
+    target.appendChild(empty);
+  }
+}
+
+/** Render the active trace's SEG-Y header into the grouped table. */
+function renderTraceHeader() {
+  const grid = $opt('traceHdrGrid');
+  const tag = $opt('traceHdrTrace');
+  if (!grid) return;
+  if (!summary || !lastTrace) {
+    grid.innerHTML = '<div class="hdr-empty">Open a file and pick a trace to view its header.</div>';
+    if (tag) tag.textContent = '-';
+    return;
+  }
+  const h = lastTrace.hdr || {};
+  if (tag) tag.textContent = `Trace ${lastTrace.index + 1} / ${summary.traceCount}`;
+  renderHdrGroups(grid, h, HDR_GROUPS);
 }
 
 // -- Export the view on screen as a PNG image ------------------------------------
@@ -3231,6 +3439,12 @@ function drawTraceCore(
   s0in: number, s1in: number, ampRange: { min: number; max: number } | null,
   strip?: { name?: string; polarity?: boolean },
   scale?: { mode: TrcScaleMode; pct: number },
+  // Whether the operator's reference lines belong on this plot. They are times in
+  // the OPEN record, so the Sweeps pilot plot - a synthetic sweep, not a trace of
+  // the open file - passes false and gets none. Said explicitly rather than read
+  // off `strip.polarity`, which answers a different question (whose samples these
+  // are) and would tie two unrelated decisions to one flag.
+  showRefLines = true,
 ) {
   const surf = beginCanvas(cv, { fallbackW: 800, fallbackH: 460 }, '#0d1f33');
   if (!surf) return;
@@ -3365,6 +3579,20 @@ function drawTraceCore(
     stripValueLine(pol < 0
       ? 'Display is inverted, so a positive stored sample deflects LEFT of the centre axis'
       : 'Positive sample value deflects RIGHT of the centre axis', { polarity: strip?.polarity }));
+
+  // Reference lines last, on top of the wiggle and both axes. TIME ONLY: this
+  // canvas is transposed, so the horizontal axis is AMPLITUDE and there is no
+  // trace dimension for a vertical line to mark - only one trace is on screen.
+  // Hence no colForTrace, and drawRefLines skips every trace line here.
+  // The map is the SAME one the wiggle was drawn with (sample i to
+  // MT + ((i - s0)/denom)*ph), rewritten in milliseconds, so a line and the data
+  // cannot come from two different pictures.
+  if (showRefLines && Number.isFinite(msPerSample) && msPerSample > 0) {
+    const msSpan = denom * msPerSample;
+    drawRefLines(cv, { ML, MT, pw, ph }, {
+      yForMs: (ms) => (msSpan > 0 ? MT + ((ms - s0 * msPerSample) / msSpan) * ph : NaN),
+    });
+  }
 }
 
 /** A frequency-domain spectrum: parallel freqs/amp arrays + the Nyquist edge.
@@ -4709,7 +4937,9 @@ async function fetchSectionWindow() {
       const zoomed = sec.traceStart > 0 || sec.traceEnd < sec.fullTraces || sec.sampStart > 0 || sec.sampEnd < sec.fullSamples;
       $('secLabel').textContent =
         `${sec.numTraces} traces (step ${sec.traceStep}) · ${sec.colLen} samples` +
-        (zoomed ? ` · tr ${sec.traceStart}-${sec.traceEnd} · smp ${sec.sampStart}-${sec.sampEnd}` : '') +
+        // traceEnd is EXCLUSIVE, so the last trace in [start, end) is `end` once
+        // the numbers are counted from one: only the start edge takes the +1.
+        (zoomed ? ` · tr ${trNo(sec.traceStart)}-${sec.traceEnd} · smp ${sec.sampStart}-${sec.sampEnd}` : '') +
         secKeepNote;
       secKeepNote = ''; // said once, for the record it was about
 
@@ -5171,6 +5401,226 @@ function secPanelIsGather(opts?: PaintSectionOpts): boolean {
   return !!opts?.colLabel;
 }
 
+// -- Reference lines ------------------------------------------------------------
+// A reference line is a datum the operator puts on the display and measures
+// against: a horizontal line at a time they name, or a vertical line at a trace
+// they name. Many can be up at once, the two kinds are chosen independently, and
+// either can be added by typing a value or by clicking the display.
+//
+// They are ANNOTATIONS, not display settings, so they are deliberately absent from
+// SEC_DISPLAY_IDS for the same reason the first-break picks and the health flags
+// are: "Reset display" must not quietly throw away a measurement the operator
+// placed by hand.
+//
+// Because they are painted onto the data canvas itself, the PNG export of each
+// viewer picks them up with no extra work.
+
+type RefLineKind = 'time' | 'trace';
+/** `value` is MILLISECONDS for 'time' and an absolute trace number for 'trace' -
+ *  the same number the section prints along its bottom axis. */
+interface RefLine { id: number; kind: RefLineKind; value: number; }
+
+const REFLINE_KEY = 'seisconv.reflines';
+let refLines: RefLine[] = [];
+let refLineNextId = 1;
+/** Which kind of line the next click on the section places, or null when neither
+ *  click-to-place toggle is armed. */
+let secRefPick: RefLineKind | null = null;
+
+// Style. The bright neutral and the 1.3 width are the health overlay's own
+// located-trace guide, so the two read as the same kind of mark.
+//
+// The DARK CASING underneath it is not decoration, and it was added after the line
+// was watched on real data: the default 'Seismic' colour map paints a zero-
+// amplitude sample WHITE, so above the first breaks the section is a white field,
+// and a white line drawn on it was measured as changing not one pixel. A reference
+// line has to be readable wherever the operator puts it, so a wider stroke in the
+// plot background colour goes down first and the bright line rides on top of it.
+// That colour is the same 'rgba(13,31,51,...)' the health flags already outline
+// themselves against the plot with.
+const REFLINE_CASING = 'rgba(13,31,51,0.85)';
+const REFLINE_CASING_WIDTH = 3.4;
+const REFLINE_STROKE = 'rgba(255,255,255,0.9)';
+const REFLINE_WIDTH = 1.3;
+const REFLINE_TEXT = 'rgba(255,255,255,0.9)';
+/** The plot background, painted behind a label so the label stays readable over
+ *  data of any brightness, for the same reason. */
+const REFLINE_LABEL_BG = 'rgba(13,31,51,0.82)';
+
+/** How a line's value is written on screen. The same one decimal place the
+ *  first-break read-out uses, so two times quoted in this app never look like two
+ *  different scales. */
+function refLineMsTxt(ms: number): string {
+  return Number.isFinite(ms) ? ms.toFixed(1) : '-';
+}
+
+function refLinesSave() {
+  try { localStorage.setItem(REFLINE_KEY, JSON.stringify(refLines)); } catch { /* ignore quota */ }
+}
+
+/** Read the saved lines back ITEM BY ITEM. A partially written or hand-edited
+ *  value must never put a NaN on a canvas, so anything that is not a finite value
+ *  of a known kind is dropped rather than trusted. Ids are re-issued here, so a
+ *  duplicated id in the stored value cannot make two lines share one Remove
+ *  button. */
+function refLinesLoad() {
+  let raw: string | null = null;
+  try { raw = localStorage.getItem(REFLINE_KEY); } catch { return; }
+  if (!raw) return;
+  let arr: unknown;
+  try { arr = JSON.parse(raw); } catch { return; }
+  if (!Array.isArray(arr)) return;
+  const out: RefLine[] = [];
+  for (const it of arr) {
+    const kind = (it as RefLine | null)?.kind;
+    const value = Number((it as RefLine | null)?.value);
+    if (kind !== 'time' && kind !== 'trace') continue;
+    if (!Number.isFinite(value)) continue;
+    out.push({ id: refLineNextId++, kind, value });
+  }
+  refLines = out;
+}
+
+/** There is no central redraw in this app: every viewer owns its own entry point.
+ *  So adding or removing a line refreshes them all from ONE place and no call site
+ *  can ever be forgotten. redrawSection() already carries the near-trace gather
+ *  with it, which is why the gather is not listed separately here. */
+function refLinesChanged() {
+  refLinesSave();
+  refLinesRenderList();
+  redrawSection();
+  renderTrace();
+  if (zoomViewerOpen()) drawZoom();
+}
+
+/** Add a line, or say why not. Returns the sentence for the panel's note line, so
+ *  the two entry routes (typing a value, clicking the display) report a refusal
+ *  in exactly the same words. */
+function refLineAdd(kind: RefLineKind, value: number): string {
+  if (!Number.isFinite(value)) return 'Type a number first.';
+  // A trace line marks a whole trace, so its value is a trace number and never a
+  // fraction of one. A time is kept exactly as given: nothing is clamped to the
+  // visible window, so a line the operator pans away from is still there when they
+  // pan back rather than having been silently moved.
+  const v = kind === 'trace' ? Math.round(value) : value;
+  if (kind === 'trace' && v < 0) return 'Trace numbers start at 1.';
+  if (refLines.some((l) => l.kind === kind && l.value === v)) {
+    return kind === 'time'
+      ? `There is already a line at ${refLineMsTxt(v)} ms.`
+      : `There is already a line on trace #${trNo(v)}.`;
+  }
+  refLines.push({ id: refLineNextId++, kind, value: v });
+  refLinesChanged();
+  // A trace is written with its '#' everywhere it is shown. The section's bottom
+  // axis, the hover read-out and this note all count from one, so the same column
+  // is named by one number everywhere; carrying the '#' still ties the note to the
+  // axis label directly under the line rather than to the read-out beside it.
+  return kind === 'time' ? `Line added at ${refLineMsTxt(v)} ms.` : `Line added on trace #${trNo(v)}.`;
+}
+
+function refLineRemove(id: number) {
+  const before = refLines.length;
+  refLines = refLines.filter((l) => l.id !== id);
+  if (refLines.length !== before) { refLinesChanged(); refLineNote('Line removed.'); }
+}
+
+function refLinesClearAll() {
+  if (!refLines.length) { refLineNote('There are no reference lines to clear.'); return; }
+  refLines = [];
+  refLinesChanged();
+  refLineNote('All reference lines removed.');
+}
+
+function refLineNote(msg: string) {
+  const el = $opt('secRefNote');
+  if (el) el.textContent = msg;
+}
+
+/** How one surface turns a line's value into a pixel. Passed IN rather than worked
+ *  out inside drawRefLines, because the two families measure in different things:
+ *  the section family has a SectionData and a trace axis, while the Trace Inspector
+ *  has neither (it plots ONE trace, with amplitude running across). Each call site
+ *  builds these from the very maps it drew its own data with, so a line can never
+ *  land somewhere the data did not. */
+type RefLineMap = {
+  /** Milliseconds to a y pixel on this surface; NaN when it cannot be placed. */
+  yForMs: (tMs: number) => number;
+  /** Absolute trace number to the column ACTUALLY drawn for it, or null when this
+   *  surface has no trace axis to point at. Left undefined by the Trace Inspector,
+   *  whose horizontal axis is amplitude, and by the near-trace gather, whose
+   *  columns are whole records rather than traces of the open file. */
+  colForTrace?: (abs: number) => { x: number; abs: number } | null;
+};
+
+/** Paint the reference lines onto an ALREADY painted plot. One function for every
+ *  surface, so a line looks and reads the same wherever it is seen. Every
+ *  coordinate is finite-guarded and clipped to the plot rectangle, the same
+ *  discipline the first-break overlay keeps. */
+function drawRefLines(
+  cv: HTMLCanvasElement,
+  rect: { ML: number; MT: number; pw: number; ph: number },
+  map: RefLineMap,
+) {
+  if (!refLines.length) return;
+  const { ML, MT, pw, ph } = rect;
+  if (!(pw > 0) || !(ph > 0)) return;
+  const ctx = attachOverlay(cv);
+  if (!ctx) return;
+  ctx.save();
+  ctx.beginPath(); ctx.rect(ML, MT, pw, ph); ctx.clip();
+  ctx.setLineDash([]);
+  ctx.font = '10px Consolas, monospace';
+  ctx.textAlign = 'left';
+  /** Casing first, bright line second, so one stroke reads on a white field and on
+   *  dark data alike. */
+  const strokeLine = (x0: number, y0: number, x1: number, y1: number) => {
+    ctx.beginPath(); ctx.moveTo(x0, y0); ctx.lineTo(x1, y1);
+    ctx.strokeStyle = REFLINE_CASING; ctx.lineWidth = REFLINE_CASING_WIDTH; ctx.stroke();
+    ctx.strokeStyle = REFLINE_STROKE; ctx.lineWidth = REFLINE_WIDTH; ctx.stroke();
+  };
+  for (const ln of refLines) {
+    if (ln.kind === 'time') {
+      const y = map.yForMs(ln.value);
+      // Outside the visible window it simply is not drawn, which is the honest
+      // picture; it is still in the list, so panning back brings it back.
+      if (!Number.isFinite(y) || y < MT || y > MT + ph) continue;
+      strokeLine(ML, y, ML + pw, y);
+      refLineLabel(ctx, `${refLineMsTxt(ln.value)} ms`, ML + 4, y - 3, rect);
+      continue;
+    }
+    const hit = map.colForTrace?.(ln.value);
+    if (!hit || !Number.isFinite(hit.x) || hit.x < ML || hit.x > ML + pw) continue;
+    strokeLine(hit.x, MT, hit.x, MT + ph);
+    // The label names the trace the line LANDED on, not the one that was asked
+    // for. Zoomed out, traceStep exceeds 1 and one column stands for several
+    // traces, so the request is rounded to the nearest drawn column; printing the
+    // request instead would let the display quietly claim a trace it is not on.
+    refLineLabel(ctx, `#${trNo(hit.abs)}`, hit.x + 4, MT + 12, rect);
+  }
+  ctx.restore();
+}
+
+/** A line's value written beside it, on a backing patch of the plot background so
+ *  it can be read over bright data. Kept inside the plot rectangle, so a line at
+ *  the very edge does not push its own label off the picture. */
+function refLineLabel(
+  ctx: CanvasRenderingContext2D,
+  txt: string,
+  x: number,
+  y: number,
+  rect: { ML: number; MT: number; pw: number; ph: number },
+) {
+  const w = ctx.measureText(txt).width;
+  if (!Number.isFinite(w)) return;
+  const px = Math.max(rect.ML + 2, Math.min(rect.ML + rect.pw - w - 2, x));
+  const py = Math.max(rect.MT + 10, Math.min(rect.MT + rect.ph - 2, y));
+  if (!Number.isFinite(px) || !Number.isFinite(py)) return;
+  ctx.fillStyle = REFLINE_LABEL_BG;
+  ctx.fillRect(px - 2, py - 9, w + 4, 11);
+  ctx.fillStyle = REFLINE_TEXT;
+  ctx.fillText(txt, px, py);
+}
+
 function paintSection(cv: HTMLCanvasElement, secIn: SectionData, mode: string, cmap: string, gain: number, opts?: PaintSectionOpts): SecPlotRect | null {
   const surf = beginCanvas(cv, { fallbackW: 900, fallbackH: 500 }, '#0d1f33');
   if (!surf) return null;
@@ -5396,7 +5846,11 @@ function paintSection(cv: HTMLCanvasElement, secIn: SectionData, mode: string, c
       const col = Math.max(0, Math.min(numTraces - 1, Math.round(((numTraces - 1) * k) / 5)));
       txt = opts.colLabel(col);
     } else {
-      txt = '#' + Math.round(tr0 + ((tr1 - tr0) * k) / 5);
+      // tr1 is EXCLUSIVE, so the rightmost tick must name tr1-1, the last trace
+      // actually drawn, which counted from one reads exactly tr1. Clamping here
+      // rather than adding one to both ends is what keeps the right edge honest:
+      // the old label printed one past the end of the window.
+      txt = '#' + trNo(Math.max(tr0, Math.min(tr1 - 1, Math.round(tr0 + ((tr1 - tr0) * k) / 5))));
     }
     ctx.fillText(txt, Math.max(ML + 10, Math.min(W - MR - 10, x)), H - 4);
   }
@@ -5405,6 +5859,33 @@ function paintSection(cv: HTMLCanvasElement, secIn: SectionData, mode: string, c
     ctx.fillText(SEC_SPACING_LABELS[axisInfo.key], ML, H - 14);
   }
   ctx.textAlign = 'left';
+  // The operator's reference lines go on LAST, so they sit on top of the data, the
+  // colour bar and both axes, and so every one of the three surfaces this function
+  // paints (the File Viewer section, the box-zoom popup and the near-trace gather)
+  // gets them from one call site.
+  //
+  // `shiftMs` is left at its 0 default ON PURPOSE. A reference line is an absolute
+  // time datum, so it stays flat at the time it names while reduced time flattens
+  // the data underneath it; letting it bend with the flattening would make it
+  // follow the data instead of measuring it. The first-break overlay deliberately
+  // does the opposite, because a pick belongs to its trace.
+  //
+  // A trace line is skipped on the GATHER, whose columns are whole records rather
+  // than traces of the open file: a vertical line at "trace 7" drawn on record 7
+  // would be a false statement, the same reason the health and first-break
+  // overlays are absent there. secPanelIsGather is that one existing test.
+  drawRefLines(cv, { ML, MT, pw, ph }, {
+    yForMs: (ms) => fbYForMs(ms, sec, siUs, MT, ph),
+    colForTrace: secPanelIsGather(opts) ? undefined : (abs) => {
+      if (!(sec.traceStep > 0)) return null;
+      const c = Math.round((abs - sec.traceStart) / sec.traceStep);
+      if (!(c >= 0 && c < numTraces)) return null;
+      const x = secColX(axis, c, numTraces, ML, pw);
+      // The trace REPORTED back is the one the rounded column actually holds, not
+      // the one that was asked for.
+      return Number.isFinite(x) ? { x, abs: sec.traceStart + c * sec.traceStep } : null;
+    },
+  });
   // W travels with the rectangle so a panel drawn ALONGSIDE the section (the
   // per-trace attribute profile) can size itself to the section's own width and
   // therefore reuse ML and pw literally, instead of recomputing them.
@@ -5462,6 +5943,14 @@ function gatherNum(id: string, fb: number): number {
   return Number.isFinite(v) ? v : fb;
 }
 
+/** The Position box counts from one, like every other trace number on screen, so
+ *  this is the ONE place its typed value becomes the 0-based array position the
+ *  worker is asked for. Both the state strip and the gather request read it here,
+ *  so the number shown and the number used cannot drift apart. */
+function gatherIndexAbs(): number {
+  return Math.max(0, trAbs(Math.round(gatherNum('gatherIndex', 1))));
+}
+
 /** Only the selector actually in use is on screen. */
 function gatherSyncControls() {
   const by = gatherSelectBy();
@@ -5504,7 +5993,7 @@ function gatherBuildStrip(g: NearGatherData): string[] {
   const chosen = g.selectBy === 'offset'
     ? `Offset nearest ${secNum(gatherNum('gatherOffset', 0))}`
     : g.selectBy === 'index'
-      ? `Trace position ${grp(Math.max(0, Math.round(gatherNum('gatherIndex', 0))))}`
+      ? `Trace position ${grp(trNo(gatherIndexAbs()))}`
       : `Channel ${grp(Math.round(gatherNum('gatherChannel', 1)))}`;
   const lead = [
     'Near-trace gather, one column per RECORD',
@@ -5633,7 +6122,7 @@ async function runGather() {
   // rejected as unauthorized.
   if (by === 'channel') opts.channel = Math.round(gatherNum('gatherChannel', 1));
   else if (by === 'offset') opts.offsetTarget = gatherNum('gatherOffset', 0);
-  else opts.index = Math.max(0, Math.round(gatherNum('gatherIndex', 0)));
+  else opts.index = gatherIndexAbs();
   gatherPending = true;
   updateFileNav();     // lock file Prev/Next while the worker is busy
   gatherSetRunning(true);
@@ -5735,6 +6224,13 @@ function gatherEnsureResizeObserver() {
 const HEALTH_COLORS: Record<DetectorId, string> = { dead: '#9aa7b4', noisy: '#e2a83a', amp: '#5b8def', clipped: '#ff5252', reversed: '#c264ff' };
 const HEALTH_LABELS: Record<DetectorId, string> = { dead: 'dead', noisy: 'noisy', amp: 'hot/weak', clipped: 'clipped/spiky', reversed: 'reversed' };
 
+// Why the scan is unavailable on a very large file, in the operator's words (the
+// word for it inside this app is "streamed", which means nothing at a shot point).
+// It sits in one place because it has to reach the screen from TWO directions: the
+// buttons are disabled for such a file, so the click that would otherwise print it
+// never lands, and the summary line has to carry it the moment the file opens.
+const HEALTH_TOO_BIG_MSG = 'Health scan is not available for this file. It is too large to read all at once, so the viewer pages through it in blocks.';
+
 type HealthMeta = { ffid: number; channel: number; offset: number; row: number };
 type HealthScan = {
   data: TraceHealthData;
@@ -5796,6 +6292,12 @@ function secHealthUpdateButtons() {
   if (sens) sens.disabled = !has;
   if (clr) clr.disabled = !has;
   if (exp) exp.disabled = !has;
+  // A disabled button cannot be clicked into telling you why it is disabled, so the
+  // reason goes on the summary line beside it instead - the same line that carries
+  // "Run a health scan…" and the flagged counts. Written here rather than at the
+  // open-file call site because every path that greys the buttons comes through
+  // this function, and a streamed file can never hold a scan result to overwrite.
+  if (hasFile && streamed) setText('secHealthSummary', HEALTH_TOO_BIG_MSG);
   secAttrUpdateButton();
 }
 
@@ -5853,7 +6355,7 @@ function secToggleSensPanel() {
  *  detector's level afterward re-classifies WITHOUT re-scanning. */
 async function secRunHealth() {
   if (!summary || summary.traceCount === 0) { setText('secHealthSummary', 'Open a file first.'); return; }
-  if (summary.streamed) { setText('secHealthSummary', 'Health scan is not available for very large streamed files yet.'); return; }
+  if (summary.streamed) { setText('secHealthSummary', HEALTH_TOO_BIG_MSG); return; }
   if (secHealthPending) return;
   secHealthPending = true;
   secHealthUpdateButtons();
@@ -5978,7 +6480,7 @@ function secRenderHealthFindings() {
     if (!q) return true;
     const m = meta.get(f.absIndex);
     const hay = [
-      `#${f.absIndex}`,
+      `#${trNo(f.absIndex)}`,
       f.detectors.map((d) => HEALTH_LABELS[d.id]).join(' '),
       m && (m.ffid !== 0 || m.channel !== 0) ? `${m.ffid}:${m.channel}` : '',
       m && Number.isFinite(m.offset) ? String(Math.round(m.offset)) : '',
@@ -6023,7 +6525,7 @@ function secRenderHealthFindings() {
     const tr = document.createElement('tr');
     tr.dataset.abs = String(f.absIndex);
 
-    const tdTr = document.createElement('td'); tdTr.className = 'h-tr'; tdTr.textContent = `#${f.absIndex}`; tr.appendChild(tdTr);
+    const tdTr = document.createElement('td'); tdTr.className = 'h-tr'; tdTr.textContent = `#${trNo(f.absIndex)}`; tr.appendChild(tdTr);
     const tdFf = document.createElement('td');
     tdFf.textContent = m && (m.ffid !== 0 || m.channel !== 0) ? `${m.ffid}:${m.channel}` : '-';
     tr.appendChild(tdFf);
@@ -6526,30 +7028,42 @@ function healthCsvCell(v: string | number): string {
 /** Export every flagged trace as CSV - one row PER FIRED DETECTOR with its score,
  *  confidence, metric, local baseline, reason + the trace's real std. */
 async function secHealthExport() {
-  if (!summary || !secHealth || secHealth.findings.length === 0) { setText('secHealthSummary', 'Run a health scan first.'); return; }
+  // No scan run yet - nothing to build a report from.
+  if (!summary || !secHealth) { setText('secHealthSummary', 'Run a health scan first.'); return; }
+  // A scan DID run and came back clean - that is a genuine result, not a missing
+  // scan, so the button stays enabled and the operator gets an honest "nothing to
+  // export" line instead of being told to redo work they already did.
+  if (secHealth.findings.length === 0) { setText('secHealthSummary', 'No flagged traces to export.'); return; }
   // The CSV is built row-per-detector on the renderer thread; show the spinner +
   // paint BEFORE the build for a large flag set so it never looks frozen.
   const heavy = secHealth.findings.length > 1500;
   if (heavy) { showProgress('Exporting flagged traces…', undefined, 0); await nextPaint(); }
-  const d = secHealth.data;
-  const meta = secHealth.meta;
-  const out: string[] = ['traceIndex,ffid,channel,offset,detector,score,confidence,metric,baseline,std,severity,worst,reason'];
-  const ordered = secHealth.findings.slice().sort((a, b) => a.absIndex - b.absIndex);
-  const num = (v: number, dp = 4) => (Number.isFinite(v) ? v.toFixed(dp) : '');
-  for (const f of ordered) {
-    const m = meta.get(f.absIndex);
-    const ev = m ? readEvidence(d.evidence, m.row) : null;
-    const std = ev ? num(ev.std) : '';
-    for (const det of f.detectors) {
-      out.push([
-        f.absIndex, m?.ffid ?? '', m?.channel ?? '', m && Number.isFinite(m.offset) ? num(m.offset, 2) : '',
-        det.id, num(det.score, 3), num(det.confidence, 3), num(det.metric), num(det.baseline), std,
-        num(f.severity, 3), f.worst, det.reason,
-      ].map(healthCsvCell).join(','));
-    }
-  }
-  const base = (summary.name || 'file').replace(/\.[^.]+$/, '');
   try {
+    // The build itself now lives inside the try, so a throw while walking the
+    // findings (a bad evidence row, a detector with an unexpected shape) reports
+    // through the catch below instead of vanishing with no feedback at all.
+    const d = secHealth.data;
+    const meta = secHealth.meta;
+    // traceNumber, not traceIndex: the values count from one now, like everything
+    // else the operator reads, and the column was RENAMED so a spreadsheet built
+    // against the old export fails loudly instead of quietly reading the wrong
+    // trace. Every other column is unchanged.
+    const out: string[] = ['traceNumber,ffid,channel,offset,detector,score,confidence,metric,baseline,std,severity,worst,reason'];
+    const ordered = secHealth.findings.slice().sort((a, b) => a.absIndex - b.absIndex);
+    const num = (v: number, dp = 4) => (Number.isFinite(v) ? v.toFixed(dp) : '');
+    for (const f of ordered) {
+      const m = meta.get(f.absIndex);
+      const ev = m ? readEvidence(d.evidence, m.row) : null;
+      const std = ev ? num(ev.std) : '';
+      for (const det of f.detectors) {
+        out.push([
+          trNo(f.absIndex), m?.ffid ?? '', m?.channel ?? '', m && Number.isFinite(m.offset) ? num(m.offset, 2) : '',
+          det.id, num(det.score, 3), num(det.confidence, 3), num(det.metric), num(det.baseline), std,
+          num(f.severity, 3), f.worst, det.reason,
+        ].map(healthCsvCell).join(','));
+      }
+    }
+    const base = (summary.name || 'file').replace(/\.[^.]+$/, '');
     const res = await api.exportText(`${base}_tracehealth.csv`, out.join('\n') + '\n');
     if (res.ok) setText('secHealthSummary', `Exported ${secHealth.findings.length} flagged trace${secHealth.findings.length === 1 ? '' : 's'} → ${res.path ?? 'CSV'}`);
     else if (!res.canceled) setText('secHealthSummary', 'Export failed: ' + (res.error ?? 'unknown'));
@@ -6571,6 +7085,14 @@ async function secHealthExport() {
 
 // Pick colours - overlay + legend dots (kept in sync with .health-dot[data-fb] CSS).
 const FB_COLORS = { seed: '#ffd23f', auto: '#39d98a', edited: '#5b8def', flagged: '#ff5252' };
+
+// Why the assisted picker is unavailable on a very large file, in the operator's
+// words. It sits in one place because it has to reach the screen from TWO
+// directions: the toggle/fill buttons are disabled for such a file, so the click
+// that would otherwise print it never lands, and the readout has to carry it the
+// moment the file opens.
+const FB_TOO_BIG_MSG = 'First breaks is not available for this file. It is too large to read all at once, so the viewer pages through it in blocks.';
+
 type FbSource = 'seed' | 'auto' | 'edited';
 interface FbPick { tMs: number; source: FbSource; confidence: number; deviation: number; accepted: boolean; ffid: number; channel: number; offset: number; }
 
@@ -6611,11 +7133,11 @@ function setFbMode(on: boolean) {
   const hint = $opt('secFbHint'); if (hint) hint.style.display = on ? '' : 'none';
   const cv = $opt('secCanvas') as HTMLCanvasElement | null;
   if (cv) cv.style.cursor = on ? 'crosshair' : '';
-  if (on) { if (secBoxMode) setSecBoxMode(false); if (secToWb) disarmSecToWb(); }
+  if (on) { if (secBoxMode) setSecBoxMode(false); if (secToWb) disarmSecToWb(); if (secRefPick) setSecRefPick(null); }
   else { fbDragAbs = -1; }
   fbWindowMs = fbWindowVal();
-  fbUpdateButtons();
   fbRenderReadout(-1);
+  fbUpdateButtons();
   if (lastSection) drawSection($('secCanvas') as HTMLCanvasElement, lastSection);
 }
 
@@ -6625,8 +7147,8 @@ function fbReset() {
   fbWorkerGuide = new Map();
   fbSel = -1;
   fbDragAbs = -1;
-  fbUpdateButtons();
   fbRenderReadout(-1);
+  fbUpdateButtons();
 }
 
 /** Enable/disable the sub-bar controls for the current file + pick state. */
@@ -6647,6 +7169,26 @@ function fbUpdateButtons() {
   if (clr) clr.disabled = !anyPick || fbPending;
   const exp = $opt('secFbExportBtn') as HTMLButtonElement | null;
   if (exp) exp.disabled = !anyPick || fbPending;
+  // A disabled button cannot be clicked into telling you why it is disabled, so the
+  // reason has to be on screen already. It goes on the note BESIDE the button, in the
+  // toolbar above the section, and not in the read-out below it: that read-out lives
+  // in the picking bar, which only this same disabled button opens, and which at the
+  // app's own 1240x860 reference size lays out past the bottom of a window that does
+  // not scroll (measured on a 258 MiB file: read-out at y 905..922 of an 860 px
+  // viewport, so the sentence was set and could never be read). The note is the same
+  // shape the Health tools use - a .trace-label status line in the bar that holds the
+  // control it explains - so the two panels answer this question the same way.
+  const why = $opt('secFbUnavailable') as HTMLElement | null;
+  if (why) {
+    const show = hasFile && streamed;
+    why.textContent = show ? FB_TOO_BIG_MSG : '';
+    why.style.display = show ? '' : 'none';
+  }
+  // The read-out says the same thing, so the picking bar is never silent if some
+  // later path does reach it. It is NOT forced open here: that bar belongs to the
+  // mode toggle, and opening it would cost the section 89px for controls that
+  // cannot be used and a sentence that falls off the bottom of the window.
+  if (hasFile && streamed) fbRenderReadout(-1, FB_TOO_BIG_MSG);
 }
 
 /** Sorted seed list (by absolute index) for the live guide preview. */
@@ -6680,7 +7222,7 @@ function fbGuideAt(abs: number, seeds: { a: number; t: number }[]): number {
  *  user's seeds + edited picks and replacing the auto picks. Shows the global bar. */
 async function secRunFirstBreaks() {
   if (!summary || summary.traceCount === 0) { fbRenderReadout(-1, 'Open a file first.'); return; }
-  if (summary.streamed) { fbRenderReadout(-1, 'First breaks is not available for very large streamed files yet.'); return; }
+  if (summary.streamed) { fbRenderReadout(-1, FB_TOO_BIG_MSG); return; }
   if (fbPending) return;
   if (fbSeedCount() < 2) { fbRenderReadout(-1, 'Drop at least two seed picks, then Assisted fill.'); return; }
   fbPending = true;
@@ -6753,14 +7295,17 @@ function fbClearPicks() {
   if (lastSection) drawSection($('secCanvas') as HTMLCanvasElement, lastSection);
 }
 
-/** Export every pick as CSV (absIdx, FFID, channel, offset, tMs, source, confidence). */
+/** Export every pick as CSV (traceNumber, FFID, channel, offset, tMs, source,
+ *  confidence). traceNumber counts from one like the rest of the UI, and the
+ *  column was RENAMED from absIdx so a spreadsheet built against the old export
+ *  fails loudly instead of quietly reading the wrong trace. */
 async function fbExportCsv() {
   if (!summary || fbPicks.size === 0) { fbRenderReadout(-1, 'Drop seeds + fill first.'); return; }
-  const out: string[] = ['absIdx,ffid,channel,offset,tMs,source,confidence'];
+  const out: string[] = ['traceNumber,ffid,channel,offset,tMs,source,confidence'];
   const num = (v: number, dp = 4) => (Number.isFinite(v) ? v.toFixed(dp) : '');
   const rows = [...fbPicks.entries()].filter(([, p]) => Number.isFinite(p.tMs)).sort((a, b) => a[0] - b[0]);
   for (const [abs, p] of rows) {
-    out.push([abs, p.ffid || '', p.channel || '', Number.isFinite(p.offset) ? num(p.offset, 2) : '', num(p.tMs, 3), fbIsFlagged(p) ? 'auto-flagged' : p.source, num(p.confidence, 3)].join(','));
+    out.push([trNo(abs), p.ffid || '', p.channel || '', Number.isFinite(p.offset) ? num(p.offset, 2) : '', num(p.tMs, 3), fbIsFlagged(p) ? 'auto-flagged' : p.source, num(p.confidence, 3)].join(','));
   }
   const base = (summary.name || 'file').replace(/\.[^.]+$/, '');
   try {
@@ -6863,8 +7408,13 @@ function secDrawFbOverlay(cv: HTMLCanvasElement, sec: SectionData, rect: SecPlot
   }
 
   // 2. Pick line - connect finite picks in the visible window (break at gaps).
+  // traceEnd is EXCLUSIVE, so the window is [traceStart, traceEnd) and the test is
+  // `< traceEnd`, matching the reference-line path's `c >= 0 && c < numTraces` on
+  // this same canvas. Written `<=`, a pick on the first trace OUTSIDE the window
+  // landed at exactly ML + pw - the right edge of the plot - where an operator
+  // could select and drag a pick belonging to a trace not on screen.
   const vis = [...fbPicks.entries()]
-    .filter(([a, p]) => a >= sec.traceStart && a <= sec.traceEnd && Number.isFinite(p.tMs))
+    .filter(([a, p]) => a >= sec.traceStart && a < sec.traceEnd && Number.isFinite(p.tMs))
     .sort((x, y) => x[0] - y[0]);
   if (vis.length >= 2) {
     ctx.beginPath();
@@ -6925,7 +7475,10 @@ function fbHitPick(cv: HTMLCanvasElement, e: MouseEvent): number {
   const hitAxis = secAxis ?? buildTraceAxis(null, sec.numTraces);
   let best = -1, bestD = 9 * 9;
   for (const [a, p] of fbPicks) {
-    if (!Number.isFinite(p.tMs) || a < sec.traceStart || a > sec.traceEnd) continue;
+    // Same exclusive window as the overlay's own filter above: the hit test must
+    // reject exactly what was not drawn, or a pick off the right edge stays
+    // draggable.
+    if (!Number.isFinite(p.tMs) || a < sec.traceStart || a >= sec.traceEnd) continue;
     const x = fbXForAbs(a, sec, SEC_ML, pw, hitAxis);
     const y = fbYForMs(p.tMs, sec, siUs, SEC_MT, ph, secReduceShiftMsForAbs(a) ?? 0);
     if (!Number.isFinite(x) || !Number.isFinite(y)) continue;
@@ -7103,9 +7656,12 @@ function secApplySecAxisOverrides(): boolean {
   if (!summary || summary.traceCount === 0 || !secAxisRange) return false;
   if (!secView.init) secFit();
   const v = secAxisRange.value();
-  // X axis = trace index (direct).
+  // X axis = trace number as typed, counted from one. The first box names the
+  // first trace to show, so it loses the one on the way in; the second names the
+  // last trace to show, which is already the exclusive end secView.t1 wants, so
+  // it passes straight through. secClamp() then limits both to the record.
   if (v.xMin !== null && v.xMax !== null) {
-    secView.t0 = v.xMin;
+    secView.t0 = trAbs(v.xMin);
     secView.t1 = v.xMax;
   }
   // Y axis = time in ms → sample index: sample = ms * 1000 / sampleInt_µs.
@@ -7128,7 +7684,11 @@ function syncSecAxisPlaceholders() {
   const siUs = summary?.sampleInt ?? lastSection.sampleInt ?? 0;
   const y0 = (lastSection.sampStart * siUs) / 1000;
   const y1 = (lastSection.sampEnd * siUs) / 1000;
-  secAxisRange.setPlaceholders(lastSection.traceStart, lastSection.traceEnd, y0, y1);
+  // The X pair is the trace window as the operator counts it: first trace shown
+  // (so traceStart takes the +1) to last trace shown, and since traceEnd is
+  // exclusive the 0-based end IS that last 1-based number. Same pairing as the
+  // "tr start-end" label and the zoom title.
+  secAxisRange.setPlaceholders(trNo(lastSection.traceStart), lastSection.traceEnd, y0, y1);
 }
 
 function sectionInteractions() {
@@ -7169,6 +7729,20 @@ function sectionInteractions() {
     },
     // A press and release without a real drag adds the trace under the cursor
     // when the "+ Workbench" toggle is active; otherwise it behaves as today.
+    //
+    // ONE click, FIVE consumers on this canvas, so the order below IS the
+    // precedence and is written down rather than left to whoever reads last:
+    //   1. Magnifier. It claims the PRESS in claimDown for its rubber band, but a
+    //      press and release that never moved still arrives here, so every branch
+    //      that could act on such a gesture is gated on !secBoxMode.
+    //   2. First breaks. Its click seeds or selects a pick.
+    //   3. Reference lines. Only while one of the two click-to-place toggles is
+    //      armed, and arming one disarms the other three modes (see setSecRefPick),
+    //      so it can never actually be reached with 1 or 2 live.
+    //   4. Send to Workbench.
+    //   5. Header values pin. The only PASSIVE consumer - nothing was armed for it,
+    //      the panel merely happens to be open - so it goes last and takes the
+    //      click only when none of the four modes above wanted it.
     click: (e) => {
       // First-breaks mode: click an existing pick to SELECT it (read-out), else drop a seed.
       if (fbMode) {
@@ -7177,10 +7751,27 @@ function sectionInteractions() {
         else fbPlaceSeed(cv, e);
         return;
       }
-      if (!secToWb) return;
+      // Reference lines, click to place. Guarded on the magnifier for the same
+      // reason the header pin below is, even though arming either one disarms the
+      // other: a mode that swallows a click has to be provably unable to fire on a
+      // gesture that was aimed at the box.
+      if (secRefPick) {
+        if (!secBoxMode) secRefPlaceFromClick(cv, e);
+        return;
+      }
+      if (!secToWb) {
+        // Header values panel: pin the trace under the cursor so its numbers hold
+        // still while they are read. It takes a click ONLY when no other click
+        // mode wants it: first breaks and reference-line placement returned above,
+        // "+ Workbench" is the branch this one is inside, and the magnifier is
+        // checked here because it claims the PRESS for its rubber-band drag but a
+        // press and release that never moved still arrives as a click.
+        if (!secBoxMode && secHdrPanelOpen()) secHdrPinFromClick(cv, e);
+        return;
+      }
       void secAddTraceFromClick(cv, e);
     },
-    restCursor: () => (secBoxMode ? 'crosshair' : fbMode ? 'crosshair' : secToWb ? 'copy' : ''),
+    restCursor: () => (secBoxMode ? 'crosshair' : fbMode ? 'crosshair' : secRefPick ? 'crosshair' : secToWb ? 'copy' : ''),
   });
   // First-breaks live pick-drag (a global listener so the drag survives leaving cv).
   window.addEventListener('mousemove', (e) => { if (fbMode && fbDragAbs >= 0) fbDragPick(cv, e); });
@@ -7224,6 +7815,7 @@ function sectionInteractions() {
     cv.style.cursor = secToWb ? 'copy' : '';
     $('secLabel').textContent = secToWb ? 'Click a trace to add it to the Workbench' : '';
     if (secToWb && secBoxMode) setSecBoxMode(false); // the two click modes are exclusive
+    if (secToWb && secRefPick) setSecRefPick(null);  // and so is reference-line placement
   });
   // Live hover read-out (trace · time · amplitude + FFID/CDP/node) - Feature A.
   cv.addEventListener('mousemove', (e) => updateSecHover(cv, e));
@@ -7246,6 +7838,387 @@ function disarmSecToWb() {
   }
   const cv = $opt('secCanvas') as HTMLCanvasElement | null;
   if (cv) cv.style.cursor = '';
+}
+
+// -- Reference lines: the panel and click to place ------------------------------
+
+/** Arm (or disarm) click-to-place for one kind of reference line. The other three
+ *  click modes on the section canvas are disarmed FIRST and the new state is set
+ *  afterwards, so their own disarm hooks cannot turn round and clear the very mode
+ *  being armed. */
+function setSecRefPick(kind: RefLineKind | null) {
+  if (kind) {
+    if (secBoxMode) setSecBoxMode(false);
+    if (fbMode) setFbMode(false);
+    if (secToWb) disarmSecToWb();
+  }
+  secRefPick = kind;
+  const timeBtn = $opt('secRefTimePick');
+  const traceBtn = $opt('secRefTracePick');
+  timeBtn?.classList.toggle('on', kind === 'time');
+  timeBtn?.setAttribute('aria-pressed', kind === 'time' ? 'true' : 'false');
+  traceBtn?.classList.toggle('on', kind === 'trace');
+  traceBtn?.setAttribute('aria-pressed', kind === 'trace' ? 'true' : 'false');
+  const cv = $opt('secCanvas') as HTMLCanvasElement | null;
+  if (cv) cv.style.cursor = kind ? 'crosshair' : '';
+  if (kind === 'time') refLineNote('Click the section at the time you want a line. Press Esc when you are done.');
+  else if (kind === 'trace') refLineNote('Click the section on the trace you want a line. Press Esc when you are done.');
+  else refLineNote('Click to place is off.');
+}
+
+/** Place a reference line where the operator clicked the section. */
+function secRefPlaceFromClick(cv: HTMLCanvasElement, e: MouseEvent) {
+  if (secRefPick === 'trace') {
+    // The trace under the cursor, through the same hit test the first-break seeds
+    // and the header pin use, so a click cannot land on one trace for one feature
+    // and its neighbour for another.
+    const at = fbCursorTraceTime(cv, e);
+    if (!at) { refLineNote('Open a file first.'); return; }
+    refLineNote(refLineAdd('trace', at.abs));
+    return;
+  }
+  if (secRefPick !== 'time') return;
+  if (!summary || !secView.init) { refLineNote('Open a file first.'); return; }
+  // The time is read straight off the axis on screen and, unlike a first-break
+  // pick, is NOT converted back into true time. A pick belongs to its trace, so it
+  // has to carry that trace's reduced-time shift; a reference line is an absolute
+  // datum drawn flat, so the time it takes is the time the axis reads under the
+  // cursor, which is exactly the row it will be drawn back at.
+  const { fy } = secPlotFrac(cv, e);
+  const siUs = summary.sampleInt ?? lastSection?.sampleInt ?? 0;
+  const tMs = ((secView.s0 + fy * (secView.s1 - secView.s0)) * siUs) / 1000;
+  refLineNote(refLineAdd('time', tMs));
+}
+
+/** The list of lines currently up, each one its own Remove button. Rebuilt whole
+ *  on every change: the list is a handful of items, and rebuilding is what keeps
+ *  it from ever disagreeing with what is painted. */
+function refLinesRenderList() {
+  const host = $opt('secRefList');
+  if (!host) return;
+  host.textContent = '';
+  if (!refLines.length) {
+    const empty = document.createElement('span');
+    empty.className = 'trace-label';
+    empty.textContent = 'No reference lines yet.';
+    host.appendChild(empty);
+    return;
+  }
+  for (const ln of refLines) {
+    const b = document.createElement('button');
+    b.className = 'btn sm';
+    b.textContent = `${ln.kind === 'time' ? `${refLineMsTxt(ln.value)} ms` : `Trace #${trNo(ln.value)}`}  ✕`;
+    b.title = 'Remove this reference line';
+    b.addEventListener('click', () => refLineRemove(ln.id));
+    host.appendChild(b);
+  }
+}
+
+/** Read the typed value out of one of the two fields, the same parseFloat plus
+ *  Number.isFinite guard every other numeric control in this viewer uses. */
+function refLineFieldValue(id: string): number {
+  const v = parseFloat(($opt(id) as HTMLInputElement | null)?.value ?? '');
+  return Number.isFinite(v) ? v : NaN;
+}
+
+/** The trace box is filled in by the operator, so it counts from one. This is the
+ *  ONE place that string becomes a 0-based index, which is what refLineAdd and
+ *  RefLine.value store; both entry routes (Add button, Enter) go through it, so
+ *  the two can never drift apart. NaN survives the conversion and is caught by
+ *  refLineAdd's own finite check. */
+function refLineTraceFieldAbs(): number {
+  return trAbs(refLineFieldValue('secRefTraceVal'));
+}
+
+/** Wire the reference-lines toggle, its panel and the two click-to-place buttons.
+ *  Called once from init. */
+function initRefLines() {
+  refLinesLoad();
+  refLinesRenderList();
+  $opt('secRefToggle')?.addEventListener('click', () => secTogglePanel('secRefWrap', 'secRefToggle'));
+  $opt('secRefTimeAdd')?.addEventListener('click', () => refLineNote(refLineAdd('time', refLineFieldValue('secRefTimeVal'))));
+  $opt('secRefTraceAdd')?.addEventListener('click', () => refLineNote(refLineAdd('trace', refLineTraceFieldAbs())));
+  // Enter in a field adds the line, so a value can be typed and placed without
+  // reaching for the mouse.
+  $opt('secRefTimeVal')?.addEventListener('keydown', (e) => {
+    if ((e as KeyboardEvent).key === 'Enter') refLineNote(refLineAdd('time', refLineFieldValue('secRefTimeVal')));
+  });
+  $opt('secRefTraceVal')?.addEventListener('keydown', (e) => {
+    if ((e as KeyboardEvent).key === 'Enter') refLineNote(refLineAdd('trace', refLineTraceFieldAbs()));
+  });
+  // The two click-to-place toggles are exclusive with EACH OTHER as well: one
+  // click can only mean one thing.
+  $opt('secRefTimePick')?.addEventListener('click', () => setSecRefPick(secRefPick === 'time' ? null : 'time'));
+  $opt('secRefTracePick')?.addEventListener('click', () => setSecRefPick(secRefPick === 'trace' ? null : 'trace'));
+  $opt('secRefClear')?.addEventListener('click', () => refLinesClearAll());
+}
+
+// -- File Viewer: header values panel (#secHdrWrap) ---------------------------
+//
+// The app has always READ far more header than it ever showed: a 3200-character
+// SEG-Y textual header on every file it opened, and a trace header the section
+// quoted three fields of. This panel is where the operator can read the rest -
+// the trace under the cursor, the file's own header, and the textual header for
+// the formats that carry one.
+//
+// It is painted by renderHdrGroups(), the same function that paints the Trace
+// Workbench card, so the same header cannot be drawn two different ways on two
+// tabs. The trace table adds an "Other fields" group, because the curated groups
+// are a SEG-Y reading list and a SEG-D trace carries fields none of them name.
+//
+// SELECTION: the values follow the hover while nothing is pinned; a click on the
+// section pins one trace so the numbers hold still while they are read. The
+// header itself comes from the hover's own fetch (fetchSecHoverHdr) - the panel
+// never opens a second IPC path to the same trace.
+
+/** Absolute index of the pinned trace, or null while the panel follows the hover. */
+let secHdrPin: number | null = null;
+/** The trace whose header the panel is showing. Held separately from
+ *  secHoverHdrCache because that cache is dropped on a re-fit and on an
+ *  amplitude change, neither of which should empty a panel the operator pinned. */
+let secHdrShown: { idx: number; hdr: Record<string, number | string> } | null = null;
+
+/** True while the panel is open. Everything below is inert when it is closed:
+ *  a hidden panel must not cost a repaint on every hover, and must not take the
+ *  click that belongs to the section's own click modes. */
+function secHdrPanelOpen(): boolean {
+  const wrap = $opt('secHdrWrap') as HTMLElement | null;
+  if (!wrap) return false;
+  return !(wrap.style.display === 'none' || wrap.style.display === '');
+}
+
+/** Per-key provenance notes for the trace table.
+ *
+ *  SEG-D keeps two of the values on the trace header object somewhere OTHER than
+ *  the trace header bytes: the channel type and the sample interval are copied
+ *  onto it from the trace's resolved channel-set descriptor (core/formats/segd.ts,
+ *  "Two facts about this trace that the format keeps in its channel-set
+ *  descriptor"). Reading them here beside fields that WERE read off this trace
+ *  would claim a byte was read that was not, so each is labelled with where it
+ *  really came from. The note is per format and passed in by this caller, which
+ *  is the only place that knows which file is open. */
+function secHdrTraceNotes(): Record<string, string> {
+  if (summary?.format !== 'SEG-D') return {};
+  const src = 'from the channel set, not this trace';
+  return { chanType: src, sampInt: src };
+}
+
+/** Paint the "This trace" table plus the which-trace pill and the unpin button. */
+function secHdrRenderTrace() {
+  const grid = $opt('secHdrTraceGrid');
+  const which = $opt('secHdrWhich');
+  const unpin = $opt('secHdrUnpin') as HTMLElement | null;
+  if (!grid) return;
+  if (unpin) unpin.style.display = secHdrPin != null ? '' : 'none';
+  if (!summary || !secHdrShown) {
+    grid.innerHTML = '';
+    const empty = document.createElement('div');
+    empty.className = 'hdr-empty';
+    empty.textContent = summary
+      ? 'Move the cursor over the section to read a trace header.'
+      : 'Open a file, then move the cursor over the section to read a trace header.';
+    grid.appendChild(empty);
+    if (which) which.textContent = summary ? 'Move the cursor over the section' : 'No file open';
+    return;
+  }
+  const h = secHdrShown.hdr;
+  // Curated groups first, then everything they do not name, so no decoded field
+  // of this trace goes unshown.
+  const groups = [...HDR_GROUPS];
+  const other = hdrOtherGroup(h, HDR_GROUPS);
+  if (other) groups.push(other);
+  renderHdrGroups(grid, h, groups, {
+    emptyText: 'This trace carries no populated header fields.',
+    notes: secHdrTraceNotes(),
+  });
+  if (which) {
+    const where = `trace ${grp(secHdrShown.idx + 1)} of ${grp(summary.traceCount)}`;
+    which.textContent = secHdrPin != null ? `Holding ${where}` : `Following the cursor · ${where}`;
+  }
+}
+
+/** The file-level rows, already written out for reading. They are built as text
+ *  because they carry units and words ("2.000 ms", "big-endian") that a number
+ *  formatter has no way to supply. */
+function secHdrFileRows(s: Summary): { key: string; label: string; value: string }[] {
+  const rows: { key: string; label: string; value: string }[] = [];
+  const add = (key: string, label: string, value: string) => { if (value) rows.push({ key, label, value }); };
+  add('name', 'File', s.name);
+  add('format', 'Format', s.format);
+  add('revision', 'Revision', s.revision ? `Rev ${s.revision}` : 'not stated in the file');
+  add('byteOrder', 'Byte order', s.byteOrder);
+  add('traceCount', 'Traces in file', grp(s.traceCount));
+  add('samplesTrace', 'Samples per trace', s.samplesTrace != null ? grp(s.samplesTrace) : '');
+  add('sampleInt', 'Sample interval', s.sampleInt != null ? `${(s.sampleInt / 1000).toFixed(3)} ms` : '');
+  const recS = s.samplesTrace != null && s.sampleInt != null ? (s.samplesTrace * s.sampleInt) / 1e6 : null;
+  add('record', 'Record length', recS != null ? `${recS.toFixed(3)} s` : '');
+  add('streamed', 'Read as', s.streamed ? 'paged through in blocks (very large file)' : '');
+  // Polarity codes are quoted, never translated: the display-state strip reports
+  // them verbatim for the same reason, since the two SEG-Y conventions are read
+  // opposite ways in the field and this app does not arbitrate between them.
+  add('impulsePolarity', 'Impulse polarity code', s.impulsePolarity != null ? grp(s.impulsePolarity) : '');
+  add('vibratoryPolarity', 'Vibratory polarity code', s.vibratoryPolarity != null ? grp(s.vibratoryPolarity) : '');
+  add('errors', 'Header warnings', s.errors.length ? `${grp(s.errors.length)} · listed under Header QC on the Converter tab` : 'none');
+  return rows;
+}
+
+/** One row per SEG-D channel set: what kind of channels it holds, how many, and
+ *  how each was sampled. A general header reports only the TOTALS, so this is
+ *  the only place the split between seismic and auxiliary sets can be seen. */
+function secHdrChanSetRows(sets: SegdChanSet[], revMajor: number): { key: string; label: string; value: string }[] {
+  return sets.map((c, i) => ({
+    key: `chanSet${i}`,
+    label: `Set ${grp(c.csNum)}`,
+    // Only the seismic code is named; the rest of the spec's code table is not
+    // decoded anywhere in this app, so the code is quoted rather than guessed. The
+    // revision has to come in because the code itself changed width between
+    // revisions (nibble 1 in rev <= 2, byte 0x10 in rev 3) - see
+    // segdChanTypeIsSeismic in core/types.ts.
+    value: [
+      segdChanTypeIsSeismic(c.chanType, revMajor) ? 'seismic' : `channel type ${grp(c.chanType)}`,
+      `${grp(c.chanCount)} channels`,
+      `${grp(c.ns)} samples`,
+      c.siUs > 0 ? `${(c.siUs / 1000).toFixed(3)} ms` : 'interval not stated',
+      `scan type ${grp(c.scanType)}`,
+    ].join(' · '),
+  }));
+}
+
+/** Paint the "This file" table: the file's own header values, then the SEG-D
+ *  channel-set descriptors when the file has them. */
+function secHdrRenderFile() {
+  const grid = $opt('secHdrFileGrid');
+  const note = $opt('secHdrFileNote') as HTMLElement | null;
+  if (!grid) return;
+  if (note) { note.style.display = 'none'; note.textContent = ''; }
+  if (!summary) {
+    grid.innerHTML = '';
+    const empty = document.createElement('div');
+    empty.className = 'hdr-empty';
+    empty.textContent = 'Open a file to read its file header.';
+    grid.appendChild(empty);
+    return;
+  }
+  // The rows are already text, so they go through the shared renderer as a
+  // header object of pre-written values - one table code path, not two.
+  const h: Record<string, number | string> = {};
+  const groups: HdrGroup[] = [];
+  const toFields = (rows: { key: string; label: string; value: string }[]) =>
+    rows.map((r) => ({ key: r.key, label: r.label, fmt: 'text' as HdrFmt }));
+  const fileRows = secHdrFileRows(summary);
+  for (const r of fileRows) h[r.key] = r.value;
+  groups.push({ title: 'File header', fields: toFields(fileRows) });
+  const sets = summary.chanSets;
+  if (sets && sets.length) {
+    const csRows = secHdrChanSetRows(sets, summary.revision);
+    for (const r of csRows) h[r.key] = r.value;
+    groups.push({ title: `Channel sets (${grp(sets.length)})`, fields: toFields(csRows) });
+  }
+  renderHdrGroups(grid, h, groups, { emptyText: 'This file reports no header values.' });
+  // Why the channel sets are missing, when they are. An older SeisConv export is
+  // read by a frozen decoder that steps over the descriptor blocks by size
+  // without decoding them, so the file is fine and the reader is thin - the
+  // panel says which, rather than leaving the file looking impoverished.
+  if (note && summary.format === 'SEG-D') {
+    if (!sets) {
+      note.textContent = 'No channel sets to show: this file is an older SeisConv SEG-D export, read by the frozen decoder kept for those files, which steps over the channel-set descriptors without reading them.';
+      note.style.display = '';
+    } else if (!sets.length) {
+      note.textContent = 'This file declares no channel sets.';
+      note.style.display = '';
+    }
+  }
+}
+
+/** Cut a textual header into the lines it really is.
+ *
+ *  A SEG-Y textual header holds no line breaks at all: it is 3200 characters
+ *  that MEAN 40 cards of 80 columns, so showing it as one long line would hide
+ *  its structure and reflowing it would break the columns operators line their
+ *  notes up in. A SEG-2 file-descriptor block is free-form text that carries its
+ *  own line breaks, so those are honoured instead. */
+function secHdrTextLines(text: string): { lines: string[]; carded: boolean } {
+  if (text.length >= 80 && text.length % 80 === 0 && !/[\r\n]/.test(text)) {
+    const lines: string[] = [];
+    for (let i = 0; i < text.length; i += 80) lines.push(text.slice(i, i + 80));
+    return { lines, carded: true };
+  }
+  return { lines: text.split(/\r?\n/), carded: false };
+}
+
+/** Paint the textual-header section, or hide it for the formats that have none. */
+function secHdrRenderText() {
+  const wrap = $opt('secHdrTextWrap') as HTMLElement | null;
+  const pre = $opt('secHdrText') as HTMLElement | null;
+  const title = $opt('secHdrTextTitle');
+  const note = $opt('secHdrTextNote') as HTMLElement | null;
+  if (!wrap || !pre) return;
+  const text = summary?.textHeader;
+  // ABSENT, not empty: SEG-D carries no textual header at all, so for a SEG-D
+  // this section is not on screen rather than on screen holding nothing.
+  if (!text) { wrap.style.display = 'none'; pre.textContent = ''; return; }
+  wrap.style.display = '';
+  const { lines, carded } = secHdrTextLines(text);
+  if (title) {
+    title.textContent = carded
+      ? `Text header · ${grp(lines.length)} lines of 80 characters, as written into the file`
+      : 'Text header, as written into the file';
+  }
+  // A header of nothing but blanks is still a header the file carries, so the
+  // section stays; printing 40 empty lines would only look like a fault.
+  const blank = text.trim() === '';
+  if (note) {
+    note.style.display = blank ? '' : 'none';
+    note.textContent = blank ? 'This file carries a text header, but every character in it is blank.' : '';
+  }
+  pre.style.display = blank ? 'none' : '';
+  pre.textContent = blank ? '' : lines.join('\n');
+}
+
+/** A trace header has arrived from the hover fetch. Show it while the panel is
+ *  following the cursor, and while it is the pinned trace's own header. */
+function secHdrOnHeader(idx: number, hdr: Record<string, number | string>) {
+  if (!secHdrPanelOpen()) return;
+  if (secHdrPin != null && secHdrPin !== idx) return;
+  // The cursor sends this on EVERY mouse move once a trace's header is cached,
+  // and rebuilding thirty-odd rows per move would repaint the panel for nothing.
+  // The trace changing is the only thing that changes what is on screen.
+  if (secHdrShown && secHdrShown.idx === idx && secHdrShown.hdr === hdr) return;
+  secHdrShown = { idx, hdr };
+  secHdrRenderTrace();
+}
+
+/** Pin the trace under the cursor. Uses the header the hover fetch already
+ *  holds; when that trace has not been fetched yet it goes through the SAME
+ *  fetch the hover uses, never a second round trip of its own. */
+function secHdrPinFromClick(cv: HTMLCanvasElement, e: MouseEvent) {
+  if (!summary || summary.traceCount === 0) return;
+  const { fx } = secPlotFrac(cv, e);
+  // Through the SAME axis the section was painted on, so a header-positioned
+  // click pins the trace under the cursor and not the one uniform spacing would
+  // have put there (mirrors secAddTraceFromClick).
+  const idx = Math.max(0, Math.min(summary.traceCount - 1, secAbsTraceAtFrac(fx)));
+  secHdrPin = idx;
+  const cached = secHoverHdrCache.get(idx);
+  if (cached) { secHdrShown = { idx, hdr: cached.hdr }; secHdrRenderTrace(); return; }
+  secHdrRenderTrace();        // say what is pinned at once; the values follow
+  void fetchSecHoverHdr(idx); // the hover's own fetch: guarded and cached inside
+}
+
+/** Release the pin: the panel follows the cursor again. */
+function secHdrClearPin() {
+  secHdrPin = null;
+  secHdrRenderTrace();
+}
+
+/** New file, or the file closed: nothing pinned, nothing shown, and the file and
+ *  textual sections repainted for whatever is open now. */
+function secHdrReset() {
+  secHdrPin = null;
+  secHdrShown = null;
+  secHdrRenderTrace();
+  secHdrRenderFile();
+  secHdrRenderText();
 }
 
 // -- Hover read-out (Feature A) ----------------------------------------------
@@ -7303,9 +8276,12 @@ function updateSecHover(cv: HTMLCanvasElement, e: MouseEvent) {
   const base = secHoverBaseFor(idx, ms, fx, fy);
   secHoverBaseText = base;
   secHoverLastIdx = idx;
-  const suffix = secHoverHdrCache.get(idx);
-  el.textContent = base + (suffix ?? '');
-  if (suffix === undefined) scheduleSecHoverHdr(idx);
+  const cached = secHoverHdrCache.get(idx);
+  el.textContent = base + (cached?.suffix ?? '');
+  // A trace the cursor has already been over needs no fetch at all: its header is
+  // in the cache, so the panel can follow the cursor straight from there.
+  if (cached) secHdrOnHeader(idx, cached.hdr);
+  else scheduleSecHoverHdr(idx);
   // First-breaks sub-bar read-out: show the pick under the cursor (trace · FFID · ch
   // · offset · ms · source · confidence) when one exists; status otherwise.
   if (fbMode && fbDragAbs < 0 && fbPicks.has(idx)) fbRenderReadout(idx);
@@ -7410,13 +8386,25 @@ async function fetchSecHoverHdr(idx: number) {
     }
     const suffix = secHoverHdrSuffix(tr.hdr);
     if (secHoverHdrCache.size > 600) secHoverHdrCache.clear(); // bound the cache
-    secHoverHdrCache.set(idx, suffix);
+    secHoverHdrCache.set(idx, { suffix, hdr: tr.hdr });
     if (secHoverLastIdx === idx) {
       const elNow = $opt('secHover');
       if (elNow) elNow.textContent = secHoverBaseText + suffix;
     }
+    // Same header, same fetch: the panel reads the object this call already has.
+    secHdrOnHeader(idx, tr.hdr);
   } catch { /* header is best-effort; keep the base read-out */ }
-  finally { secHoverHdrBusy = false; }
+  finally {
+    secHoverHdrBusy = false;
+    // A click can pin a trace while ANOTHER trace's header is in flight. That
+    // pin's own fetch is refused by the busy guard at the top, and the debounce
+    // timer belongs to the cursor rather than to the pin, so nothing else would
+    // ever go back for it. Pick it up here. The `!== idx` guard is what stops
+    // this retrying for ever on a trace whose fetch throws, since the catch
+    // above is deliberately silent.
+    const pin = secHdrPin;
+    if (pin != null && pin !== idx && !secHoverHdrCache.has(pin)) void fetchSecHoverHdr(pin);
+  }
 }
 
 /** Build the " · FFID n · CDP m [· node s]" suffix from a trace header. SEG-D node
@@ -7553,8 +8541,10 @@ function setSecBoxMode(on: boolean) {
   const cv = $opt('secCanvas') as HTMLCanvasElement | null;
   if (cv) cv.style.cursor = on ? 'crosshair' : '';
   if (!on) { secBoxDrag = null; hideRubber('secRubber'); }
-  // Arming box-zoom disarms the conflicting "+ Workbench" click-to-add.
+  // Arming box-zoom disarms the conflicting "+ Workbench" click-to-add, and the
+  // reference-line click-to-place for the same reason: both want the same click.
   if (on && secToWb) disarmSecToWb();
+  if (on && secRefPick) setSecRefPick(null);
   clearSecHover();
 }
 
@@ -7711,7 +8701,8 @@ async function openSectionZoom(t0: number, t1: number, s0: number, s1: number) {
     zoomMag.z = 1; zoomMag.cx = 0.5; zoomMag.cy = 0.5;
     const siUs = summary.sampleInt ?? sec.sampleInt;
     const a = (sec.sampStart * siUs) / 1000, b = (sec.sampEnd * siUs) / 1000;
-    openZoomModal(`Zoom · traces ${sec.traceStart}-${sec.traceEnd} · ${a.toFixed(0)}-${b.toFixed(0)} ms`);
+    // Exclusive end again: only the start edge is renumbered (see fetchSectionWindow).
+    openZoomModal(`Zoom · traces ${trNo(sec.traceStart)}-${sec.traceEnd} · ${a.toFixed(0)}-${b.toFixed(0)} ms`);
     setText('secLabel', '');
   } catch (e) {
     setText('secLabel', 'Zoom failed: ' + errMsg(e));
@@ -7948,7 +8939,8 @@ async function zoomMagFetchSection() {
       if (zoomViewerOpen()) drawZoom();
       const siUs = summary.sampleInt ?? sec.sampleInt;
       const a = (sec.sampStart * siUs) / 1000, b = (sec.sampEnd * siUs) / 1000;
-      setText('zoomTitle', `Zoom · traces ${sec.traceStart}-${sec.traceEnd} · ${a.toFixed(0)}-${b.toFixed(0)} ms`);
+      // Exclusive end again: only the start edge is renumbered.
+      setText('zoomTitle', `Zoom · traces ${trNo(sec.traceStart)}-${sec.traceEnd} · ${a.toFixed(0)}-${b.toFixed(0)} ms`);
       const w2 = zoomMagWindow();
       again = `${w2.t0},${w2.t1},${w2.s0},${w2.s1}` !== snap;
     }
@@ -8443,7 +9435,7 @@ async function wbPickFile() {
     wbPickedPath = path;
     wbPickedCount = 0; // learned from the first extract (ExtractedTrace.traceCount)
     const idxIn = $opt('wbIndex') as HTMLInputElement | null;
-    const index = Math.max(0, parseInt(idxIn?.value || '0', 10) || 0);
+    const index = Math.max(0, trAbs(parseInt(idxIn?.value || '1', 10) || 1));
     await wbLoadPreview(index);
   } catch (e) {
     setStatus('wbStatus', 'Pick failed: ' + errMsg(e), 'err');
@@ -8475,12 +9467,14 @@ async function wbLoadPreview(index: number) {
   }
 }
 
-/** Reflect a (clamped) trace index back into the #wbIndex input + max attr. */
+/** Reflect a (clamped) trace index back into the #wbIndex input + max attr. The
+ *  box counts from one, so the 0-based index is converted on the way out and back
+ *  again on the way in - one pair, so the field cannot drift. */
 function wbSetIndexInput(index: number) {
   const idxIn = $opt('wbIndex') as HTMLInputElement | null;
   if (!idxIn) return;
-  idxIn.value = String(index);
-  if (wbPickedCount > 0) idxIn.max = String(wbPickedCount - 1);
+  idxIn.value = String(trNo(index));
+  if (wbPickedCount > 0) idxIn.max = String(wbPickedCount);
 }
 
 /** Step the previewed trace by ±1 (or load the value typed in #wbIndex). */
@@ -9177,7 +10171,7 @@ function workbenchInteractions() {
   $opt('wbIndex')?.addEventListener('change', () => {
     if (!wbPickedPath) return;
     const idxIn = $opt('wbIndex') as HTMLInputElement | null;
-    void wbLoadPreview(parseInt(idxIn?.value || '0', 10) || 0);
+    void wbLoadPreview(Math.max(0, trAbs(parseInt(idxIn?.value || '1', 10) || 1)));
   });
   $opt('wbAddOpenBtn')?.addEventListener('click', wbAddOpenTrace);
   $opt('wbClearBtn')?.addEventListener('click', wbClear);
@@ -15209,7 +16203,9 @@ async function refreshSpecAvg() {
   const t0i = ($opt('specTr0') as HTMLInputElement | null)?.value.trim();
   const t1i = ($opt('specTr1') as HTMLInputElement | null)?.value.trim();
   const opts: { traceStart?: number; traceEnd?: number } = {};
-  if (t0i) opts.traceStart = Math.max(0, parseInt(t0i, 10) || 0);
+  // Both boxes count from one: From names the first trace to average, so it loses
+  // the one; To names the last, which is already the exclusive traceEnd.
+  if (t0i) opts.traceStart = Math.max(0, trAbs(parseInt(t0i, 10) || 1));
   if (t1i) opts.traceEnd = Math.max(0, parseInt(t1i, 10) || 0);
   specBusy = true;
   $('specLabel').textContent = 'Computing average spectrum…';
@@ -15480,7 +16476,7 @@ async function refreshSpecGram() {
       `Trace ${specTraceIdx + 1} / ${summary.traceCount} · ${specGram.nFrames} frames × ${specGram.nBins} bins · 0-${ny.toFixed(0)} Hz`
       + specKeepNote;
     specKeepNote = ''; // said once, for the data it was about
-    const idIn = $opt('specTraceIdx') as HTMLInputElement | null; if (idIn) idIn.value = String(specTraceIdx);
+    const idIn = $opt('specTraceIdx') as HTMLInputElement | null; if (idIn) idIn.value = String(trNo(specTraceIdx));
   } catch (e) {
     $('specLabel').textContent = 'Failed: ' + errMsg(e);
   } finally { hideProgress(); specBusy = false; if (specRerunPending) { specRerunPending = false; void refreshSpectrum(); } }
@@ -15956,7 +16952,7 @@ function initSpectrum() {
   const idIn = $opt('specTraceIdx') as HTMLInputElement | null;
   idIn?.addEventListener('change', () => {
     if (!summary) return;
-    specTraceIdx = Math.max(0, Math.min(summary.traceCount - 1, parseInt(idIn.value, 10) || 0));
+    specTraceIdx = Math.max(0, Math.min(summary.traceCount - 1, trAbs(parseInt(idIn.value, 10) || 1)));
     void refreshSpecGram();
   });
   $opt('specWin')?.addEventListener('change', () => void refreshSpecGram());
@@ -19830,7 +20826,9 @@ function swDrawSignalPlot(): void {
     s1 = Math.max(s0 + 1, Math.min(n, Math.round(v.yMax)));
     ampRange = { min: v.xMin, max: v.xMax };
   }
-  drawTraceCore(cv, t, s0, s1, ampRange, { name: 'Sweep signal', polarity: false });
+  // No reference lines here: this is a synthetic sweep, not a trace of the open
+  // record, so a time the operator marked on that record means nothing on it.
+  drawTraceCore(cv, t, s0, s1, ampRange, { name: 'Sweep signal', polarity: false }, undefined, false);
   const W = cv.clientWidth || 800, H = cv.clientHeight || 320;
   const rect = { x: TRC_ML, y: TRC_MT, w: W - TRC_ML - TRC_MR, h: H - TRC_MT - TRC_MB };
   let xMin: number, xMax: number;
@@ -20509,12 +21507,13 @@ async function swQcLoad() {
   let path: string | null = null;
   try { path = await api.pickTraceFile(); } catch { return; }
   if (!path) return;
-  const idx = Math.max(0, Math.round(swNum('swQcTraceIdx', 0)));
+  // The box counts from one; the extract call wants the 0-based index.
+  const idx = Math.max(0, trAbs(Math.round(swNum('swQcTraceIdx', 1))));
   showProgress('Reading measured sweep…');
   try {
     swMeasured = await api.extractTrace(path, idx);
     setText('swQcFileLabel', `${swMeasured.name} · trace ${swMeasured.index + 1} of ${swMeasured.traceCount} · ${swMeasured.nSamples} smp @ ${(swMeasured.sampleInt / 1000).toFixed(3)} ms`);
-    audit('load', `measured sweep ${swMeasured.name} (trace ${swMeasured.index})`, 'sweeps');
+    audit('load', `measured sweep ${swMeasured.name} (trace ${trNo(swMeasured.index)})`, 'sweeps');
     swRefreshQC(false);
   } catch (e) {
     setText('swQcFileLabel', '⚠ ' + errMsg(e));
@@ -21204,6 +22203,35 @@ async function refreshField(): Promise<void> {
 }
 
 // -- Wire up --
+// Guard against a feedback loop: if surfacing an error itself throws (e.g. the
+// status-strip element is missing), the resulting 'error' event must not try to
+// surface again and spin forever.
+let globalErrorNoticeBusy = false;
+/** Tell the operator something broke, using the app's own bottom status strip
+ *  (sbState / setState) - no separate toast system exists, so this reuses it.
+ *  Always a fixed, plain-language string: never the raw error/stack on screen. */
+function surfaceGlobalError() {
+  if (globalErrorNoticeBusy) return;
+  globalErrorNoticeBusy = true;
+  try { setState('err', 'Something went wrong. Use the Feedback button to report it.'); }
+  catch { /* never let the notice itself throw */ }
+  finally { globalErrorNoticeBusy = false; }
+}
+
+// There was previously no window-level safety net at all: an exception thrown
+// inside an async click handler (e.g. secHealthExport) or a rejected promise
+// nobody awaited would vanish with zero feedback to the operator. These two
+// listeners are that net - installed first, before anything else in init() runs,
+// so a throw partway through startup itself is still caught and logged.
+window.addEventListener('unhandledrejection', (e) => {
+  console.error('Unhandled rejection:', e.reason);
+  surfaceGlobalError();
+});
+window.addEventListener('error', (e) => {
+  console.error('Unhandled error:', e.error ?? e.message);
+  surfaceGlobalError();
+});
+
 function init() {
   initTheme();
   initZoom();
@@ -21301,7 +22329,7 @@ function init() {
   initUpdates();
   const slider = $('traceSlider') as HTMLInputElement;
   slider.addEventListener('input', () => {
-    traceIndex = parseInt(slider.value, 10) || 0;
+    traceIndex = Math.max(0, trAbs(parseInt(slider.value, 10) || 1));
     void refreshTrace();
   });
   $('tracePrev').addEventListener('click', () => {
@@ -21415,6 +22443,15 @@ function init() {
   $opt('secDisplayBtn')?.addEventListener('click', () => secTogglePanel('secDisplayPanel', 'secDisplayBtn'));
   $opt('secResetDisplay')?.addEventListener('click', () => secResetDisplay());
   $opt('secHealthToggle')?.addEventListener('click', () => secTogglePanel('secHealthWrap', 'secHealthToggle'));
+  // Header values panel: the same collapse, plus a repaint on opening so it shows
+  // the open file at once rather than waiting for the next cursor move.
+  $opt('secHdrToggle')?.addEventListener('click', () => {
+    secTogglePanel('secHdrWrap', 'secHdrToggle');
+    if (secHdrPanelOpen()) { secHdrRenderTrace(); secHdrRenderFile(); secHdrRenderText(); }
+  });
+  $opt('secHdrUnpin')?.addEventListener('click', () => secHdrClearPin());
+  // Reference lines: the toggle, the two fields and both click-to-place buttons.
+  initRefLines();
   $opt('secHealthSensBtn')?.addEventListener('click', () => secToggleSensPanel());
   $opt('secHealthClearBtn')?.addEventListener('click', () => { secHealthReset(); if (lastSection) drawSection($('secCanvas') as HTMLCanvasElement, lastSection); });
   $opt('secHealthExportBtn')?.addEventListener('click', () => void secHealthExport());
@@ -21612,6 +22649,8 @@ function onKeyDown(e: KeyboardEvent) {
   if (e.key === 'Escape' && zoomViewerOpen()) { closeZoom(); return; }
   if (e.key === 'Escape' && gatherOpen()) { closeGather(); return; }
   if (e.key === 'Escape' && (secBoxMode || traceBoxMode)) { exitBoxModes(); return; }
+  // Same for reference-line click-to-place: the panel says Esc gets you out of it.
+  if (e.key === 'Escape' && secRefPick) { setSecRefPick(null); return; }
   // Abandoning a station drag has to restore map dragging, so it is handled before
   // any modal branch can swallow the key.
   if (e.key === 'Escape' && planDragArmed) { planDragFinish(); return; }

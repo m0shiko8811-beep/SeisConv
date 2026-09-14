@@ -1,0 +1,676 @@
+{
+  "_what": "Conformance rules for the SEG-Y that SeisConv WRITES, one row per rule, every row carrying the document, section, table and page it was read out of.",
+  "_theRuleAboutRules": "No rule without a citation. Every row below was extracted from a PDF on this machine with `pdftotext -f <page> -l <page> -layout`, and `citation.quote` is the sentence it came from. A byte offset that could only be recalled rather than read is NOT in this file; qa/conform/README.md lists what that left uncovered.",
+  "_quotesAreTranscribed": "Quotes are transcribed with plain hyphens and plain ASCII where the PDF uses typographic dashes or the plus-or-minus glyph (written as +/-). Nothing else in a quote is altered.",
+  "_pageNumbers": "pagePrinted is the number printed on the page. pagePdf is the 1-based page index the PDF reader shows, which is what `pdftotext -f/-l` takes. For seg_y_rev1.0.pdf pagePdf = pagePrinted + 3; for seg_y_rev2.0.pdf pagePdf = pagePrinted + 4.",
+  "_appliesTo": "The DECLARED revision of the written file, read from binary header bytes 3501-3502. SeisConv's writeSEGY(pd, 2) declares major 2 minor 0, so rev-2 output is judged against SEG-Y rev 2.0, not rev 2.1.",
+  "_levels": "mandatory: the standard states the requirement outright, and a failure drives a non-zero exit. recommended: the standard states a preference, or the check is deliberately stricter than the standard (checkNote says so); reported, never fatal.",
+  "_docs": {
+    "SEG-Y rev 1.0": "seg_y_rev1.0.pdf, 'SEG Y rev 1 Data Exchange Format', May 2002, 48 pages",
+    "SEG-Y rev 2.0": "seg_y_rev2.0.pdf, 'SEG-Y_r2.0 SEG-Y revision 2.0 Data Exchange format', January 2017, 151 pages"
+  },
+
+  "rules": [
+    {
+      "id": "SEGY-LAYOUT-HEADER-3600",
+      "format": "SEG-Y",
+      "appliesTo": ["1", "2.0"],
+      "scope": "fileLayout",
+      "bytes": "1-3600",
+      "field": "Textual File Header (3200) followed by Binary File Header (400)",
+      "level": "mandatory",
+      "rule": "The file opens with a 3200-byte Textual File Header immediately followed by a 400-byte Binary File Header, so the first 3600 bytes are fixed.",
+      "check": { "kind": "fileAtLeast", "bytes": 3600 },
+      "citation": [
+        { "doc": "SEG-Y rev 1.0", "section": "Appendix A. Writing SEG Y Data to a Disk File", "pagePrinted": 20, "pagePdf": 23, "quote": "The first 3600-bytes of the file are the \"traditional\" SEG Y File Header (i.e. the 3200-byte Textual File Header followed by the 400-byte Binary Header)." },
+        { "doc": "SEG-Y rev 2.0", "section": "Appendix A. Writing SEG-Y Data to a Disk File", "pagePrinted": 28, "pagePdf": 32, "quote": "The first 3600 bytes of the file are the \"traditional\" SEG-Y File Header (i.e. the 3200-byte Textual File Header followed by the 400-byte Binary Header)." }
+      ]
+    },
+    {
+      "id": "SEGY-LAYOUT-CLOSES",
+      "format": "SEG-Y",
+      "appliesTo": ["1", "2.0"],
+      "scope": "fileLayout",
+      "bytes": "whole file",
+      "field": "Declared layout versus real file size",
+      "level": "mandatory",
+      "rule": "3600 + (extended textual header records * 3200) + traceCount * (240 + additionalTraceHeaders * 240 + samplesPerTrace * bytesPerSample) must equal the real file size exactly, with samplesPerTrace and the format code taken from the fields the standard names and bytesPerSample from the format code.",
+      "check": { "kind": "layoutCloses" },
+      "checkNote": "This is the same arithmetic qa/oracle/oracle.py uses to pick a byte order, run here against the file SeisConv wrote. A file whose own arithmetic does not close is malformed whatever its field values say.",
+      "citation": [
+        { "doc": "SEG-Y rev 1.0", "section": "Appendix A. Writing SEG Y Data to a Disk File", "pagePrinted": 20, "pagePdf": 23, "quote": "The Binary Header may be followed by zero or more 3200-byte Extended Textual File Header records, as indicated in bytes 3505-3506 of the Binary Header. ... The number of bytes of Data Trace sample values that follow the Trace Header is determined from the value for number of samples in bytes 115-116 in the Trace Header, together with the sample format code in bytes 3225-3226 of the Binary Header. For format codes 1, 2, 4 and 5 the number of bytes of sample data is four times the number of samples." },
+        { "doc": "SEG-Y rev 2.0", "section": "Appendix A. Writing SEG-Y Data to a Disk File", "pagePrinted": "28 to 29", "pagePdf": "32 to 33", "quote": "For format codes 1, 2, 4, 5 and 10, the number of bytes of sample data is four times the number of samples. For format codes 6, 9 and 12, the number of bytes of sample data is eight times the number of samples. For format codes 3 and 11, the number of bytes of sample data is twice the number of samples. For format codes 7 and 15, the number of bytes of sample data is three times the number of samples. For format codes 8 and 16, the number of bytes of sample data is the same as the number of samples." }
+      ]
+    },
+    {
+      "id": "SEGY1-BYTEORDER-BIG-ENDIAN",
+      "format": "SEG-Y",
+      "appliesTo": ["1"],
+      "scope": "fileLayout",
+      "bytes": "whole file",
+      "field": "Byte ordering of every Binary File Header, Trace Header and Trace Data field",
+      "level": "mandatory",
+      "rule": "A SEG-Y rev 1 file must be written big-endian. Little-endian is explicitly not rev 1 compatible.",
+      "check": { "kind": "byteOrderBigEndian" },
+      "checkNote": "Checked mechanically, not taken on trust: the layout arithmetic of SEGY-LAYOUT-CLOSES is run twice, once reading every multi-byte field big-endian and once little-endian. It must close big-endian and it must NOT close little-endian, otherwise the declared order is not decidable from the file and the check reports that instead of passing.",
+      "citation": [
+        { "doc": "SEG-Y rev 1.0", "section": "Appendix A. Writing SEG Y Data to a Disk File", "pagePrinted": 21, "pagePdf": 24, "quote": "All values are written to the disk file using \"big-endian\" byte ordering, the same as if the file were being written to tape. Data written to disk using \"little-endian\" byte ordering will not be SEG Y rev 1 compatible." }
+      ]
+    },
+
+    {
+      "id": "SEGY-TXT-40-LINES",
+      "format": "SEG-Y",
+      "appliesTo": ["1", "2.0"],
+      "scope": "textualHeader",
+      "bytes": "1-3200",
+      "field": "Textual File Header line grid",
+      "level": "mandatory",
+      "rule": "The 3200-byte Textual File Header holds 40 lines, laid out across columns 1 to 80, so it divides into exactly 40 records of 80 characters.",
+      "check": { "kind": "lineGrid", "lines": 40, "cols": 80 },
+      "checkNote": "The check also refuses a carriage return or line feed inside the 3200 bytes. The standard fixes the header as a positional 40 by 80 grid (Table 1's ruler runs 'Cols 1-10' to 'Cols 71-80') and nowhere describes it as delimited text, so a terminator character inside it would push every following record out of its columns.",
+      "citation": [
+        { "doc": "SEG-Y rev 1.0", "section": "4. Textual File Header", "table": "Table 1 Textual File Header (column ruler 'Cols 1-10 ... Cols 71-80')", "pagePrinted": "4 and 5", "pagePdf": "7 and 8", "quote": "The first 3200-byte, Textual File Header record contains 40 lines of textual information, providing a human-readable description of the seismic data in the SEG Y file." },
+        { "doc": "SEG-Y rev 2.0", "section": "4. Textual File Header", "table": "Table 1 Textual File Header (column ruler 'Cols 1-10 ... Cols 71-80')", "pagePrinted": "4 and 5", "pagePdf": "8 and 9", "quote": "The first 3200-byte, Textual File Header record contains 40 lines of textual information, providing a human-readable description of the seismic data in the SEG-Y file." }
+      ]
+    },
+    {
+      "id": "SEGY-TXT-ENCODING",
+      "format": "SEG-Y",
+      "appliesTo": ["1", "2.0"],
+      "scope": "textualHeader",
+      "bytes": "1-3200",
+      "field": "Textual File Header character code",
+      "level": "mandatory",
+      "rule": "The Textual File Header is written in EBCDIC or in ASCII. Every one of the 3200 bytes must be a printable character under whichever of the two the file used, and the same one throughout.",
+      "check": { "kind": "printableInOneEncoding" },
+      "checkNote": "The EBCDIC table used to decode is qa/conform/ebcdic-appendix-f.json, lifted out of SEG-Y rev 2.0 Appendix F Table 19 by qa/conform/extract-ebcdic.mjs. It is deliberately NOT core/binary.ts's own table: a wrong table would decode its own wrong encoding perfectly and prove nothing.",
+      "citation": [
+        { "doc": "SEG-Y rev 1.0", "section": "Appendix A. Writing SEG Y Data to a Disk File", "pagePrinted": 21, "pagePdf": 24, "quote": "For exchange purposes the Textual File Header and Extended Textual File Headers may be written in EBCDIC or ASCII character code." },
+        { "doc": "SEG-Y rev 2.0", "section": "4. Textual File Header", "pagePrinted": 4, "pagePdf": 8, "quote": "It originally was encoded in the EBCDIC character set (see Appendix F) but ASCII is now allowed for all Textual File Headers." }
+      ]
+    },
+    {
+      "id": "SEGY-TXT-REVISION-LEVEL",
+      "format": "SEG-Y",
+      "appliesTo": ["1", "2.0"],
+      "scope": "textualHeader",
+      "bytes": "1-3200",
+      "field": "SEG-Y revision level stated in the Textual File Header",
+      "level": "mandatory",
+      "rule": "The SEG-Y revision level must be included in the Textual File Header of every file written in this revision.",
+      "check": { "kind": "regex", "pattern": "SEG[- ]?Y[^A-Z0-9]{0,4}REV", "flags": "i" },
+      "checkNote": "The standard mandates that the revision level be present but does not fix its wording or its line; Table 1 only shows it as an EXAMPLE in record C39. The check is therefore a proxy: it looks for a SEG-Y revision marker anywhere in the decoded header. A file that states the revision in some form the pattern does not recognise would be reported as failing when it does not.",
+      "citation": [
+        { "doc": "SEG-Y rev 1.0", "section": "4. Textual File Header", "pagePrinted": 4, "pagePdf": 7, "quote": "The revision level of the SEG-Y format (Binary File Header bytes 3501-3502) being used must be included for all files written in the SEG Y rev 1 format. It is mandatory that the SEG Y revision level be included in the Textual File Header." },
+        { "doc": "SEG-Y rev 2.0", "section": "4. Textual File Header", "pagePrinted": "4 and 5", "pagePdf": "8 and 9", "quote": "The revision level of the SEG-Y format (Binary File Header bytes 3501-3502) being used must be included for all files written in the SEG-Y rev 2 format. It is mandatory that the SEG-Y revision level now be included in the Textual File Header." }
+      ]
+    },
+    {
+      "id": "SEGY-TXT-C40-END",
+      "format": "SEG-Y",
+      "appliesTo": ["1", "2.0"],
+      "scope": "textualHeader",
+      "bytes": "3121-3200",
+      "field": "Textual File Header record C40",
+      "level": "recommended",
+      "rule": "Record C40 is preferably 'C40 END TEXTUAL HEADER'. 'C40 END EBCDIC' is also acceptable.",
+      "check": { "kind": "lineMatches", "line": 40, "pattern": "^C40\\s+END\\s+(TEXTUAL\\s+HEADER|EBCDIC)", "flags": "i" },
+      "citation": [
+        { "doc": "SEG-Y rev 1.0", "section": "4. Textual File Header", "table": "Table 1 Textual File Header, footnote 4", "pagePrinted": 5, "pagePdf": 8, "quote": "C40 END EBCDIC is also acceptable but C40 END TEXTUAL HEADER is the preferred encoding." },
+        { "doc": "SEG-Y rev 2.0", "section": "4. Textual File Header", "table": "Table 1 Textual File Header, footnote 5", "pagePrinted": 5, "pagePdf": 9, "quote": "C40 END EBCDIC is also acceptable but C40 END TEXTUAL HEADER is the preferred encoding." }
+      ]
+    },
+
+    {
+      "id": "SEGY-BH-3217-SAMPLE-INTERVAL",
+      "format": "SEG-Y",
+      "appliesTo": ["1", "2.0"],
+      "scope": "binaryHeader",
+      "bytes": "3217-3218",
+      "offset0": 3216,
+      "width": 2,
+      "type": "uint16be",
+      "field": "Sample interval",
+      "level": "mandatory",
+      "rule": "Mandatory for all data types, so it must be recorded (non-zero).",
+      "check": { "kind": "nonZero" },
+      "checkNote": "SEG-Y rev 2.0 dropped the word 'mandatory' from this row but kept the field; the rule is applied to rev 2.0 output under the rev 1.0 citation only, and is reported as recommended-level there.",
+      "levelByRevision": { "1": "mandatory", "2.0": "recommended" },
+      "citation": [
+        { "doc": "SEG-Y rev 1.0", "section": "5. Binary File Header", "table": "Table 2 Binary File Header, row 3217-3218 with footnote 6", "pagePrinted": 6, "pagePdf": 9, "quote": "3217-3218 Sample interval in microseconds (us). Mandatory for all data types. [footnote 6] This information is mandatory for all data types." },
+        { "doc": "SEG-Y rev 2.0", "section": "5. Binary File Header", "table": "Table 2 Binary File Header, footnote 6", "pagePrinted": 6, "pagePdf": 10, "quote": "Where not otherwise indicated, a value of zero indicates an unknown or unspecified value." }
+      ]
+    },
+    {
+      "id": "SEGY1-BH-3217-TWOS-COMPLEMENT-RANGE",
+      "format": "SEG-Y",
+      "appliesTo": ["1"],
+      "scope": "binaryHeader",
+      "bytes": "3217-3218",
+      "offset0": 3216,
+      "width": 2,
+      "type": "int16be",
+      "field": "Sample interval, as a two-byte two's complement integer",
+      "level": "mandatory",
+      "rule": "Every value in the rev 1 Binary File Header is a two-byte or four-byte TWO'S COMPLEMENT integer, so a two-byte field can carry 1 to 32767, not 1 to 65535.",
+      "check": { "kind": "inRange", "min": 1, "max": 32767 },
+      "checkNote": "Rev 2.0 changed this sentence to 'two's complement OR UNSIGNED integers', so the rule is rev 1 only. It is here because writeSEGY writes this field with an unsigned 16-bit store; a sample interval above 32767 would be written as a negative two's complement value in a file declaring rev 1.",
+      "citation": [
+        { "doc": "SEG-Y rev 1.0", "section": "5. Binary File Header", "pagePrinted": 6, "pagePdf": 9, "quote": "The 400-byte Binary File Header record contains binary values that affect the whole SEG Y file. The values in the Binary File Header are defined as two-byte or four-byte, two's complement integers." },
+        { "doc": "SEG-Y rev 2.0", "section": "5. Binary File Header", "pagePrinted": 6, "pagePdf": 10, "quote": "The values in the Binary File Header are defined as two-byte or four-byte, two's complement or unsigned integers, with the exception of IEEE double precision sample intervals in the optional SEG" }
+      ]
+    },
+    {
+      "id": "SEGY-BH-3221-SAMPLES-PER-TRACE",
+      "format": "SEG-Y",
+      "appliesTo": ["1", "2.0"],
+      "scope": "binaryHeader",
+      "bytes": "3221-3222",
+      "offset0": 3220,
+      "width": 2,
+      "type": "uint16be",
+      "field": "Number of samples per data trace",
+      "level": "mandatory",
+      "rule": "Mandatory for all types of data, so it must be recorded (non-zero).",
+      "levelByRevision": { "1": "mandatory", "2.0": "recommended" },
+      "checkNote": "SEG-Y rev 2.0 dropped the word 'mandatory' from this row; on rev 2.0 output the rule is reported at recommended level.",
+      "check": { "kind": "nonZero" },
+      "citation": [
+        { "doc": "SEG-Y rev 1.0", "section": "5. Binary File Header", "table": "Table 2 Binary File Header, row 3221-3222 with footnote 6", "pagePrinted": 6, "pagePdf": 9, "quote": "3221-3222 Number of samples per data trace. Mandatory for all types of data. [footnote 6] This information is mandatory for all data types." },
+        { "doc": "SEG-Y rev 2.0", "section": "5. Binary File Header", "table": "Table 2 Binary File Header, footnote 6", "pagePrinted": 6, "pagePdf": 10, "quote": "Where not otherwise indicated, a value of zero indicates an unknown or unspecified value." }
+      ]
+    },
+    {
+      "id": "SEGY1-BH-3221-TWOS-COMPLEMENT-RANGE",
+      "format": "SEG-Y",
+      "appliesTo": ["1"],
+      "scope": "binaryHeader",
+      "bytes": "3221-3222",
+      "offset0": 3220,
+      "width": 2,
+      "type": "int16be",
+      "field": "Number of samples per data trace, as a two-byte two's complement integer",
+      "level": "mandatory",
+      "rule": "Every value in the rev 1 Binary File Header is a two-byte or four-byte TWO'S COMPLEMENT integer, so a two-byte field can carry 1 to 32767, not 1 to 65535.",
+      "check": { "kind": "inRange", "min": 1, "max": 32767 },
+      "checkNote": "This is the rule that puts a real ceiling on rev 1 output. writeSEGY refuses above 65535 samples ('SEG-Y max 65535') and writes this field with an unsigned 16-bit store, so a trace of 32768 to 65535 samples is accepted by the writer and lands here as a NEGATIVE two's complement value in a file declaring rev 1. Rev 2.0 permits unsigned, and also carries the 32-bit extended count in bytes 3269-3272, so rev 2.0 output is not affected.",
+      "citation": [
+        { "doc": "SEG-Y rev 1.0", "section": "5. Binary File Header", "pagePrinted": 6, "pagePdf": 9, "quote": "The 400-byte Binary File Header record contains binary values that affect the whole SEG Y file. The values in the Binary File Header are defined as two-byte or four-byte, two's complement integers." },
+        { "doc": "SEG-Y rev 2.0", "section": "5. Binary File Header", "pagePrinted": 6, "pagePdf": 10, "quote": "The values in the Binary File Header are defined as two-byte or four-byte, two's complement or unsigned integers, with the exception of IEEE double precision sample intervals in the optional SEG" }
+      ]
+    },
+    {
+      "id": "SEGY1-BH-3225-FORMAT-CODE",
+      "format": "SEG-Y",
+      "appliesTo": ["1"],
+      "scope": "binaryHeader",
+      "bytes": "3225-3226",
+      "offset0": 3224,
+      "width": 2,
+      "type": "uint16be",
+      "field": "Data sample format code",
+      "level": "mandatory",
+      "rule": "Mandatory for all data. In rev 1 the defined codes are 1, 2, 3, 4, 5 and 8; codes 6 and 7 are listed as not currently used.",
+      "check": { "kind": "inSet", "values": [1, 2, 3, 4, 5, 8] },
+      "citation": [
+        { "doc": "SEG-Y rev 1.0", "section": "5. Binary File Header", "table": "Table 2 Binary File Header, row 3225-3226", "pagePrinted": 6, "pagePdf": 9, "quote": "Data sample format code. Mandatory for all data. 1 = 4-byte IBM floating-point, 2 = 4-byte, two's complement integer, 3 = 2-byte, two's complement integer, 4 = 4-byte fixed-point with gain (obsolete), 5 = 4-byte IEEE floating-point, 6 = Not currently used, 7 = Not currently used, 8 = 1-byte, two's complement integer" }
+      ]
+    },
+    {
+      "id": "SEGY2-BH-3225-FORMAT-CODE",
+      "format": "SEG-Y",
+      "appliesTo": ["2.0"],
+      "scope": "binaryHeader",
+      "bytes": "3225-3226",
+      "offset0": 3224,
+      "width": 2,
+      "type": "uint16be",
+      "field": "Data sample format code",
+      "level": "mandatory",
+      "rule": "Mandatory for all data. In rev 2.0 the defined codes are 1 to 12, 15 and 16.",
+      "check": { "kind": "inSet", "values": [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 15, 16] },
+      "citation": [
+        { "doc": "SEG-Y rev 2.0", "section": "5. Binary File Header", "table": "Table 2 Binary File Header, row 3225-3226", "pagePrinted": 7, "pagePdf": 11, "quote": "Data sample format code. Mandatory for all data. These formats are described in Appendix E. 1 = 4-byte IBM floating-point ... 5 = 4-byte IEEE floating-point ... 15 = 3-byte, unsigned integer, 16 = 1-byte, unsigned integer" }
+      ]
+    },
+    {
+      "id": "SEGY1-BH-3501-REVISION",
+      "format": "SEG-Y",
+      "appliesTo": ["1"],
+      "scope": "binaryHeader",
+      "bytes": "3501-3502",
+      "offset0": 3500,
+      "width": 2,
+      "type": "uint16be",
+      "field": "SEG Y Format Revision Number",
+      "level": "mandatory",
+      "rule": "Mandatory for all versions. A file written to SEG Y Revision 1.0 records 0x0100 here.",
+      "check": { "kind": "equals", "value": 256 },
+      "citation": [
+        { "doc": "SEG-Y rev 1.0", "section": "5. Binary File Header", "table": "Table 2 Binary File Header, row 3501-3502 with footnote 6", "pagePrinted": 8, "pagePdf": 11, "quote": "SEG Y Format Revision Number. This is a 16-bit unsigned value with a Q-point between the first and second bytes. Thus for SEG Y Revision 1.0, as defined in this document, this will be recorded as 0100(16). This field is mandatory for all versions of SEG Y" }
+      ]
+    },
+    {
+      "id": "SEGY2-BH-3501-MAJOR-REVISION",
+      "format": "SEG-Y",
+      "appliesTo": ["2.0"],
+      "scope": "binaryHeader",
+      "bytes": "3501",
+      "offset0": 3500,
+      "width": 1,
+      "type": "uint8",
+      "field": "Major SEG-Y Format Revision Number",
+      "level": "mandatory",
+      "rule": "Mandatory for all versions. An 8-bit unsigned value; SEG-Y Revision 2.0 records 0x02.",
+      "check": { "kind": "equals", "value": 2 },
+      "citation": [
+        { "doc": "SEG-Y rev 2.0", "section": "5. Binary File Header", "table": "Table 2 Binary File Header, row 3501", "pagePrinted": 10, "pagePdf": 14, "quote": "Major SEG-Y Format Revision Number. This is an 8-bit unsigned value. Thus for SEG-Y Revision 2.0, as defined in this document, this will be recorded as 02(16). This field is mandatory for all versions of SEG-Y" }
+      ]
+    },
+    {
+      "id": "SEGY2-BH-3502-MINOR-REVISION",
+      "format": "SEG-Y",
+      "appliesTo": ["2.0"],
+      "scope": "binaryHeader",
+      "bytes": "3502",
+      "offset0": 3501,
+      "width": 1,
+      "type": "uint8",
+      "field": "Minor SEG-Y Format Revision Number",
+      "level": "mandatory",
+      "rule": "Mandatory for all versions. An 8-bit unsigned value; SEG-Y Revision 2.0 records 0x00.",
+      "check": { "kind": "equals", "value": 0 },
+      "citation": [
+        { "doc": "SEG-Y rev 2.0", "section": "5. Binary File Header", "table": "Table 2 Binary File Header, row 3502", "pagePrinted": 10, "pagePdf": 14, "quote": "Minor SEG-Y Format Revision Number. This is an 8-bit unsigned value with a radix point between the first and second bytes. Thus for SEG-Y Revision 2.0, as defined in this document, this will be recorded as 00(16). This field is mandatory for all versions of SEG-Y." }
+      ]
+    },
+    {
+      "id": "SEGY-BH-3503-FIXED-LENGTH-FLAG",
+      "format": "SEG-Y",
+      "appliesTo": ["1", "2.0"],
+      "scope": "binaryHeader",
+      "bytes": "3503-3504",
+      "offset0": 3502,
+      "width": 2,
+      "type": "uint16be",
+      "field": "Fixed length trace flag",
+      "level": "mandatory",
+      "rule": "Mandatory for all versions of SEG-Y. Only one and zero are defined: one guarantees every trace has the same sample interval and number of samples, zero says the trace lengths may vary.",
+      "check": { "kind": "inSet", "values": [0, 1] },
+      "citation": [
+        { "doc": "SEG-Y rev 1.0", "section": "5. Binary File Header", "table": "Table 2 Binary File Header, row 3503-3504 with footnote 6", "pagePrinted": 8, "pagePdf": 11, "quote": "Fixed length trace flag. A value of one indicates that all traces in this SEG Y file are guaranteed to have the same sample interval and number of samples, as specified in Textual File Header bytes 3217-3218 and 3221-3222. A value of zero indicates that the length of the traces in the file may vary ... This field is mandatory for all versions of SEG Y" },
+        { "doc": "SEG-Y rev 2.0", "section": "5. Binary File Header", "table": "Table 2 Binary File Header, row 3503-3504", "pagePrinted": 10, "pagePdf": 14, "quote": "Fixed length trace flag. A value of one indicates that all traces in this SEG-Y file are guaranteed to have the same sample interval, number of trace header blocks and trace samples ... This field is mandatory for all versions of SEG-Y" }
+      ]
+    },
+    {
+      "id": "SEGY-BH-3505-EXT-TEXTUAL-COUNT",
+      "format": "SEG-Y",
+      "appliesTo": ["1", "2.0"],
+      "scope": "binaryHeader",
+      "bytes": "3505-3506",
+      "offset0": 3504,
+      "width": 2,
+      "type": "int16be",
+      "field": "Number of 3200-byte Extended Textual File Header records",
+      "level": "mandatory",
+      "rule": "Zero means there are none, minus one means a variable number terminated by an ((SEG: EndText)) stanza, and a positive value means exactly that many. No other value is defined, so the field must be at least minus one.",
+      "check": { "kind": "inRange", "min": -1, "max": 32767 },
+      "citation": [
+        { "doc": "SEG-Y rev 1.0", "section": "5. Binary File Header", "table": "Table 2 Binary File Header, row 3505-3506 with footnote 6", "pagePrinted": "8 and 9", "pagePdf": "11 and 12", "quote": "Number of 3200-byte, Extended Textual File Header records following the Binary Header. A value of zero indicates there are no Extended Textual File Header records (i.e. this file has no Extended Textual File Header(s)). A value of -1 indicates that there are a variable number of Extended Textual File Header records ... A positive value indicates that there are exactly that many Extended Textual File Header records. ... This field is mandatory for all versions of SEG Y" },
+        { "doc": "SEG-Y rev 2.0", "section": "5. Binary File Header", "table": "Table 2 Binary File Header, row 3505-3506", "pagePrinted": 10, "pagePdf": 14, "quote": "Number of 3200-byte, Extended Textual File Header records following the Binary Header. If bytes 3521-3528 are nonzero, that field overrides this one. A value of zero indicates there are no Extended Textual File Header records" }
+      ]
+    },
+    {
+      "id": "SEGY2-BH-3297-BYTE-ORDER-CONSTANT",
+      "format": "SEG-Y",
+      "appliesTo": ["2.0"],
+      "scope": "binaryHeader",
+      "bytes": "3297-3300",
+      "offset0": 3296,
+      "width": 4,
+      "type": "uint32be",
+      "field": "Byte order detection constant",
+      "level": "mandatory",
+      "rule": "The integer constant 16909060 (0x01020304). Read big-endian in a big-endian file it must come back as exactly that; reading 0x04030201 instead means every field in the file is byte-reversed.",
+      "check": { "kind": "equals", "value": 16909060 },
+      "checkNote": "The standard prints this constant as '1690906010', i.e. 16909060 written decimal with a trailing subscript 10 for the base. SEG-Y rev 2.1 later added 'If this value is zero, pre-rev 2 big-endian byte ordering should be assumed'; rev 2.0, which is what SeisConv declares, has no such escape, so the rule is applied as an equality.",
+      "citation": [
+        { "doc": "SEG-Y rev 2.0", "section": "5. Binary File Header", "table": "Table 2 Binary File Header, row 3297-3300", "pagePrinted": 9, "pagePdf": 13, "quote": "The integer constant 16909060(10) (01020304(16)). This is used to allow unambiguous detection of the byte ordering to expect for this SEG-Y file. For example, if this field reads as 67305985(10) (04030201(16)) then the bytes in every Binary File Header, Trace Header and Trace Data field must be reversed as they are read" }
+      ]
+    },
+    {
+      "id": "SEGY2-BH-3269-EXT-SAMPLES",
+      "format": "SEG-Y",
+      "appliesTo": ["2.0"],
+      "scope": "binaryHeader",
+      "bytes": "3269-3272",
+      "offset0": 3268,
+      "width": 4,
+      "type": "uint32be",
+      "field": "Extended number of samples per data trace",
+      "level": "recommended",
+      "rule": "If nonzero, this overrides the number of samples per data trace in bytes 3221-3222.",
+      "check": { "kind": "zeroOrEqualsField", "targetOffset0": 3220, "targetType": "uint16be", "targetBytes": "3221-3222" },
+      "checkNote": "The standard resolves a disagreement in favour of this field, so a mismatch is NOT a violation and the rule is recommended-level only. The check is reported because a writer that sets both to different values is almost certainly wrong about one of them. When this field is zero the check passes and the layout falls back to bytes 3221-3222, which is exactly what the standard says happens.",
+      "citation": [
+        { "doc": "SEG-Y rev 2.0", "section": "5. Binary File Header", "table": "Table 2 Binary File Header, row 3269-3272", "pagePrinted": 9, "pagePdf": 13, "quote": "Extended number of samples per data trace. If nonzero, this overrides the number of samples per data trace in bytes 3221-3222." }
+      ]
+    },
+    {
+      "id": "SEGY2-BH-3273-EXT-SAMPLE-INTERVAL",
+      "format": "SEG-Y",
+      "appliesTo": ["2.0"],
+      "scope": "binaryHeader",
+      "bytes": "3273-3280",
+      "offset0": 3272,
+      "width": 8,
+      "type": "float64be",
+      "field": "Extended sample interval, IEEE double precision (64-bit)",
+      "level": "recommended",
+      "rule": "If nonzero, this overrides the sample interval in bytes 3217-3218 with the same units.",
+      "check": { "kind": "zeroOrEqualsField", "targetOffset0": 3216, "targetType": "uint16be", "targetBytes": "3217-3218" },
+      "checkNote": "Recommended-level for the same reason as SEGY2-BH-3269-EXT-SAMPLES: the standard resolves a disagreement in favour of the extended field, so a mismatch is not itself a violation.",
+      "citation": [
+        { "doc": "SEG-Y rev 2.0", "section": "5. Binary File Header", "table": "Table 2 Binary File Header, row 3273-3280", "pagePrinted": 9, "pagePdf": 13, "quote": "Extended sample interval, IEEE double precision (64-bit). If nonzero, this overrides the sample interval in bytes 3217-3218 with the same units." }
+      ]
+    },
+    {
+      "id": "SEGY2-BH-3281-EXT-SAMPLE-INTERVAL-ORIGINAL",
+      "format": "SEG-Y",
+      "appliesTo": ["2.0"],
+      "scope": "binaryHeader",
+      "bytes": "3281-3288",
+      "offset0": 3280,
+      "width": 8,
+      "type": "float64be",
+      "field": "Extended sample interval of original field recording, IEEE double precision (64-bit)",
+      "level": "recommended",
+      "rule": "If nonzero, this overrides the sample interval of original field recording in bytes 3219-3220 with the same units.",
+      "check": { "kind": "zeroOrEqualsField", "targetOffset0": 3218, "targetType": "uint16be", "targetBytes": "3219-3220" },
+      "checkNote": "Note for the reader: rev 2.0's own row for bytes 3503-3504 names 3281-3288 as the extended SAMPLE INTERVAL, which contradicts this row. SEG-Y rev 2.1 corrects that cross-reference to 3273-3280. See qa/conform/README.md, 'An inconsistency inside the rev 2.0 document'.",
+      "citation": [
+        { "doc": "SEG-Y rev 2.0", "section": "5. Binary File Header", "table": "Table 2 Binary File Header, row 3281-3288", "pagePrinted": 9, "pagePdf": 13, "quote": "Extended sample interval of original field recording, IEEE double precision (64-bit) . If nonzero, this overrides the sample interval of original field recording in bytes 3219-3220 with the same units." }
+      ]
+    },
+    {
+      "id": "SEGY2-BH-3289-EXT-SAMPLES-ORIGINAL",
+      "format": "SEG-Y",
+      "appliesTo": ["2.0"],
+      "scope": "binaryHeader",
+      "bytes": "3289-3292",
+      "offset0": 3288,
+      "width": 4,
+      "type": "uint32be",
+      "field": "Extended number of samples per data trace in original recording",
+      "level": "recommended",
+      "rule": "If nonzero, this overrides the number of samples per data trace in original recording in bytes 3223-3224.",
+      "check": { "kind": "zeroOrEqualsField", "targetOffset0": 3222, "targetType": "uint16be", "targetBytes": "3223-3224" },
+      "checkNote": "Same cross-reference clash as SEGY2-BH-3281: rev 2.0's row for bytes 3503-3504 names 3289-3292 as the extended number of samples per data trace, which rev 2.1 corrects to 3269-3272.",
+      "citation": [
+        { "doc": "SEG-Y rev 2.0", "section": "5. Binary File Header", "table": "Table 2 Binary File Header, row 3289-3292", "pagePrinted": 9, "pagePdf": 13, "quote": "Extended number of samples per data trace in original recording. If nonzero, this overrides the number of samples per data trace in original recording in bytes 3223-3224." }
+      ]
+    },
+    {
+      "id": "SEGY2-BH-3507-ADDITIONAL-TRACE-HEADERS",
+      "format": "SEG-Y",
+      "appliesTo": ["2.0"],
+      "scope": "binaryHeader",
+      "bytes": "3507-3510",
+      "offset0": 3506,
+      "width": 4,
+      "type": "uint32be",
+      "field": "Maximum number of additional 240 byte trace headers",
+      "level": "mandatory",
+      "rule": "Zero means there are no additional 240-byte trace headers. Whatever is recorded here widens every trace's stride by that many 240-byte blocks, so it has to agree with the file size.",
+      "check": { "kind": "inRange", "min": 0, "max": 4294967295 },
+      "checkNote": "The only bound the quote actually supports is the field width, so that is the only bound checked: the standard names no maximum here. The value is really tested by SEGY-LAYOUT-CLOSES, which multiplies it into the trace stride, so a wrong count fails there on the file size rather than here on an uncited limit. In SEG-Y rev 2.1 this field was narrowed to bytes 3507-3508 and bytes 3509-3510 became Survey type; a file declaring rev 2.1 must be judged against that, not against this row.",
+      "citation": [
+        { "doc": "SEG-Y rev 2.0", "section": "5. Binary File Header", "table": "Table 2 Binary File Header, row 3507-3510", "pagePrinted": 10, "pagePdf": 14, "quote": "Maximum number of additional 240 byte trace headers. A value of zero indicates there are no additional 240 byte trace headers. The actual number for a given trace may be supplied in bytes 157-158 of SEG-Y Trace Header Extension 1." }
+      ]
+    },
+
+    {
+      "id": "SEGY-TH-0001-SEQ-WITHIN-LINE",
+      "format": "SEG-Y",
+      "appliesTo": ["1", "2.0"],
+      "scope": "traceHeader",
+      "bytes": "1-4",
+      "offset0": 0,
+      "width": 4,
+      "type": "int32be",
+      "field": "Trace sequence number within line",
+      "level": "recommended",
+      "rule": "Numbers continue to increase if the same line continues across multiple SEG-Y files, so within one file the value must not go backwards.",
+      "check": { "kind": "nonDecreasing" },
+      "citation": [
+        { "doc": "SEG-Y rev 1.0", "section": "7.1. Trace Header", "table": "Table 3 Trace Header, row 1-4 with footnote 7", "pagePrinted": 12, "pagePdf": 15, "quote": "Trace sequence number within line -- Numbers continue to increase if the same line continues across multiple SEG Y files. Highly recommended for all types of data. [footnote 7] Strongly recommended that this information always be recorded." },
+        { "doc": "SEG-Y rev 2.0", "section": "7.1. Trace Header", "table": "Table 3 Standard Trace Header, row 1-4", "pagePrinted": 15, "pagePdf": 19, "quote": "Trace sequence number within line -- Numbers continue to increase if the same line continues across multiple SEG-Y files." }
+      ]
+    },
+    {
+      "id": "SEGY-TH-0005-SEQ-WITHIN-FILE",
+      "format": "SEG-Y",
+      "appliesTo": ["1", "2.0"],
+      "scope": "traceHeader",
+      "bytes": "5-8",
+      "offset0": 4,
+      "width": 4,
+      "type": "int32be",
+      "field": "Trace sequence number within SEG-Y file",
+      "level": "mandatory",
+      "rule": "Each file starts with trace sequence one, so trace i carries i+1 counting from zero.",
+      "check": { "kind": "sequenceFromOne" },
+      "citation": [
+        { "doc": "SEG-Y rev 1.0", "section": "7.1. Trace Header", "table": "Table 3 Trace Header, row 5-8", "pagePrinted": 12, "pagePdf": 15, "quote": "Trace sequence number within SEG Y file -- Each file starts with trace sequence one." },
+        { "doc": "SEG-Y rev 2.0", "section": "7.1. Trace Header", "table": "Table 3 Standard Trace Header, row 5-8", "pagePrinted": 15, "pagePdf": 19, "quote": "Trace sequence number within SEG-Y file -- Each file starts with trace sequence one." }
+      ]
+    },
+    {
+      "id": "SEGY1-TH-0029-TRACE-ID-CODE",
+      "format": "SEG-Y",
+      "appliesTo": ["1"],
+      "scope": "traceHeader",
+      "bytes": "29-30",
+      "offset0": 28,
+      "width": 2,
+      "type": "int16be",
+      "field": "Trace identification code",
+      "level": "recommended",
+      "rule": "Defined values run from minus one upward, with 23 and above available for optional use to a maximum of 32767.",
+      "check": { "kind": "inRange", "min": -1, "max": 32767 },
+      "citation": [
+        { "doc": "SEG-Y rev 1.0", "section": "7.1. Trace Header", "table": "Table 3 Trace Header, row 29-30 with footnote 7", "pagePrinted": 13, "pagePdf": 16, "quote": "Trace identification code: -1 = Other, 0 = Unknown, 1 = Seismic data ... 22 = Time-velocity pairs, 23 ... N = optional use, (maximum N = 32,767). Highly recommended for all types of data." }
+      ]
+    },
+    {
+      "id": "SEGY2-TH-0029-TRACE-ID-CODE",
+      "format": "SEG-Y",
+      "appliesTo": ["2.0"],
+      "scope": "traceHeader",
+      "bytes": "29-30",
+      "offset0": 28,
+      "width": 2,
+      "type": "int16be",
+      "field": "Trace identification code",
+      "level": "recommended",
+      "rule": "Defined values run from minus one to 41, with 42 to 255 reserved, 256 upward available for optional use to a maximum of 16383, and 16384 added on top to mark an interpolated trace.",
+      "check": { "kind": "inRange", "min": -1, "max": 32767 },
+      "citation": [
+        { "doc": "SEG-Y rev 2.0", "section": "7.1. Trace Header", "table": "Table 3 Standard Trace Header, rows 29-30", "pagePrinted": "15 and 16", "pagePdf": "19 and 20", "quote": "Trace identification code: -1 = Other, 0 = Unknown, 1 = Time domain seismic data ... 41 = Rotational sensor - Yaw, 42 ... 255 = Reserved, 256 ... N = optional use, (maximum N = 16,383), N+16,384 = Interpolated, i.e. not original, seismic trace." }
+      ]
+    },
+    {
+      "id": "SEGY1-TH-0069-ELEVATION-SCALAR",
+      "format": "SEG-Y",
+      "appliesTo": ["1"],
+      "scope": "traceHeader",
+      "bytes": "69-70",
+      "offset0": 68,
+      "width": 2,
+      "type": "int16be",
+      "field": "Scalar to be applied to all elevations and depths",
+      "level": "mandatory",
+      "rule": "Scalar = 1, +/-10, +/-100, +/-1000, or +/-10,000. Rev 1 lists no other permitted value, and unlike rev 2.0 it does not say that zero is taken as one.",
+      "check": { "kind": "inSet", "values": [1, 10, -10, 100, -100, 1000, -1000, 10000, -10000] },
+      "checkNote": "A JUDGEMENT, stated so it can be argued with: rev 1 gives an enumeration and no 'must', so a lenient reader could treat an unset field as merely absent. The reason this file treats zero as a failure at mandatory level is that SEG-Y rev 2.0 later ADDED the sentence 'A value of zero is assumed to be a scalar value of 1' to this exact row, which is only worth adding if rev 1 left a zero undefined.",
+      "citation": [
+        { "doc": "SEG-Y rev 1.0", "section": "7.1. Trace Header", "table": "Table 3 Trace Header, row 69-70", "pagePrinted": 14, "pagePdf": 17, "quote": "Scalar to be applied to all elevations and depths specified in Trace Header bytes 41-68 to give the real value. Scalar = 1, +/-10, +/-100, +/-1000, or +/-10,000. If positive, scalar is used as a multiplier; if negative, scalar is used as a divisor." }
+      ]
+    },
+    {
+      "id": "SEGY1-TH-0071-COORDINATE-SCALAR",
+      "format": "SEG-Y",
+      "appliesTo": ["1"],
+      "scope": "traceHeader",
+      "bytes": "71-72",
+      "offset0": 70,
+      "width": 2,
+      "type": "int16be",
+      "field": "Scalar to be applied to all coordinates",
+      "level": "mandatory",
+      "rule": "Scalar = 1, +/-10, +/-100, +/-1000, or +/-10,000. Rev 1 lists no other permitted value, and unlike rev 2.0 it does not say that zero is taken as one.",
+      "check": { "kind": "inSet", "values": [1, 10, -10, 100, -100, 1000, -1000, 10000, -10000] },
+      "checkNote": "Same judgement as SEGY1-TH-0069-ELEVATION-SCALAR: rev 1 enumerates the permitted values and says nothing about zero, and rev 2.0 later added 'A value of zero is assumed to be a scalar value of 1' to this row, which reads as filling a gap rev 1 left.",
+      "citation": [
+        { "doc": "SEG-Y rev 1.0", "section": "7.1. Trace Header", "table": "Table 3 Trace Header, row 71-72", "pagePrinted": 14, "pagePdf": 17, "quote": "Scalar to be applied to all coordinates specified in Trace Header bytes 73-88 and to bytes Trace Header 181-188 to give the real value. Scalar = 1, +/-10, +/-100, +/-1000, or +/-10,000. If positive, scalar is used as a multiplier; if negative, scalar is used as divisor." }
+      ]
+    },
+    {
+      "id": "SEGY2-TH-0069-ELEVATION-SCALAR",
+      "format": "SEG-Y",
+      "appliesTo": ["2.0"],
+      "scope": "traceHeader",
+      "bytes": "69-70",
+      "offset0": 68,
+      "width": 2,
+      "type": "int16be",
+      "field": "Scalar to be applied to all elevations and depths",
+      "level": "mandatory",
+      "rule": "Scalar = 1, +/-10, +/-100, +/-1000, or +/-10,000. Rev 2.0 adds that a value of zero is assumed to be a scalar value of 1, so zero is permitted here.",
+      "check": { "kind": "inSet", "values": [0, 1, 10, -10, 100, -100, 1000, -1000, 10000, -10000] },
+      "citation": [
+        { "doc": "SEG-Y rev 2.0", "section": "7.1. Trace Header", "table": "Table 3 Standard Trace Header, row 69-70", "pagePrinted": 17, "pagePdf": 21, "quote": "Scalar to be applied to all elevations and depths specified in Standard Trace Header bytes 41-68 to give the real value. Scalar = 1, +/-10, +/-100, +/-1000, or +/-10,000. If positive, scalar is used as a multiplier; if negative, scalar is used as a divisor. A value of zero is assumed to be a scalar value of 1." }
+      ]
+    },
+    {
+      "id": "SEGY2-TH-0071-COORDINATE-SCALAR",
+      "format": "SEG-Y",
+      "appliesTo": ["2.0"],
+      "scope": "traceHeader",
+      "bytes": "71-72",
+      "offset0": 70,
+      "width": 2,
+      "type": "int16be",
+      "field": "Scalar to be applied to all coordinates",
+      "level": "mandatory",
+      "rule": "Scalar = 1, +/-10, +/-100, +/-1000, or +/-10,000. Rev 2.0 adds that a value of zero is assumed to be a scalar value of 1, so zero is permitted here.",
+      "check": { "kind": "inSet", "values": [0, 1, 10, -10, 100, -100, 1000, -1000, 10000, -10000] },
+      "citation": [
+        { "doc": "SEG-Y rev 2.0", "section": "7.1. Trace Header", "table": "Table 3 Standard Trace Header, row 71-72", "pagePrinted": 18, "pagePdf": 22, "quote": "Scalar to be applied to all coordinates specified in Standard Trace Header bytes 73-88 and to bytes Trace Header 181-188 to give the real value. Scalar = 1, +/-10, +/-100, +/-1000, or +/-10,000. If positive, scalar is used as a multiplier; if negative, scalar is used as divisor. A value of zero is assumed to be a scalar value of 1." }
+      ]
+    },
+    {
+      "id": "SEGY1-TH-0115-SAMPLES-MATCH-BINARY",
+      "format": "SEG-Y",
+      "appliesTo": ["1"],
+      "scope": "traceHeader",
+      "bytes": "115-116",
+      "offset0": 114,
+      "width": 2,
+      "type": "uint16be",
+      "field": "Number of samples in this trace",
+      "level": "mandatory",
+      "rule": "When the fixed length trace flag in binary header bytes 3503-3504 is set, the number of samples in EVERY trace must be the same as the value recorded in the Binary File Header.",
+      "check": { "kind": "equalsBinaryField", "targetOffset0": 3220, "targetType": "uint16be", "targetBytes": "3221-3222" },
+      "when": { "offset0": 3502, "type": "uint16be", "equals": 1 },
+      "citation": [
+        { "doc": "SEG-Y rev 1.0", "section": "7.1. Trace Header", "table": "Table 3 Trace Header, rows 115-116 and 117-118 with footnote 7", "pagePrinted": 15, "pagePdf": 18, "quote": "If the fixed length trace flag in bytes 3503-3504 of the Binary File Header is set, the sample interval and number of samples in every trace in the SEG Y file must be the same as the values recorded in the Binary File Header." }
+      ]
+    },
+    {
+      "id": "SEGY1-TH-0115-TWOS-COMPLEMENT-RANGE",
+      "format": "SEG-Y",
+      "appliesTo": ["1"],
+      "scope": "traceHeader",
+      "bytes": "115-116",
+      "offset0": 114,
+      "width": 2,
+      "type": "int16be",
+      "field": "Number of samples in this trace, as a two-byte two's complement integer",
+      "level": "mandatory",
+      "rule": "Every trace header attribute in rev 1 is a two-byte or four-byte TWO'S COMPLEMENT integer, so a two-byte field can carry 1 to 32767, not 1 to 65535.",
+      "check": { "kind": "inRange", "min": 1, "max": 32767 },
+      "checkNote": "The per-trace half of SEGY1-BH-3221-TWOS-COMPLEMENT-RANGE, and latent for the same reason: writeSEGY writes the padded sample count here with an unsigned 16-bit store.",
+      "citation": [
+        { "doc": "SEG-Y rev 1.0", "section": "7.1. Trace Header", "pagePrinted": 12, "pagePdf": 15, "quote": "The SEG Y trace header contains trace attributes, which are defined as two-byte or four-byte, two's complement integers." }
+      ]
+    },
+    {
+      "id": "SEGY1-TH-0117-INTERVAL-MATCH-BINARY",
+      "format": "SEG-Y",
+      "appliesTo": ["1"],
+      "scope": "traceHeader",
+      "bytes": "117-118",
+      "offset0": 116,
+      "width": 2,
+      "type": "uint16be",
+      "field": "Sample interval for this trace",
+      "level": "mandatory",
+      "rule": "When the fixed length trace flag in binary header bytes 3503-3504 is set, the sample interval in EVERY trace must be the same as the value recorded in the Binary File Header.",
+      "check": { "kind": "equalsBinaryField", "targetOffset0": 3216, "targetType": "uint16be", "targetBytes": "3217-3218" },
+      "when": { "offset0": 3502, "type": "uint16be", "equals": 1 },
+      "citation": [
+        { "doc": "SEG-Y rev 1.0", "section": "7.1. Trace Header", "table": "Table 3 Trace Header, rows 115-116 and 117-118 with footnote 7", "pagePrinted": 15, "pagePdf": 18, "quote": "If the fixed length trace flag in bytes 3503-3504 of the Binary File Header is set, the sample interval and number of samples in every trace in the SEG Y file must be the same as the values recorded in the Binary File Header." }
+      ]
+    },
+    {
+      "id": "SEGY2-TH-0115-SAMPLES-MATCH-BINARY",
+      "format": "SEG-Y",
+      "appliesTo": ["2.0"],
+      "scope": "traceHeader",
+      "bytes": "115-116",
+      "offset0": 114,
+      "width": 2,
+      "type": "uint16be",
+      "field": "Number of samples in this trace",
+      "level": "recommended",
+      "rule": "When the fixed length trace flag is set, rev 2.0 says this field is IGNORED, and separately that it is strongly recommended that correct values appear in the trace header locations anyway. So the equality is a recommendation in rev 2.0, not the requirement it is in rev 1.",
+      "check": { "kind": "equalsBinaryField", "targetOffset0": 3220, "targetType": "uint16be", "targetBytes": "3221-3222" },
+      "when": { "offset0": 3502, "type": "uint16be", "equals": 1 },
+      "citation": [
+        { "doc": "SEG-Y rev 2.0", "section": "7.1. Trace Header", "table": "Table 3 Standard Trace Header, row 115-116", "pagePrinted": 19, "pagePdf": 23, "quote": "If the fixed length trace flag in bytes 3503-3504 of the Binary File Header is set, the number of samples in every trace in the SEG-Y file is assumed to be the same as the value recorded in the Binary File Header and this field is ignored." },
+        { "doc": "SEG-Y rev 2.0", "section": "5. Binary File Header", "table": "Table 2 Binary File Header, row 3503-3504", "pagePrinted": 10, "pagePdf": 14, "quote": "Irrespective of this flag, it is strongly recommended that corect values for the number of samples per trace and sample interval appear in the appropriate trace Trace Header locations." }
+      ]
+    },
+    {
+      "id": "SEGY2-TH-0117-INTERVAL-MATCH-BINARY",
+      "format": "SEG-Y",
+      "appliesTo": ["2.0"],
+      "scope": "traceHeader",
+      "bytes": "117-118",
+      "offset0": 116,
+      "width": 2,
+      "type": "uint16be",
+      "field": "Sample interval for this trace",
+      "level": "recommended",
+      "rule": "When the fixed length trace flag is set, rev 2.0 says this field is IGNORED, and separately that it is strongly recommended that correct values appear in the trace header locations anyway.",
+      "check": { "kind": "equalsBinaryField", "targetOffset0": 3216, "targetType": "uint16be", "targetBytes": "3217-3218" },
+      "when": { "offset0": 3502, "type": "uint16be", "equals": 1 },
+      "citation": [
+        { "doc": "SEG-Y rev 2.0", "section": "7.1. Trace Header", "table": "Table 3 Standard Trace Header, row 117-118", "pagePrinted": 19, "pagePdf": 23, "quote": "If the fixed length trace flag in bytes 3503-3504 of the Binary File Header is set, the sample interval in every trace in the SEG-Y file is assumed to be the same as the value recorded in the Binary File Header and this field is ignored." },
+        { "doc": "SEG-Y rev 2.0", "section": "5. Binary File Header", "table": "Table 2 Binary File Header, row 3503-3504", "pagePrinted": 10, "pagePdf": 14, "quote": "Irrespective of this flag, it is strongly recommended that corect values for the number of samples per trace and sample interval appear in the appropriate trace Trace Header locations." }
+      ]
+    }
+  ],
+
+  "uncovered": [
+    { "what": "SEG-Y rev 0 output", "why": "writeSEGY(pd, 0) declares revision zero, which the later documents describe only as 'traditional SEG Y conforming to the 1975 standard'. The 1975 document is not on this machine, so there is nothing to cite and rev 0 output is not exercised at all." },
+    { "what": "SEG-Y rev 2.1 output", "why": "SeisConv declares major 2 minor 0, so rev 2.1 rules do not apply to anything it writes. Rev 2.1 moved 'Maximum number of additional 240-byte trace headers' from bytes 3507-3510 to 3507-3508 and put Survey type in 3509-3510, and corrected the 3503-3504 cross-reference; a file declaring 2.1 would need its own rows." },
+    { "what": "Binary header bytes 3213-3216, data and auxiliary traces per ensemble", "why": "The standard makes these 'Mandatory for prestack data'. Whether a converted file is prestack cannot be decided from the bytes, so encoding this as a hard rule would produce a verdict the file does not support." },
+    { "what": "Trace header bytes 25-28, trace number within the ensemble", "why": "'Each ensemble starts with trace number one' is a numbering convention; with the ensemble field synthesised on conversion there is no ensemble boundary in the file to check it against." },
+    { "what": "Coordinates, elevations and their units (trace header bytes 41-68, 73-90)", "why": "The standard fixes their meaning and their scalars, both of which are checked, but the VALUES can only be judged against the survey they came from, which is not in the file." },
+    { "what": "The sample values themselves", "why": "Not a rule-table matter. They are covered by the independent read layer, which decodes the written file with segyio and compares the sample matrix hash against the source." },
+    { "what": "SEG-D, SEG-2 and SU output", "why": "Out of scope for this first slice. writeSEGD, writeSEG2 and writeSU are unexercised by qa/conform: no rules extracted, nothing checked." }
+  ]
+}

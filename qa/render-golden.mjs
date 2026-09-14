@@ -50,11 +50,31 @@
 // move while every other secCanvas state stays byte-identical. If you add a control
 // to #secHealthBar or #secDisplayPanel, expect exactly those four and no others.
 //
+// THE RASTER BACKEND IS PINNED, and that is what makes an exact pixel hash a fair
+// test of the DRAWING CODE rather than of whichever Chromium 2D backend happened to
+// be live. Canvas 2D antialiasing is implementation-defined (WHATWG canvas, 4.12.5:
+// the internal bitmap need not match the coordinate space, oversampling is up to the
+// UA), so GPU raster and software raster legitimately disagree by a level or two on
+// every antialiased edge. MEASURED on this app: with no switch, getGPUFeatureStatus()
+// reports 2d_canvas "enabled"; with --disable-accelerated-2d-canvas it reports
+// "disabled_software", and the sweep pilot, the sweep frequency plot and a synthetic
+// antialiased polyline ALL produced different hashes between the two. Pinning the
+// software backend made all three byte-identical across three separate processes on
+// three fresh profiles. So: launch() below gets RASTER_SWITCHES, and the run ASSERTS
+// the switch was honoured - a silently ignored switch that still passes would be the
+// worst outcome, since the golden would then be testing the backend again without
+// saying so. Regenerating this file's golden after changing RASTER_SWITCHES is
+// expected: MEASURED at d0fcace, running the d0fcace golden under the switch moved
+// 122 of its 196 hashes while the other 74 came back byte-identical.
+//
 // CAPTURE ORDER IS LOAD-BEARING: never hash a canvas BEFORE an existing capture
-// of that same canvas. getImageData is a GPU read-back and Chromium flips a
-// canvas to software raster after a few of them, which nudges antialiasing.
-// Measured: one extra early hash of #specCanvas moved spectrum:average:db and
-// nothing else. New states on an already-covered canvas go AFTER the old ones.
+// of that same canvas. getImageData is a read-back and Chromium was observed to
+// flip a canvas to software raster after a few of them, which nudges antialiasing.
+// Measured (before the backend was pinned): one extra early hash of #specCanvas
+// moved spectrum:average:db and nothing else. New states on an already-covered
+// canvas go AFTER the old ones. Pinning the software backend should remove the
+// mechanism behind that demotion - there is no accelerated canvas left to demote -
+// but that has NOT been measured, so the rule stands as written.
 
 import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
@@ -68,6 +88,14 @@ const GOLDEN_PATH = join(__dirname, 'golden-render.json');
 const UPDATE = process.argv.includes('--update');
 
 const LE = qaPath('le', sample('example-le.sgy'));
+
+// The 2D raster backend this oracle is captured on. --disable-accelerated-2d-canvas
+// is the ONE switch in Chromium whose own doc comment names canvas 2D ("Disable
+// gpu-accelerated 2d canvas", content/public/common/content_switches.cc), and it is
+// still defined at HEAD. Every other candidate (--disable-gpu, --disable-gpu-
+// rasterization, --in-process-gpu, --disable-lcd-text) governs compositing, process
+// topology or text AA, not the backing store getImageData reads.
+const RASTER_SWITCHES = ['--disable-accelerated-2d-canvas'];
 
 // -- pixel hashing (in the renderer, over raw ImageData bytes) --------------
 async function hashCanvas(win, id) {
@@ -185,8 +213,36 @@ async function main() {
     }
   }
 
-  const { app, win, errors } = await launch();
+  const { app, win, errors } = await launch({ switches: RASTER_SWITCHES });
   const results = {};
+
+  // PROVE the raster switch was honoured before hashing anything. getGPUFeatureStatus
+  // is the GPU host's own view of the feature, so this reads what Chromium actually
+  // decided, not what we asked for. An unreadable or unexpected status is a FAILURE,
+  // never a "probably fine": a run that quietly hashes GPU output against a software
+  // -captured golden would fail most states for the wrong reason, and one that quietly
+  // hashes GPU output into the golden would bake the backend back in.
+  {
+    // getGPUInfo() first: getGPUFeatureStatus() is only meaningful once the GPU
+    // process has reported (Electron docs tie it to the 'gpu-info-update' event), and
+    // awaiting the info call is the documented way to be sure it has. Without it a
+    // fast machine could read an empty status and fail this guard for no reason.
+    const status = await app.evaluate(async ({ app }) => {
+      await app.getGPUInfo('basic').catch(() => {});
+      return app.getGPUFeatureStatus();
+    });
+    const canvas2d = status && status['2d_canvas'];
+    console.log(`raster backend: 2d_canvas=${canvas2d} (switches: ${RASTER_SWITCHES.join(' ') || 'none'})`);
+    if (!canvas2d || !/software/i.test(canvas2d)) {
+      await app.close();
+      console.error(`[FATAL] ${RASTER_SWITCHES.join(' ')} was not honoured: getGPUFeatureStatus() reports `
+        + `2d_canvas=${canvas2d === undefined ? 'undefined' : JSON.stringify(canvas2d)}, expected a software backend. `
+        + 'Every hash in this oracle is captured on the software 2D raster backend; hashing GPU output against '
+        + 'them tests the backend, not the code. Fix the switch (or re-capture with --update on the new one) '
+        + 'rather than ignoring this.');
+      process.exit(3);
+    }
+  }
 
   async function capture(key, canvasId) {
     const r = await hashCanvas(win, canvasId);
@@ -387,7 +443,7 @@ async function main() {
     if (existsSync(LE)) {
       await mockDialogs(app, [LE]);
       await win.click('#wbPickBtn'); await sleep(600);
-      await win.fill('#wbIndex', '0').catch(() => {});
+      await win.fill('#wbIndex', '1').catch(() => {});
       await win.click('#wbAddOpenBtn').catch(() => {}); await sleep(400);
     } else {
       excluded.push('workbench: second (LE) trace skipped - LE fixture not found, matrix ran on one trace only');
@@ -669,6 +725,19 @@ async function main() {
     await win.waitForFunction(() => /^Built \d+ samples\./.test(document.getElementById('swStatus')?.textContent || ''),
       null, { timeout: 30000 }).catch(() => { throw new Error('sweep build did not report "Built N samples."'); });
     await twoFrames(win);
+    // sweeps:signal is the MOST backend-sensitive state in this matrix, and the
+    // reason is geometric: the pilot is 24001 samples over a plot about 254 rows
+    // tall, so a full-swing envelope lays a near-horizontal full-width antialiased
+    // stroke across every pixel row. Measured at d0fcace, GPU raster against
+    // --disable-accelerated-2d-canvas differed on 122687 of its 175218 pixels by 1.85
+    // levels on average, and thinning the drawn path to one min/max pair per row only
+    // took that to 117975 (-3.8%) - the sensitivity is not in the NUMBER of segments,
+    // so no drawing change fixes it. It was excluded at d0fcace, for that one commit.
+    // It is hashed again because the backend is now PINNED (see RASTER_SWITCHES and
+    // the assertion at the top of main): on the software backend this canvas measured
+    // byte-identical across three separate processes on three fresh profiles, and a
+    // one-sample 2% perturbation of the pilot moved its hash while every other state
+    // held - so the check is both stable and able to catch a real drawing regression.
     await capture('sweeps:signal', 'swSignalCanvas');
     await capture('sweeps:freq', 'swFreqCanvas');
     await capture('sweeps:spectrum', 'swSpectrumCanvas');
@@ -780,7 +849,7 @@ async function main() {
     await capture('gather:by=channel:ch=12:mode=wiggle', 'gatherCanvas');
     await setSecMode('vd');
     // The plain trace-position selector, which needs no header at all.
-    await runGather({ gatherSelectBy: 'index', gatherIndex: '0' });
+    await runGather({ gatherSelectBy: 'index', gatherIndex: '1' });
     await capture('gather:by=index:pos=0:mode=vd', 'gatherCanvas');
     await clickHidden(win, 'gatherClose');
 

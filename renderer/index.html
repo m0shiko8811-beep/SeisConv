@@ -896,6 +896,18 @@ html[data-theme="dark"] .upd-crit{background:transparent;}
 .hdr-grp:first-child h3{border-top:none;padding-top:0;}
 .hdr-grp .kv .v{font-family:var(--mono);font-weight:500;}
 .hdr-empty{color:var(--ink-3);font-size:12.5px;padding:8px 0;}
+/* Provenance note under a field label ("from channel set") - a value the format
+   keeps somewhere OTHER than the trace header must not read as one that was. */
+.hdr-note{display:block;font-size:10px;color:var(--ink-4);letter-spacing:.2px;}
+
+/* File Viewer header-values panel (#secHdrWrap) - reuses .hdr-grid/.hdr-grp/.kv */
+.sec-hdr-sub{font-size:11px;font-weight:700;letter-spacing:1.2px;text-transform:uppercase;color:var(--ink-3);margin:14px 0 4px;}
+.sec-hdr-sub:first-child{margin-top:0;}
+.sec-hdr-note{color:var(--ink-3);font-size:12px;padding:4px 0 2px;}
+/* The SEG-Y textual header is 40 lines of exactly 80 characters, so it is shown
+   as written: monospace, no wrapping, scrolled sideways rather than reflowed. */
+.hdr-text{margin:0;padding:10px 12px;background:var(--surface);border:1px solid var(--hair-soft);border-radius:9px;
+  font-family:var(--mono);font-size:11.5px;line-height:1.5;white-space:pre;overflow-x:auto;color:var(--ink-2);}
 
 /* Trace Workbench - collected-trace list (colour swatch · label · remove) */
 .wb-list{display:flex;flex-direction:column;gap:6px;}
@@ -1741,7 +1753,7 @@ canvas.sec-attr{height:172px;margin-top:8px;}
                 <span class="wiz-num">1</span>
                 <div class="wiz-body">
                   <div class="wt">Choose the source folder</div>
-                  <div class="ws" id="wizFolderSub">Pick a folder; SeisConv lists every .segy/.sgy/.segd/.seg/.seg2/.dat/.bat/.su file in it.</div>
+                  <div class="ws" id="wizFolderSub">Pick a folder; SeisConv lists every .segy/.sgy/.segd/.sgd/.seg/.seg2/.dat/.bat/.su file in it.</div>
                 </div>
                 <button class="btn btn-primary sm" id="pickFolderBtn">Pick folder…</button>
               </div>
@@ -1827,7 +1839,7 @@ canvas.sec-attr{height:172px;margin-top:8px;}
         </div>
         <div class="trace-bar">
           <button class="btn sm" id="tracePrev">‹ Prev</button>
-          <input type="range" id="traceSlider" class="slider" min="0" max="0" value="0">
+          <input type="range" id="traceSlider" class="slider" min="1" max="1" value="1">
           <button class="btn sm" id="traceNext">Next ›</button>
           <span class="seg"><button class="segbtn on" id="traceWave">Waveform</button><button class="segbtn" id="traceSpec">Spectrum</button></span>
           <span class="seg" title="Zoom the time axis (wheel over the trace, drag to pan, double-click to fit)">
@@ -1893,8 +1905,10 @@ canvas.sec-attr{height:172px;margin-top:8px;}
           <span class="trace-label" id="fileNavLabel">-</span>
           <!-- Near-trace gather. Deliberately in ROW A, beside Prev/Next: it reads
                the SAME folder list those buttons step, and row B is pinned to its
-               measured width (see the note on #secColor). Adding it here keeps
-               #secCanvas at top 257 at 1240x860 - re-measure if this row grows. -->
+               measured width (see the note on #secColor). Adding it here avoids
+               growing row A further; with a file open #secCanvas already starts at
+               top 286.7 at 1240x860 because row B wraps to two lines (see the
+               #secHdrToggle note below) - re-measure if THIS row grows too. -->
           <button class="btn sm" id="secGatherBtn" title="Near-trace gather - take ONE chosen channel out of EVERY record in this folder and draw them side by side, one column per record. Shows how the source and the spread behave shot to shot, which a single-record view cannot." disabled>Gather…</button>
           <span class="seg" id="secPageNav" style="display:none" title="Page through this file in fixed blocks of traces - click to jump to the next / previous block">
             <button class="segbtn" id="secPagePrev" title="Previous block of traces" disabled>&#9664;</button>
@@ -1913,10 +1927,12 @@ canvas.sec-attr{height:172px;margin-top:8px;}
             <option value="vdwig">VD + Wiggle</option>
           </select>
           <!-- Width is PINNED, and the number is measured, not guessed. .sec-bar is
-               flex-wrap, and this toolbar was compacted to two rows on purpose. At
-               1240x860 the row has just enough slack for 161px (the width the longest
-               new label auto-sizes to, showing it in full); 168px wraps the row and
-               drops #secCanvas from top 257.3 to 286.7. Re-measure before widening. -->
+               flex-wrap. This row already wraps to two lines at 1240x860 (the
+               #secHdrToggle button now lives in this row too - see its note below),
+               so with a file open #secCanvas already starts at top 286.7, not 257.3.
+               161px is the width the longest new label auto-sizes to, showing it in
+               full, without pushing the row to a THIRD line; re-measure before
+               widening, since a further wrap's new top has not been measured. -->
           <select id="secColor" class="ctl" style="width:161px">
             <option value="seismic">Seismic</option>
             <option value="gray">Gray</option>
@@ -1930,6 +1946,16 @@ canvas.sec-attr{height:172px;margin-top:8px;}
           </select>
           <button class="btn sm" id="secDisplayBtn" title="Display settings - gain, AGC, clip, excursion and the scale basis. Every one of them is reported permanently on the strip inside the section, so this panel only needs to be open while you change them." aria-expanded="false" aria-controls="secDisplayPanel">Display…</button>
           <button class="btn sm" id="secHealthToggle" title="Trace health - scan every trace for dead, noisy, hot/weak, clipped/spiky or reversed traces. QC proposes, you confirm - flags are suggestions, not edits. Scan, then click a flagged row to locate it on the section. Raise a detector&#39;s sensitivity if it under-flags, lower it if it over-flags; every metric is shown against its LOCAL neighbour baseline." aria-expanded="false" aria-controls="secHealthWrap">Health…</button>
+          <!-- HEADER VALUES toggle. Sits here in the toolbar, right after Health…, by
+               the author's explicit choice: he was shown both placements (here, and
+               below the canvas) as screenshots and picked this one, knowing the cost.
+               The cost, measured in the running app at its own default window of
+               1240x860 (electron/main.ts): this row now wraps to a second line, and
+               with a file open #secCanvas starts about 29.4px lower (top 257.3 to
+               286.7) than it otherwise would. Do not silently move this back below
+               the canvas to "fix" that; the wrap and the lower canvas top are
+               accepted, not a bug. -->
+          <button class="btn sm" id="secHdrToggle" title="Header values - what this file and the trace under the cursor really carry in their headers. The values follow the cursor; click the section to hold one trace still while you read it." aria-expanded="false" aria-controls="secHdrWrap">Headers…</button>
           <span class="seg" title="Zoom into the seismic data (wheel over the section, drag to pan, double-click to fit)">
             <button class="segbtn" id="secZoomOut" title="Zoom out (data)">&minus;</button>
             <button class="segbtn" id="secZoomFit" title="Fit / reset data zoom">Fit</button>
@@ -1940,6 +1966,22 @@ canvas.sec-attr{height:172px;margin-top:8px;}
           </button>
           <button class="btn sm" id="secToWb" title="Toggle, then click a trace on the section to add it to the Trace Workbench">+ Workbench</button>
           <button class="btn sm" id="secFbToggle" title="First breaks - assisted onset picking: drop 2+ seed picks, then Assisted fill picks the rest along the moveout. Click again (or this button) to exit." aria-pressed="false">First breaks</button>
+          <!-- REFERENCE LINES toggle. Only the toggle lives in this row; the fields
+               and the list are in the collapsible panel below the canvas, following
+               Display, Health, First breaks and Header values rather than putting
+               several numeric boxes into a row that already wraps. Measured in the
+               running app at its own default window of 1240x860 (electron/main.ts)
+               with a file open: this row still wraps to TWO lines with this button
+               in it, and #secCanvas keeps its top of about 286.7. Re-measure before
+               widening this label or adding another button here, since a third
+               line's canvas top has not been measured. -->
+          <button class="btn sm" id="secRefToggle" title="Reference lines - draw a line across the display at a time you name, or down it at a trace you name, and measure against it. As many as you need, added by typing a value or by clicking the display. They stay put while you zoom, pan and change record, and Reset display does not remove them." aria-expanded="false" aria-controls="secRefWrap">Reference lines…</button>
+          <!-- Why the button beside it is greyed out, for a file read a block at a
+               time. Empty and hidden on every ordinary file, so it costs this row
+               nothing; when it does appear the row wraps one more line, which is the
+               price of the sentence being readable at all (the picking bar's own
+               read-out lays out below the window on a screen this size). -->
+          <span class="trace-label" id="secFbUnavailable" style="display:none;"></span>
           <span class="trace-label" id="secLabel">Open a file to view the section</span>
         </div>
         <!-- Collapsed DISPLAY panel: gain, AGC, clip, excursion and the scale basis.
@@ -2007,7 +2049,8 @@ canvas.sec-attr{height:172px;margin-top:8px;}
                  rather than being silently closed up. SEG-Y's fixed trace header carries no
                  receiver-station field, so the options are the geometry numbers it does
                  store. Lives in this collapsed panel for the same reason as reduced time:
-                 #secCanvas must keep its measured top of about 257 at 1240x860. -->
+                 with a file open, #secCanvas must keep its measured top of about 286.7
+                 at 1240x860 rather than wrapping further. -->
             <label class="ctl-lbl" title="Where each trace is drawn across the plot. Trace number is one even column per trace, today's behaviour. Any other choice positions the trace at its own header value, so a spread gap, a dropped station or a channel missing from the file appears as a real gap instead of being closed up. If the chosen header is missing, all zero or all the same, the section falls back to even spacing and says so on the strip.">Trace spacing
               <select id="secSpacing" class="ctl" style="width:184px">
                 <option value="trace" selected>Trace number (even)</option>
@@ -2018,9 +2061,10 @@ canvas.sec-attr{height:172px;margin-top:8px;}
               </select>
             </label>
             <!-- Reduced time (linear moveout). Lives in this collapsed panel and NOT in a
-                 toolbar row, so #secCanvas keeps its measured top of about 257 at
-                 1240x860. Disabled with a stated reason on a record that carries no
-                 source-to-receiver offset header. -->
+                 toolbar row, so with a file open #secCanvas keeps its measured top of
+                 about 286.7 at 1240x860 rather than wrapping further. Disabled with a
+                 stated reason on a record that carries no source-to-receiver offset
+                 header. -->
             <label class="ctl-lbl" title="Reduced time - shift every trace by its offset divided by the reducing velocity, so refracted first breaks flatten into a straight horizontal line. A reversed geophone, a timing slip or a station planted at the wrong stake then reads as a STEP in that line instead of a kink in a hyperbola. DISPLAY ONLY: the stored samples are never changed, and the strip inside the section says so while it is on."><input type="checkbox" id="secReduce" disabled> Reduced time (flatten first breaks)</label>
             <label class="ctl-lbl" id="secReduceVelWrap" title="Reducing velocity in kilometres per second - Seismic Unix's `sureduce rv`, default 8.0. Set it near the refractor velocity you want flat: too high leaves the breaks curving down, too low curves them up.">Reducing velocity (km/s)
               <input type="number" id="secReduceVel" class="ctl" style="width:74px" min="0.01" max="1000" step="0.1" value="8" disabled>
@@ -2028,10 +2072,11 @@ canvas.sec-attr{height:172px;margin-top:8px;}
             <button class="btn sm" id="secExportImgBtn" title="Save this panel exactly as it is drawn - the display-state strip, both axes and the colour bar - as a PNG image at three times the screen resolution, with the file name and the time of export added underneath.">Save image…</button>
             <!-- Reset display. Lives HERE, at the end of the panel that holds the
                  settings it undoes, and not in a toolbar row: row B is pinned to its
-                 measured width (see the note on #secColor) and #secCanvas has to keep
-                 its measured top of about 257 at 1240x860. Note the neighbouring
-                 #secGainReset above is the GAIN-only reset, which is why this one is
-                 labelled in full. -->
+                 measured width (see the note on #secColor) and, with a file open,
+                 #secCanvas has to keep its measured top of about 286.7 at 1240x860
+                 rather than wrapping further. Note the neighbouring #secGainReset
+                 above is the GAIN-only reset, which is why this one is labelled in
+                 full. -->
             <button class="btn sm" id="secResetDisplay" title="Reset display - put every setting in this panel, plus the display mode, the colour map, the trace spacing, the polarity flip and the zoom, back to the way a file opens. Nothing stored in the file is touched, and the trace-health flags, the first-break picks and the record you are on all stay as they are. An Undo button appears for a few seconds afterwards.">Reset display</button>
             <button class="btn sm" id="secCvdBtn" title="Colour-vision check - show this exact section as a viewer with a red, green or blue colour deficiency would see it. About 1 in 12 men has one, so a display that only works in full colour is a real limitation. A spot check, not a mode: it opens a still picture and closes again.">Colour check…</button>
           </div>
@@ -2143,7 +2188,7 @@ canvas.sec-attr{height:172px;margin-top:8px;}
             <select id="secFbDetector" class="ctl sm">
               <option value="stalta" selected>STA/LTA</option>
             </select></label>
-          <button class="btn sm" id="secFbExportBtn" title="Export the picks as CSV (absIdx, FFID, channel, offset, tMs, source, confidence)" disabled>Export CSV…</button>
+          <button class="btn sm" id="secFbExportBtn" title="Export the picks as CSV (traceNumber, FFID, channel, offset, tMs, source, confidence)" disabled>Export CSV…</button>
           <span class="health-legend" id="secFbLegend" aria-hidden="true">
             <span><span class="health-dot" data-fb="seed"></span>seed</span>
             <span><span class="health-dot" data-fb="auto"></span>auto</span>
@@ -2154,6 +2199,68 @@ canvas.sec-attr{height:172px;margin-top:8px;}
           <span class="trace-label" id="secFbReadout">Drop 2+ seed picks, then Assisted fill.</span>
         </div>
         <div class="sec-hint" id="secFbHint" style="display:none;"><b>First breaks (assisted)</b> - click a trace at the onset to drop a <em>seed</em>; drag a pick to adjust; right-click to delete. With 2+ seeds, <b>Assisted fill</b> picks the rest along the moveout guide (dashed) inside the shaded ±window. Auto-pick is a <em>first guess to edit</em> - review, then Export CSV.</div>
+        <!-- REFERENCE LINES panel, collapsed behind #secRefToggle. BELOW the canvas,
+             for the two reasons the first-breaks bar and the header values panel are:
+             everything above the canvas is pinned to keep #secCanvas at its measured
+             top of about 286.7 at 1240x860, so a panel that opens and closes has to
+             live where its height moves nothing; and this is a panel you read WHILE
+             looking at the section, so one above it would shove the section away the
+             moment you opened it. -->
+        <div id="secRefWrap" style="display:none;">
+          <div class="sec-bar" id="secRefBar">
+            <label class="ctl-lbl" title="The time to draw a horizontal line at, in milliseconds, read on the same scale as the time axis down the left of the display.">Time (ms)
+              <input type="number" id="secRefTimeVal" class="ctl sm" style="width:84px" step="any" placeholder="e.g. 120">
+            </label>
+            <button class="btn sm" id="secRefTimeAdd" title="Draw a horizontal line at the time typed on the left. It appears on the section, on the magnifier, on the gather and in the Trace Inspector.">Add time line</button>
+            <button class="btn sm" id="secRefTimePick" aria-pressed="false" title="Turn this on, then click anywhere on the section to put a horizontal line at the time you clicked. Turn it off again, or press Esc, when you are done.">Click a time</button>
+            <label class="ctl-lbl" title="The trace to draw a vertical line on, counted the same way as the numbers along the bottom of the display.">Trace #
+              <input type="number" id="secRefTraceVal" class="ctl sm" style="width:84px" min="1" step="1" placeholder="e.g. 24">
+            </label>
+            <button class="btn sm" id="secRefTraceAdd" title="Draw a vertical line on the trace typed on the left. Zoomed out, one column stands for several traces, so the line lands on the nearest column drawn and its label says which trace that is.">Add trace line</button>
+            <button class="btn sm" id="secRefTracePick" aria-pressed="false" title="Turn this on, then click a trace on the section to put a vertical line on it. Turn it off again, or press Esc, when you are done.">Click a trace</button>
+            <button class="btn sm" id="secRefClear" title="Remove every reference line, of both kinds, from every view.">Clear lines</button>
+            <span style="flex:1"></span>
+            <span class="trace-label" id="secRefNote">Type a value and add a line, or click one straight onto the display.</span>
+          </div>
+          <!-- Every line now up, each its own Remove button. Written by
+               refLinesRenderList() on every change, so it cannot disagree with the
+               lines actually painted. -->
+          <div class="sec-bar" id="secRefList"></div>
+        </div>
+        <!-- HEADER VALUES panel, collapsed behind #secHdrToggle. It is the LAST
+             block in the section on purpose: everything above the canvas is
+             pinned to keep #secCanvas at its measured top, so a panel that can
+             open and close has to live BELOW the canvas where its height moves
+             nothing. Same key/value markup as the Workbench card (.hdr-grid /
+             .hdr-grp / .kv), painted by the same renderHdrGroups(). -->
+        <div id="secHdrWrap" style="display:none;">
+          <div class="card" style="margin-top:12px;">
+            <div class="ch">
+              <h2>Header values</h2>
+              <span class="hint">What this file and this trace actually carry in their headers</span>
+              <div class="right">
+                <span class="pill neutral mono" id="secHdrWhich">Move the cursor over the section</span>
+                <button class="btn sm" id="secHdrUnpin" style="display:none;" title="Stop holding this trace - the values follow the cursor across the section again">Follow the cursor</button>
+              </div>
+            </div>
+            <div class="cb" style="padding-top:12px;">
+              <div class="sec-hdr-sub">This trace</div>
+              <div class="hdr-grid" id="secHdrTraceGrid">
+                <div class="hdr-empty">Open a file, then move the cursor over the section to read a trace header.</div>
+              </div>
+              <div class="sec-hdr-sub">This file</div>
+              <div class="hdr-grid" id="secHdrFileGrid">
+                <div class="hdr-empty">Open a file to read its file header.</div>
+              </div>
+              <div class="sec-hdr-note" id="secHdrFileNote" style="display:none;"></div>
+              <div id="secHdrTextWrap" style="display:none;">
+                <div class="sec-hdr-sub" id="secHdrTextTitle">Text header</div>
+                <div class="sec-hdr-note" id="secHdrTextNote" style="display:none;"></div>
+                <pre class="hdr-text" id="secHdrText"></pre>
+              </div>
+            </div>
+          </div>
+        </div>
       </section>
 
       <!-- ===================== SPS 2.1 ===================== -->
@@ -2530,8 +2637,8 @@ canvas.sec-attr{height:172px;margin-top:8px;}
               <button class="segbtn on" id="specDbLin">Linear</button>
               <button class="segbtn" id="specDbDb">dB</button>
             </span>
-            <label class="ctl-lbl" title="First trace of the averaging window (blank = start)">From <input type="number" id="specTr0" class="numin" min="0" step="1" placeholder="0"></label>
-            <label class="ctl-lbl" title="End trace, exclusive (blank = end)">To <input type="number" id="specTr1" class="numin" min="0" step="1" placeholder="end"></label>
+            <label class="ctl-lbl" title="First trace of the averaging window (blank = start)">From <input type="number" id="specTr0" class="numin" min="1" step="1" placeholder="1"></label>
+            <label class="ctl-lbl" title="Last trace of the averaging window (blank = end)">To <input type="number" id="specTr1" class="numin" min="1" step="1" placeholder="end"></label>
             <button class="btn sm" id="specAvgCompute">Recompute</button>
             <span class="seg" title="Zoom the spectrum (wheel over the canvas)">
               <button class="segbtn" id="specAvgZoomOut" title="Zoom out">&minus;</button>
@@ -2544,7 +2651,7 @@ canvas.sec-attr{height:172px;margin-top:8px;}
           <!-- SPECTROGRAM controls -->
           <span id="specCtlsGram" class="hidden" style="display:inline-flex;align-items:center;gap:8px;">
             <button class="btn sm" id="specPrev" title="Previous trace">‹ Prev</button>
-            <label class="ctl-lbl">Trace # <input type="number" id="specTraceIdx" class="numin" value="0" min="0" step="1"></label>
+            <label class="ctl-lbl">Trace # <input type="number" id="specTraceIdx" class="numin" value="1" min="1" step="1"></label>
             <button class="btn sm" id="specNext" title="Next trace">Next ›</button>
             <label class="ctl-lbl" title="STFT window length (samples); hop = winLen/2">Window <input type="number" id="specWin" class="numin" value="128" min="8" step="8"></label>
             <span class="seg" title="Zoom the spectrogram (wheel over the canvas)">
@@ -2586,7 +2693,7 @@ canvas.sec-attr{height:172px;margin-top:8px;}
           <button class="btn sm" id="wbPickBtn">Pick file…</button>
           <span class="seg" title="Step through traces of the picked file to preview before adding">
             <button class="segbtn" id="wbPrevBtn" title="Previous trace">&lsaquo;</button>
-            <label class="ctl-lbl" style="padding:0 6px;">Trace # <input type="number" id="wbIndex" class="numin" value="0" min="0" step="1"></label>
+            <label class="ctl-lbl" style="padding:0 6px;">Trace # <input type="number" id="wbIndex" class="numin" value="1" min="1" step="1"></label>
             <button class="segbtn" id="wbNextBtn" title="Next trace">&rsaquo;</button>
           </span>
           <button class="btn sm" id="wbAddPreviewBtn" title="Add the previewed trace to the collection" disabled>Add this trace</button>
@@ -2982,7 +3089,7 @@ canvas.sec-attr{height:172px;margin-top:8px;}
           <div class="cb">
             <div class="sec-bar" style="flex-wrap:wrap;">
               <button class="btn btn-primary sm" id="swQcLoadBtn" title="Open a recorded sweep (SEG-Y / SEG-D / SEG-2 / SU) and compare the chosen trace against the designed sweep">Load measured sweep…</button>
-              <label class="ctl-lbl" title="Which trace of the measured file to QC (0-based)">Trace # <input type="number" id="swQcTraceIdx" class="numin" value="0" min="0" step="1" style="width:70px;"></label>
+              <label class="ctl-lbl" title="Which trace of the measured file to QC (1-based)">Trace # <input type="number" id="swQcTraceIdx" class="numin" value="1" min="1" step="1" style="width:70px;"></label>
               <button class="btn sm" id="swQcClearBtn" title="Drop the measured sweep only - the built sweep and its plots stay. To clear the whole tab use Clear, next to Build sweep.">Clear measured</button>
               <span class="trace-label" id="swQcFileLabel">No measured sweep loaded.</span>
             </div>
@@ -4106,8 +4213,8 @@ canvas.sec-attr{height:172px;margin-top:8px;}
           <label class="ctl-lbl" id="gatherOffsetWrap" style="display:none" title="The signed source-receiver offset to match nearest in each record. Signed, so a split spread keeps its side.">Offset
             <input type="number" id="gatherOffset" class="ctl" style="width:98px" step="any" value="0">
           </label>
-          <label class="ctl-lbl" id="gatherIndexWrap" style="display:none" title="Plain array position inside each record, counting from 0 - the fallback when a record carries no usable channel or offset header">Position
-            <input type="number" id="gatherIndex" class="ctl" style="width:88px" min="0" step="1" value="0">
+          <label class="ctl-lbl" id="gatherIndexWrap" style="display:none" title="Plain array position inside each record, counting from 1 - the fallback when a record carries no usable channel or offset header">Position
+            <input type="number" id="gatherIndex" class="ctl" style="width:88px" min="1" step="1" value="1">
           </label>
           <button class="btn sm" id="gatherRun" title="Read every record in the folder and build the gather. The worker reads one file at a time and cannot be cancelled, so file Prev/Next is disabled while it runs.">Run</button>
           <button class="btn sm" id="gatherExportImgBtn" title="Save this panel exactly as it is drawn - the display-state strip, both axes and the colour bar - as a PNG image at three times the screen resolution, with the file name and the time of export added underneath.">Save image…</button>

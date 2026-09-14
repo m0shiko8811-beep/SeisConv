@@ -716,6 +716,17 @@ function summarize(pf: ParsedFile) {
     // carry no such field; 0 means the file declares nothing.
     impulsePolarity: typeof pf.bh.impulsePolarity === 'number' ? pf.bh.impulsePolarity : undefined,
     vibratoryPolarity: typeof pf.bh.vibratoryPolarity === 'number' ? pf.bh.vibratoryPolarity : undefined,
+    // SEG-D channel-set descriptors; absent for every other format. Seven small
+    // numbers per set (a handful of sets on a real recorder file), so the panel
+    // can show the per-set geometry the general header only totals.
+    chanSets: pf.chanSets,
+    // The textual header, for the formats that carry one: 3200 characters on
+    // SEG-Y, at most 32 bytes of SEG-2 file-descriptor free-form, none on SEG-D.
+    // summarizeStream() has always sent this; sending it here too is what keeps
+    // the two builders of the same summary from disagreeing. SU parses to an
+    // empty string, collapsed to undefined so "empty" and "format has none" read
+    // the same way at the far end.
+    textHeader: pf.textHeader || undefined,
     errors: pf.errors,
   };
 }

@@ -11,38 +11,14 @@
 //
 // Usage:  tsx qa/oracle/ours.mjs <absolute-path-to-segy>
 // Output: one JSON object on stdout. The path is never echoed.
-import { createHash } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { parseSEGY, parseSegyMeta } from '../../core/formats/segy.ts';
 import { MAX_TRACES } from '../../core/types.ts';
-
-const CANON_NAN = 0x7fc00000;
-const NEG_ZERO = 0x80000000;
-
-/** Full-precision, format-identical decimal for one binary32 value. 9
- *  significant digits round-trip binary32 exactly; the exponent is padded to two
- *  digits so this matches Python's "%.8e" character for character. The hex bit
- *  pattern printed beside it is the authoritative comparison. */
-function canonDec(v) {
-  if (Number.isNaN(v)) return 'NaN';
-  if (!Number.isFinite(v)) return v > 0 ? 'Infinity' : '-Infinity';
-  return v.toExponential(8).replace(/e([+-])(\d)$/, 'e$10$2');
-}
-
-function preview(bits, base, ns, n = 8) {
-  const buf = new ArrayBuffer(4);
-  const u = new Uint32Array(buf);
-  const f = new Float32Array(buf);
-  const one = (i) => {
-    u[0] = bits[base + i];
-    return { hex: u[0].toString(16).padStart(8, '0'), dec: canonDec(f[0]) };
-  };
-  const first8 = [];
-  const last8 = [];
-  for (let i = 0; i < n && i < ns; i++) first8.push(one(i));
-  for (let i = Math.max(0, ns - n); i < ns; i++) last8.push(one(i));
-  return { first8, last8 };
-}
+// The hash contract lives in qa/oracle/hash.mjs so this file and
+// qa/conform/conform.mjs cannot drift into two slightly different versions of
+// it. The code there was moved out of here unchanged; this file's JSON output
+// is byte-identical to what it was before the move.
+import { hashMatrix, preview } from './hash.mjs';
 
 function main() {
   const path = process.argv[2];
@@ -98,41 +74,15 @@ function main() {
     return 5;
   }
 
-  // --- hash contract, steps 1-5 (see qa/oracle/README.md) ---------------
-  const total = tc * ns0;
-  const f32 = new Float32Array(total);
-  for (let t = 0; t < tc; t++) {
-    const s = traces[t].samples;
-    if (s) f32.set(s.subarray(0, ns0), t * ns0);
-  }
-  const bits = new Uint32Array(f32.buffer, f32.byteOffset, total);
-  let nNan = 0;
-  let nNegZero = 0;
-  for (let i = 0; i < total; i++) {
-    const b = bits[i];
-    // NaN: exponent all ones AND a nonzero mantissa.
-    if ((b & 0x7f800000) === 0x7f800000 && (b & 0x007fffff) !== 0) {
-      bits[i] = CANON_NAN;
-      nNan++;
-    } else if (b === NEG_ZERO) {
-      bits[i] = 0;
-      nNegZero++;
-    }
-  }
-
-  // Serialise as LITTLE-ENDIAN binary32 regardless of host byte order.
-  let hashBuf;
-  if (Buffer.from(new Uint32Array([1]).buffer)[0] === 1) {
-    hashBuf = Buffer.from(bits.buffer, bits.byteOffset, total * 4);
-  } else {
-    hashBuf = Buffer.alloc(total * 4);
-    for (let i = 0; i < total; i++) hashBuf.writeUInt32LE(bits[i], i * 4);
-  }
-
-  result.normalised_nan = nNan;
-  result.normalised_neg_zero = nNegZero;
-  result.sample_matrix_sha256 = createHash('sha256').update(hashBuf).digest('hex');
-  result.sample_matrix_values = total;
+  // --- hash contract, steps 1-7 (see qa/oracle/README.md) ---------------
+  // One implementation, in qa/oracle/hash.mjs, shared with the output
+  // conformance harness.
+  const m = hashMatrix(traces, tc, ns0);
+  const bits = m.bits;
+  result.normalised_nan = m.normalised_nan;
+  result.normalised_neg_zero = m.normalised_neg_zero;
+  result.sample_matrix_sha256 = m.sample_matrix_sha256;
+  result.sample_matrix_values = m.sample_matrix_values;
 
   const mid = Math.floor(tc / 2);
   result.middle_trace_index = mid;

@@ -1,761 +1,761 @@
 {
   "section:mode=vd:color=seismic:scale=max:agc=false": {
-    "hash": "e7dc1a0f-0dfcc74f-0fac88d7",
+    "hash": "38489b8f-0dfc95e3-0fac72cf",
     "w": 1116,
     "h": 514
   },
   "section:mode=vd:color=gray:scale=max:agc=false": {
-    "hash": "9c658631-0759d7ed-0c62d003",
+    "hash": "107db838-0759a742-0c62bb41",
     "w": 1116,
     "h": 514
   },
   "section:mode=vd:color=amber:scale=max:agc=false": {
-    "hash": "47b6e41c-07534a3b-090d950a",
+    "hash": "c224ad17-07531928-090d7fea",
     "w": 1116,
     "h": 514
   },
   "section:mode=vd:color=viridis:scale=max:agc=false": {
-    "hash": "fb8e3f38-052e6c03-0cd18a3a",
+    "hash": "c6549a18-052e3b10-0cd17511",
     "w": 1116,
     "h": 514
   },
   "section:mode=vd:color=grayL:scale=max:agc=false": {
-    "hash": "f0fa86da-06e15d65-0c26923a",
+    "hash": "b99b6915-06e12bcf-0c267ce3",
     "w": 1116,
     "h": 514
   },
   "section:mode=wiggle:color=seismic:scale=max:agc=false": {
-    "hash": "2b3ea35d-02e140d8-0a72e62a",
+    "hash": "ffed7066-02e13be4-0a72e399",
     "w": 1116,
     "h": 514
   },
   "section:mode=wiggle:color=gray:scale=max:agc=false": {
-    "hash": "e4a60740-02e13728-0a72e1a1",
+    "hash": "72edfff7-02e13234-0a72df10",
     "w": 1116,
     "h": 514
   },
   "section:mode=wiggle:color=amber:scale=max:agc=false": {
-    "hash": "7888bef1-02e15ee1-0a72f54b",
+    "hash": "052063c2-02e159ed-0a72f2ba",
     "w": 1116,
     "h": 514
   },
   "section:mode=wiggle:color=viridis:scale=max:agc=false": {
-    "hash": "36bd7c7f-02e16d43-0a72fc79",
+    "hash": "f30e2220-02e1684f-0a72f9e8",
     "w": 1116,
     "h": 514
   },
   "section:mode=wiggle:color=grayL:scale=max:agc=false": {
-    "hash": "7900ccf5-02e1263b-0a72d91b",
+    "hash": "6ba8d82e-02e12147-0a72d68a",
     "w": 1116,
     "h": 514
   },
   "section:mode=va:color=seismic:scale=max:agc=false": {
-    "hash": "119f59b4-02497da8-09d61261",
+    "hash": "462b7ed3-024978b4-09d60fd0",
     "w": 1116,
     "h": 514
   },
   "section:mode=va:color=gray:scale=max:agc=false": {
-    "hash": "efff0b06-024a4ad7-09d678ac",
+    "hash": "fd4053e5-024a45e3-09d6761b",
     "w": 1116,
     "h": 514
   },
   "section:mode=va:color=amber:scale=max:agc=false": {
-    "hash": "ba0efd51-02499e68-09d622cc",
+    "hash": "a660c0e2-02499974-09d6203b",
     "w": 1116,
     "h": 514
   },
   "section:mode=va:color=viridis:scale=max:agc=false": {
-    "hash": "4788c1bc-0249aa25-09d628be",
+    "hash": "ee4f70cb-0249a531-09d6262d",
     "w": 1116,
     "h": 514
   },
   "section:mode=va:color=grayL:scale=max:agc=false": {
-    "hash": "759c5f0d-024a3aa5-09d67093",
+    "hash": "37ad27d6-024a35b1-09d66e02",
     "w": 1116,
     "h": 514
   },
   "section:mode=vdwig:color=seismic:scale=max:agc=false": {
-    "hash": "5198f041-0c97b55d-0efa2d6d",
+    "hash": "aff73506-0ca38fe7-0eff46b2",
     "w": 1116,
     "h": 514
   },
   "section:mode=vdwig:color=gray:scale=max:agc=false": {
-    "hash": "806a4f9a-06c0a4b5-0c1558be",
+    "hash": "3344949c-06b78974-0c1037eb",
     "w": 1116,
     "h": 514
   },
   "section:mode=vdwig:color=amber:scale=max:agc=false": {
-    "hash": "e2ce7b01-06b9dab5-09255177",
+    "hash": "2ba7960a-06b3b99b-091717e2",
     "w": 1116,
     "h": 514
   },
   "section:mode=vdwig:color=viridis:scale=max:agc=false": {
-    "hash": "b22cb718-04d72078-0c767de9",
+    "hash": "0c95cd2e-04c50887-0c718060",
     "w": 1116,
     "h": 514
   },
   "section:mode=vdwig:color=grayL:scale=max:agc=false": {
-    "hash": "b817ac04-0655e158-0bdfedb3",
+    "hash": "70a20903-0649f0f8-0bd98ae0",
     "w": 1116,
     "h": 514
   },
   "section:mode=vd:color=seismic:scale=pct:agc=false": {
-    "hash": "5d8ffc44-0dca781f-0f7a13f0",
+    "hash": "0673f514-0dca404e-0f79f7df",
     "w": 1116,
     "h": 514
   },
   "section:mode=vd:color=gray:scale=pct:agc=false": {
-    "hash": "fb3819d7-0759d600-0c62ceae",
+    "hash": "9f290b95-0759a35e-0c62b8da",
     "w": 1116,
     "h": 514
   },
   "section:mode=vd:color=amber:scale=pct:agc=false": {
-    "hash": "9893a6e9-07539716-0930a38c",
+    "hash": "d807cb40-0753656a-093092e5",
     "w": 1116,
     "h": 514
   },
   "section:mode=vd:color=viridis:scale=pct:agc=false": {
-    "hash": "73b769f3-053370c9-0ccedde5",
+    "hash": "bc41ae32-05333f3b-0ccec710",
     "w": 1116,
     "h": 514
   },
   "section:mode=vd:color=grayL:scale=pct:agc=false": {
-    "hash": "d2ee53f3-06e10cf9-0c266afd",
+    "hash": "add0e62d-06e0dbbe-0c2655f2",
     "w": 1116,
     "h": 514
   },
   "section:mode=wiggle:color=seismic:scale=pct:agc=false": {
-    "hash": "2dff2093-02eb7604-0a7871a8",
+    "hash": "4a90041c-02eb7110-0a786f17",
     "w": 1116,
     "h": 514
   },
   "section:mode=wiggle:color=gray:scale=pct:agc=false": {
-    "hash": "428421e7-02eb6bd9-0a786ccf",
+    "hash": "85607af8-02eb66e5-0a786a3e",
     "w": 1116,
     "h": 514
   },
   "section:mode=wiggle:color=amber:scale=pct:agc=false": {
-    "hash": "ebbfffcf-02eb943d-0a7880d3",
+    "hash": "a0570330-02eb8f49-0a787e42",
     "w": 1116,
     "h": 514
   },
   "section:mode=wiggle:color=viridis:scale=pct:agc=false": {
-    "hash": "636b0259-02eba26f-0a7887f7",
+    "hash": "0ee40dba-02eb9d7b-0a788566",
     "w": 1116,
     "h": 514
   },
   "section:mode=wiggle:color=grayL:scale=pct:agc=false": {
-    "hash": "6d0ea6c9-02eb5956-0a786388",
+    "hash": "75ddee2a-02eb5462-0a7860f7",
     "w": 1116,
     "h": 514
   },
   "section:mode=va:color=seismic:scale=pct:agc=false": {
-    "hash": "3c39c462-025bcbfc-09e81e3b",
+    "hash": "4131dfd9-025bc708-09e81baa",
     "w": 1116,
     "h": 514
   },
   "section:mode=va:color=gray:scale=pct:agc=false": {
-    "hash": "7ce6aa99-025bc0c4-09e818fa",
+    "hash": "a77ba8fa-025bbbd0-09e81669",
     "w": 1116,
     "h": 514
   },
   "section:mode=va:color=amber:scale=pct:agc=false": {
-    "hash": "54a5c7ef-025beac4-09e82db2",
+    "hash": "a9ed8d90-025be5d0-09e82b21",
     "w": 1116,
     "h": 514
   },
   "section:mode=va:color=viridis:scale=pct:agc=false": {
-    "hash": "c5409d32-025bf879-09e83498",
+    "hash": "a5b9efa9-025bf385-09e83207",
     "w": 1116,
     "h": 514
   },
   "section:mode=va:color=grayL:scale=pct:agc=false": {
-    "hash": "74474acf-025c8931-09e87ccb",
+    "hash": "28de4e30-025c843d-09e87a3a",
     "w": 1116,
     "h": 514
   },
   "section:mode=vdwig:color=seismic:scale=pct:agc=false": {
-    "hash": "55695a8a-0c6a4d95-0ecea198",
+    "hash": "f0dde3b1-0c78f3c7-0ed4c42d",
     "w": 1116,
     "h": 514
   },
   "section:mode=vdwig:color=gray:scale=pct:agc=false": {
-    "hash": "35876450-06c18228-0c15c7b9",
+    "hash": "849bd2b8-06bb031d-0c1226fe",
     "w": 1116,
     "h": 514
   },
   "section:mode=vdwig:color=amber:scale=pct:agc=false": {
-    "hash": "439ad72c-06bb5641-0945b5f8",
+    "hash": "b88e9306-06b7d705-09389fae",
     "w": 1116,
     "h": 514
   },
   "section:mode=vdwig:color=viridis:scale=pct:agc=false": {
-    "hash": "d2acb0eb-04deee5f-0c74cf59",
+    "hash": "1dcdde2e-04cfbb38-0c71c0fb",
     "w": 1116,
     "h": 514
   },
   "section:mode=vdwig:color=grayL:scale=pct:agc=false": {
-    "hash": "5cfa96d2-0658f805-0be18a26",
+    "hash": "d2b31db7-06503f15-0bdcd935",
     "w": 1116,
     "h": 514
   },
   "section:mode=vd:color=seismic:scale=trace:agc=false": {
-    "hash": "efeb1165-0bde956f-0d8fd16d",
+    "hash": "2cb0c253-0bde660b-0d8fbb4b",
     "w": 1116,
     "h": 514
   },
   "section:mode=vd:color=gray:scale=trace:agc=false": {
-    "hash": "3a076f8b-07573e21-0c61855b",
+    "hash": "a164c608-07570bdb-0c616f98",
     "w": 1116,
     "h": 514
   },
   "section:mode=vd:color=amber:scale=trace:agc=false": {
-    "hash": "3c470ef8-07505a85-0a805c92",
+    "hash": "65e0b348-07502da7-0a804bde",
     "w": 1116,
     "h": 514
   },
   "section:mode=vd:color=viridis:scale=trace:agc=false": {
-    "hash": "0ebd1097-0575e1d2-0cb4e1c4",
+    "hash": "bb955f47-0575b650-0cb4cd4c",
     "w": 1116,
     "h": 514
   },
   "section:mode=vd:color=grayL:scale=trace:agc=false": {
-    "hash": "e15be669-06fa0cfd-0c32ec35",
+    "hash": "34e48e49-06f9db12-0c32d6bc",
     "w": 1116,
     "h": 514
   },
   "section:mode=wiggle:color=seismic:scale=trace:agc=false": {
-    "hash": "99b672fe-031c48b4-0a962d05",
+    "hash": "c7694f6d-031c43c0-0a962a74",
     "w": 1116,
     "h": 514
   },
   "section:mode=wiggle:color=gray:scale=trace:agc=false": {
-    "hash": "00567d1a-031e36b6-0a9722df",
+    "hash": "e6e2c5e1-031e31c2-0a97204e",
     "w": 1116,
     "h": 514
   },
   "section:mode=wiggle:color=amber:scale=trace:agc=false": {
-    "hash": "a08321e9-031e5ef5-0a9736d7",
+    "hash": "682d438a-031e5a01-0a973446",
     "w": 1116,
     "h": 514
   },
   "section:mode=wiggle:color=viridis:scale=trace:agc=false": {
-    "hash": "4b7bb568-031c751f-0a964354",
+    "hash": "79da954f-031c702b-0a9640c3",
     "w": 1116,
     "h": 514
   },
   "section:mode=wiggle:color=grayL:scale=trace:agc=false": {
-    "hash": "fe333e30-031d029e-0a9689cb",
+    "hash": "fd136f27-031cfdaa-0a96873a",
     "w": 1116,
     "h": 514
   },
   "section:mode=va:color=seismic:scale=trace:agc=false": {
-    "hash": "8e7a5a62-0303c3a1-0a971916",
+    "hash": "937275d9-0303bead-0a971685",
     "w": 1116,
     "h": 514
   },
   "section:mode=va:color=gray:scale=trace:agc=false": {
-    "hash": "192364d6-0303b939-0a971400",
+    "hash": "008a90b5-0303b445-0a97116f",
     "w": 1116,
     "h": 514
   },
   "section:mode=va:color=amber:scale=trace:agc=false": {
-    "hash": "afe43749-0303e13a-0a9727dc",
+    "hash": "ce9baeaa-0303dc46-0a97254b",
     "w": 1116,
     "h": 514
   },
   "section:mode=va:color=viridis:scale=trace:agc=false": {
-    "hash": "4db8eb1a-0303f01e-0a972f73",
+    "hash": "344533e1-0303eb2a-0a972ce2",
     "w": 1116,
     "h": 514
   },
   "section:mode=va:color=grayL:scale=trace:agc=false": {
-    "hash": "7356f8a9-03047e63-0a977637",
+    "hash": "a4fc124a-0304796f-0a9773a6",
     "w": 1116,
     "h": 514
   },
   "section:mode=vdwig:color=seismic:scale=trace:agc=false": {
-    "hash": "8f51ead7-0a88f8dd-0d0dcaa5",
+    "hash": "cde7d21a-0abbcb1d-0d2016d2",
     "w": 1116,
     "h": 514
   },
   "section:mode=vdwig:color=gray:scale=trace:agc=false": {
-    "hash": "63034adc-06b57605-0c0f9bf6",
+    "hash": "7f9e400e-06c88cc8-0c1944c5",
     "w": 1116,
     "h": 514
   },
   "section:mode=vdwig:color=amber:scale=trace:agc=false": {
-    "hash": "a2576fee-06af5f07-0a799f02",
+    "hash": "411f885d-06c4757c-0a76cca0",
     "w": 1116,
     "h": 514
   },
   "section:mode=vdwig:color=viridis:scale=trace:agc=false": {
-    "hash": "22288120-051f4ac8-0c55fdf7",
+    "hash": "6ebbbdac-0524e1f9-0c61fc78",
     "w": 1116,
     "h": 514
   },
   "section:mode=vdwig:color=grayL:scale=trace:agc=false": {
-    "hash": "e11330b0-066705a6-0be8622b",
+    "hash": "4af168d9-0677846e-0bf0c096",
     "w": 1116,
     "h": 514
   },
   "section:mode=vd:color=seismic:scale=max:agc=true": {
-    "hash": "532bb512-0ba371e3-0d53a7b2",
+    "hash": "864451d2-0ba34106-0d539193",
     "w": 1116,
     "h": 514
   },
   "section:mode=vd:color=gray:scale=max:agc=true": {
-    "hash": "fda7e717-0757c319-0c61c653",
+    "hash": "b8e3ad0c-07578e81-0c61af54",
     "w": 1116,
     "h": 514
   },
   "section:mode=vd:color=amber:scale=max:agc=true": {
-    "hash": "f63eb177-07526305-0aabce45",
+    "hash": "98efe587-07523317-0aabbb0f",
     "w": 1116,
     "h": 514
   },
   "section:mode=vd:color=viridis:scale=max:agc=true": {
-    "hash": "5c33976a-0580211e-0cb7cbfb",
+    "hash": "a7b492cd-057fee5b-0cb7b6c9",
     "w": 1116,
     "h": 514
   },
   "section:mode=vd:color=grayL:scale=max:agc=true": {
-    "hash": "d1d3b664-06fb5db0-0c339413",
+    "hash": "7d79ee07-06fb28cb-0c337cdb",
     "w": 1116,
     "h": 514
   },
   "section:mode=wiggle:color=seismic:scale=max:agc=true": {
-    "hash": "9401552e-030d2014-0a919141",
+    "hash": "167ed8dd-030d1b20-0a918eb0",
     "w": 1116,
     "h": 514
   },
   "section:mode=wiggle:color=gray:scale=max:agc=true": {
-    "hash": "9f865866-030d156c-0a918c6f",
+    "hash": "a106f505-030d1078-0a9189de",
     "w": 1116,
     "h": 514
   },
   "section:mode=wiggle:color=amber:scale=max:agc=true": {
-    "hash": "a39f98ce-030d3cf1-0a919fe0",
+    "hash": "3ff8f7bd-030d37fd-0a919d4f",
     "w": 1116,
     "h": 514
   },
   "section:mode=wiggle:color=viridis:scale=max:agc=true": {
-    "hash": "517a47b0-030d4c7f-0a91a790",
+    "hash": "9d7cd6a7-030d478b-0a91a4ff",
     "w": 1116,
     "h": 514
   },
   "section:mode=wiggle:color=grayL:scale=max:agc=true": {
-    "hash": "8359e3f6-030dd96a-0a91edc9",
+    "hash": "ebec9995-030dd476-0a91eb38",
     "w": 1116,
     "h": 514
   },
   "section:mode=va:color=seismic:scale=max:agc=true": {
-    "hash": "28ed5379-031388a8-0aabd8c6",
+    "hash": "312feb1a-031383b4-0aabd635",
     "w": 1116,
     "h": 514
   },
   "section:mode=va:color=gray:scale=max:agc=true": {
-    "hash": "ec42ddbe-0313818f-0aabd590",
+    "hash": "d6dac02d-03137c9b-0aabd2ff",
     "w": 1116,
     "h": 514
   },
   "section:mode=va:color=amber:scale=max:agc=true": {
-    "hash": "ec359d07-0313a927-0aabe92d",
+    "hash": "b77b3b58-0313a433-0aabe69c",
     "w": 1116,
     "h": 514
   },
   "section:mode=va:color=viridis:scale=max:agc=true": {
-    "hash": "3f22d3c1-0313b525-0aabef23",
+    "hash": "8db56192-0313b031-0aabec92",
     "w": 1116,
     "h": 514
   },
   "section:mode=va:color=grayL:scale=max:agc=true": {
-    "hash": "14ff3fc3-0312d075-0aab7d99",
+    "hash": "c727b00c-0312cb81-0aab7b08",
     "w": 1116,
     "h": 514
   },
   "section:mode=vdwig:color=seismic:scale=max:agc=true": {
-    "hash": "cd5ba3eb-0a3987c1-0cc78db7",
+    "hash": "92896f16-0a74ea6b-0cdd0f0c",
     "w": 1116,
     "h": 514
   },
   "section:mode=vdwig:color=gray:scale=max:agc=true": {
-    "hash": "e501c7d4-06a0b930-0c053827",
+    "hash": "8a929222-06b81c38-0c111de5",
     "w": 1116,
     "h": 514
   },
   "section:mode=vdwig:color=amber:scale=max:agc=true": {
-    "hash": "07c6326e-069bad3d-0a997e3e",
+    "hash": "019c4841-06b5083a-0a9750d2",
     "w": 1116,
     "h": 514
   },
   "section:mode=vdwig:color=viridis:scale=max:agc=true": {
-    "hash": "70b30bee-0513f2cc-0c4d4baf",
+    "hash": "d6e23feb-051c3f91-0c5bff39",
     "w": 1116,
     "h": 514
   },
   "section:mode=vdwig:color=grayL:scale=max:agc=true": {
-    "hash": "bf155126-065341bb-0bde816e",
+    "hash": "18ab4326-0667b387-0be8e578",
     "w": 1116,
     "h": 514
   },
   "section:mode=vd:color=seismic:scale=pct:agc=true": {
-    "hash": "85f880cd-0b7bcab6-0d2c7b46",
+    "hash": "36fc1f2a-0b7b9aff-0d2c65ca",
     "w": 1116,
     "h": 514
   },
   "section:mode=vd:color=gray:scale=pct:agc=true": {
-    "hash": "146a62cb-07585909-0c6210e9",
+    "hash": "c0af0df3-075822d2-0c61f940",
     "w": 1116,
     "h": 514
   },
   "section:mode=vd:color=amber:scale=pct:agc=true": {
-    "hash": "3e9e65b9-0752eccd-0ac6cabb",
+    "hash": "dee7a9e6-0752bc17-0ac6b7e2",
     "w": 1116,
     "h": 514
   },
   "section:mode=vd:color=viridis:scale=pct:agc=true": {
-    "hash": "c53223f3-05872a9e-0cb2fa00",
+    "hash": "c0b6c245-0586f832-0cb2e54e",
     "w": 1116,
     "h": 514
   },
   "section:mode=vd:color=grayL:scale=pct:agc=true": {
-    "hash": "5281b8e8-06ff3593-0c357fa8",
+    "hash": "632ec322-06feff42-0c3567fd",
     "w": 1116,
     "h": 514
   },
   "section:mode=wiggle:color=seismic:scale=pct:agc=true": {
-    "hash": "8c31827d-0317d965-0a97b27f",
+    "hash": "06b315c6-0317d471-0a97afee",
     "w": 1116,
     "h": 514
   },
   "section:mode=wiggle:color=gray:scale=pct:agc=true": {
-    "hash": "791ff714-0317ceca-0a97ad4d",
+    "hash": "d6285273-0317c9d6-0a97aabc",
     "w": 1116,
     "h": 514
   },
   "section:mode=wiggle:color=amber:scale=pct:agc=true": {
-    "hash": "194335dc-0317f658-0a97c0f5",
+    "hash": "22298f2b-0317f164-0a97be64",
     "w": 1116,
     "h": 514
   },
   "section:mode=wiggle:color=viridis:scale=pct:agc=true": {
-    "hash": "984e12d3-031805d0-0a97c8ce",
+    "hash": "b5e93b5c-031800dc-0a97c63d",
     "w": 1116,
     "h": 514
   },
   "section:mode=wiggle:color=grayL:scale=pct:agc=true": {
-    "hash": "352e8f58-0317185d-0a9752ee",
+    "hash": "54b7c6ff-03171369-0a97505d",
     "w": 1116,
     "h": 514
   },
   "section:mode=va:color=seismic:scale=pct:agc=true": {
-    "hash": "54dfda4c-032299ca-0aba37f5",
+    "hash": "26bcbb1b-032294d6-0aba3564",
     "w": 1116,
     "h": 514
   },
   "section:mode=va:color=gray:scale=pct:agc=true": {
-    "hash": "538059ec-03229233-0aba3462",
+    "hash": "cdd943fb-03228d3f-0aba31d1",
     "w": 1116,
     "h": 514
   },
   "section:mode=va:color=amber:scale=pct:agc=true": {
-    "hash": "7235336b-0322b9bc-0aba47ee",
+    "hash": "c710a9e4-0322b4c8-0aba455d",
     "w": 1116,
     "h": 514
   },
   "section:mode=va:color=viridis:scale=pct:agc=true": {
-    "hash": "cf9a08bc-0322c647-0aba4e52",
+    "hash": "7660b7cb-0322c153-0aba4bc1",
     "w": 1116,
     "h": 514
   },
   "section:mode=va:color=grayL:scale=pct:agc=true": {
-    "hash": "726cd394-0321dbed-0ab9d9c6",
+    "hash": "16f4c6f3-0321d6f9-0ab9d735",
     "w": 1116,
     "h": 514
   },
   "section:mode=vdwig:color=seismic:scale=pct:agc=true": {
-    "hash": "d6e6371b-0a15b137-0ca67493",
+    "hash": "8646d60c-0a5308ce-0cbc532d",
     "w": 1116,
     "h": 514
   },
   "section:mode=vdwig:color=gray:scale=pct:agc=true": {
-    "hash": "c10d47a3-06a36d53-0c068af1",
+    "hash": "54c8d263-06bc8caf-0c134d7f",
     "w": 1116,
     "h": 514
   },
   "section:mode=vdwig:color=amber:scale=pct:agc=true": {
-    "hash": "89af9bce-069e6606-0ab3de2b",
+    "hash": "f52a8e9e-06b963ca-0ab293c9",
     "w": 1116,
     "h": 514
   },
   "section:mode=vdwig:color=viridis:scale=pct:agc=true": {
-    "hash": "ff717dd7-051fbedc-0c4a721e",
+    "hash": "46183e80-05297449-0c5a02ca",
     "w": 1116,
     "h": 514
   },
   "section:mode=vdwig:color=grayL:scale=pct:agc=true": {
-    "hash": "435dfac2-06593a97-0be1748c",
+    "hash": "5bc25c5f-066f619e-0becb28a",
     "w": 1116,
     "h": 514
   },
   "section:mode=vd:color=seismic:scale=trace:agc=true": {
-    "hash": "87696f25-0b4887c8-0cf9744c",
+    "hash": "defdbfc8-0b485713-0cf95d54",
     "w": 1116,
     "h": 514
   },
   "section:mode=vd:color=gray:scale=trace:agc=true": {
-    "hash": "53c3c889-0756df7b-0c6155a3",
+    "hash": "aa0ea173-0756ad78-0c613fea",
     "w": 1116,
     "h": 514
   },
   "section:mode=vd:color=amber:scale=trace:agc=true": {
-    "hash": "bebddd4b-0750fa49-0ae8cbd5",
+    "hash": "1a9bc45d-0750cc5d-0ae8babf",
     "w": 1116,
     "h": 514
   },
   "section:mode=vd:color=viridis:scale=trace:agc=true": {
-    "hash": "43f13347-05912bf1-0caca7fd",
+    "hash": "799bdf36-0590f951-0cac93b0",
     "w": 1116,
     "h": 514
   },
   "section:mode=vd:color=grayL:scale=trace:agc=true": {
-    "hash": "e30f340a-070395e3-0c37b038",
+    "hash": "51c4d425-070361ac-0c37998a",
     "w": 1116,
     "h": 514
   },
   "section:mode=wiggle:color=seismic:scale=trace:agc=true": {
-    "hash": "f256703e-0327adbe-0aa09973",
+    "hash": "5e3b66ad-0327a8ca-0aa096e2",
     "w": 1116,
     "h": 514
   },
   "section:mode=wiggle:color=gray:scale=trace:agc=true": {
-    "hash": "ade07f28-0327a44b-0aa0951c",
+    "hash": "ec044d0f-03279f57-0aa0928b",
     "w": 1116,
     "h": 514
   },
   "section:mode=wiggle:color=amber:scale=trace:agc=true": {
-    "hash": "f05d7b72-0327cc61-0aa0a8f2",
+    "hash": "79c44be9-0327c76d-0aa0a661",
     "w": 1116,
     "h": 514
   },
   "section:mode=wiggle:color=viridis:scale=trace:agc=true": {
-    "hash": "3c7350b8-0327da29-0aa0afc2",
+    "hash": "b2bda41f-0327d535-0aa0ad31",
     "w": 1116,
     "h": 514
   },
   "section:mode=wiggle:color=grayL:scale=trace:agc=true": {
-    "hash": "d6c326ff-0328660f-0aa0f56b",
+    "hash": "846f9ca0-0328611b-0aa0f2da",
     "w": 1116,
     "h": 514
   },
   "section:mode=va:color=seismic:scale=trace:agc=true": {
-    "hash": "edefe093-0335e98a-0accde46",
+    "hash": "0a80c41c-0335e496-0accdbb5",
     "w": 1116,
     "h": 514
   },
   "section:mode=va:color=gray:scale=trace:agc=true": {
-    "hash": "726f8396-0335e176-0accda81",
+    "hash": "e4491075-0335dc82-0accd7f0",
     "w": 1116,
     "h": 514
   },
   "section:mode=va:color=amber:scale=trace:agc=true": {
-    "hash": "dbaa6da3-03360957-0accee39",
+    "hash": "d07ab4ac-03360463-0acceba8",
     "w": 1116,
     "h": 514
   },
   "section:mode=va:color=viridis:scale=trace:agc=true": {
-    "hash": "dcb439a3-03361607-0accf4a3",
+    "hash": "d18480ac-03361113-0accf212",
     "w": 1116,
     "h": 514
   },
   "section:mode=va:color=grayL:scale=trace:agc=true": {
-    "hash": "bdf7c763-0336a512-0acd3bda",
+    "hash": "15659f6c-0336a01e-0acd3949",
     "w": 1116,
     "h": 514
   },
   "section:mode=vdwig:color=seismic:scale=trace:agc=true": {
-    "hash": "ff8d9c8b-09e62708-0c7b7a36",
+    "hash": "2b407351-0a255fed-0c918169",
     "w": 1116,
     "h": 514
   },
   "section:mode=vdwig:color=gray:scale=trace:agc=true": {
-    "hash": "91236a13-06a6d0a0-0c0832a2",
+    "hash": "f7872a8c-06c1ce6c-0c15e2f9",
     "w": 1116,
     "h": 514
   },
   "section:mode=vdwig:color=amber:scale=trace:agc=true": {
-    "hash": "17959875-06a17af3-0ad5e3f3",
+    "hash": "8cc595c8-06be4169-0ad5b39c",
     "w": 1116,
     "h": 514
   },
   "section:mode=vdwig:color=viridis:scale=trace:agc=true": {
-    "hash": "8d7c5767-052ef48c-0c46290e",
+    "hash": "377eba42-053a3cd1-0c569d72",
     "w": 1116,
     "h": 514
   },
   "section:mode=vdwig:color=grayL:scale=trace:agc=true": {
-    "hash": "24a7d5c8-066275e6-0be6059d",
+    "hash": "17f25c83-067a7879-0bf232a9",
     "w": 1116,
     "h": 514
   },
   "section:exc-sweep:mode=wiggle:exc=0.5": {
-    "hash": "e7d2afbd-030d8321-0a8e50b9",
+    "hash": "4a90041c-02eb7110-0a786f17",
     "w": 1116,
     "h": 514
   },
   "section:exc-sweep:mode=wiggle:exc=1": {
-    "hash": "e7d2afbd-030d8321-0a8e50b9",
+    "hash": "4a90041c-02eb7110-0a786f17",
     "w": 1116,
     "h": 514
   },
   "section:exc-sweep:mode=wiggle:exc=2": {
-    "hash": "e7d2afbd-030d8321-0a8e50b9",
+    "hash": "4a90041c-02eb7110-0a786f17",
     "w": 1116,
     "h": 514
   },
   "section:exc-sweep:mode=va:exc=0.5": {
-    "hash": "bbce77d3-026d0f88-09faf866",
+    "hash": "d969a05c-026d0a94-09faf5d5",
     "w": 1116,
     "h": 514
   },
   "section:exc-sweep:mode=va:exc=1": {
-    "hash": "bbce77d3-026d0f88-09faf866",
+    "hash": "d969a05c-026d0a94-09faf5d5",
     "w": 1116,
     "h": 514
   },
   "section:exc-sweep:mode=va:exc=2": {
-    "hash": "bbce77d3-026d0f88-09faf866",
+    "hash": "d969a05c-026d0a94-09faf5d5",
     "w": 1116,
     "h": 514
   },
   "section:exc-sweep:mode=vdwig:exc=0.5": {
-    "hash": "f6cd6bed-0c6116dc-0ecb76bc",
+    "hash": "b7bc101f-0c7373d9-0ed358a5",
     "w": 1116,
     "h": 514
   },
   "section:exc-sweep:mode=vdwig:exc=1": {
-    "hash": "f6cd6bed-0c6116dc-0ecb76bc",
+    "hash": "b7bc101f-0c7373d9-0ed358a5",
     "w": 1116,
     "h": 514
   },
   "section:exc-sweep:mode=vdwig:exc=2": {
-    "hash": "f6cd6bed-0c6116dc-0ecb76bc",
+    "hash": "b7bc101f-0c7373d9-0ed358a5",
     "w": 1116,
     "h": 514
   },
   "section:clip-sweep:mode=vd:clip=90": {
-    "hash": "5d8ffc44-0dca781f-0f7a13f0",
+    "hash": "0673f514-0dca404e-0f79f7df",
     "w": 1116,
     "h": 514
   },
   "section:clip-sweep:mode=wiggle:clip=90": {
-    "hash": "92be9f04-033cbb9a-0aa30b09",
+    "hash": "6e75c723-033cb6a6-0aa30878",
     "w": 1116,
     "h": 514
   },
   "section:clip-sweep:mode=va:clip=90": {
-    "hash": "982a62f6-02d278f8-0a57e86d",
+    "hash": "00bd1895-02d27404-0a57e5dc",
     "w": 1116,
     "h": 514
   },
   "section:clip-sweep:mode=vdwig:clip=90": {
-    "hash": "5ea3d98a-0b6e07fc-0ddd8929",
+    "hash": "ec1d2836-0b887933-0de70ba8",
     "w": 1116,
     "h": 514
   },
   "section:newmap:mode=vd:color=berlin": {
-    "hash": "3be95039-01b5fa9d-096e5713",
+    "hash": "835d609a-01b5d6ed-096e46ea",
     "w": 1116,
     "h": 514
   },
   "section:newmap:mode=vd:color=vik": {
-    "hash": "ec4bc4ad-0c67ec1d-0ee14273",
+    "hash": "089edfce-0c67b579-0ee1292c",
     "w": 1116,
     "h": 514
   },
   "section:newmap:mode=vd:color=grayPosBlack": {
-    "hash": "fa10d6a4-0759c61f-0c62c76c",
+    "hash": "c65b488a-0759962f-0c62b2f6",
     "w": 1116,
     "h": 514
   },
   "section:newmap:mode=vd:color=grayLPosBlack": {
-    "hash": "2d36eb75-06e20526-0c26e6e8",
+    "hash": "aa8f4237-06e1d5d7-0c26d2bb",
     "w": 1116,
     "h": 514
   },
   "section:scale=raw:mode=vd": {
-    "hash": "3873d3cd-0e055b77-0fb65a57",
+    "hash": "bc9d056e-0e052e62-0fb646ad",
     "w": 1116,
     "h": 514
   },
   "section:scale=raw:mode=wiggle": {
-    "hash": "b0335c19-02deaef2-0a7157c6",
+    "hash": "bcb15a7a-02dea9fe-0a715535",
     "w": 1116,
     "h": 514
   },
   "section:gainlaw=none:mode=vd": {
-    "hash": "02c6a2d0-0dc95e32-0f7987cd",
+    "hash": "9351c0cd-0dc927c2-0f796c86",
     "w": 1116,
     "h": 514
   },
   "section:gainlaw=tpow:mode=vd": {
-    "hash": "1129f031-0d6ae3ec-0f1b7348",
+    "hash": "3978f348-0d6aaf76-0f1b58e5",
     "w": 1116,
     "h": 514
   },
   "section:gainlaw=epow:mode=vd": {
-    "hash": "bfddac14-0dbd9a5e-0f6d7479",
+    "hash": "3b9f1377-0dbd6275-0f6d5801",
     "w": 1116,
     "h": 514
   },
   "section:gainlaw=gpow:mode=vd": {
-    "hash": "e43c838f-0d46b8bd-0ef6cac7",
+    "hash": "8a461478-0d46803f-0ef6ad5a",
     "w": 1116,
     "h": 514
   },
   "section:gainlaw=pbal:mode=vd": {
-    "hash": "a0fcd998-0c564094-0e063d3d",
+    "hash": "3d3f46f0-0c560fd5-0e062796",
     "w": 1116,
     "h": 514
   },
   "trace:waveform": {
-    "hash": "04d96f2a-02973a32-0a1f346b",
+    "hash": "310a7808-0294ed2a-0a1dc1ff",
     "w": 1116,
     "h": 514
   },
   "trace:spectrum": {
-    "hash": "8e6fac18-0265e010-09e1064b",
+    "hash": "0bea9458-0264fe0f-09e0a22c",
     "w": 1116,
     "h": 514
   },
   "spectrum:average:linear": {
-    "hash": "d18b04cc-0269dbb2-09e372b7",
+    "hash": "501e7910-0268ea9d-09e309a6",
     "w": 1116,
     "h": 514
   },
   "spectrum:average:db": {
-    "hash": "ed405c1e-02b42b19-0a2b5c5a",
+    "hash": "72d2922a-02b31fee-0a2aef1d",
     "w": 1116,
     "h": 514
   },
   "spectrum:spectrogram": {
-    "hash": "ecdb069a-04a74416-093a2d39",
+    "hash": "4830a895-04a6caf5-0939e43f",
     "w": 1116,
     "h": 514
   },
   "spectrum:fk": {
-    "hash": "5c7bbf57-054d3383-0a3cd6fd",
+    "hash": "5eb0b128-054c8c0f-0a3c7a18",
     "w": 1116,
     "h": 514
   },
   "workbench:mode=side:invert=false": {
-    "hash": "e8590b62-02b04e75-0a1ce252",
+    "hash": "3beb3132-02ac9ca6-0a1ab13f",
     "w": 1116,
     "h": 514
   },
   "workbench:mode=side:invert=true": {
-    "hash": "0ec30e4d-02ab9fd7-0a1a8ddd",
+    "hash": "88889f6e-02a7f498-0a186087",
     "w": 1116,
     "h": 514
   },
@@ -770,17 +770,17 @@
     "h": 514
   },
   "workbench:preview-trace": {
-    "hash": "c08c15b3-0135f951-04968379",
+    "hash": "75d53686-0134bcf7-0495cb5a",
     "w": 1078,
     "h": 238
   },
   "workbench:corr": {
-    "hash": "58100652-00b09deb-02ef4e68",
+    "hash": "7b7e7701-00b06c59-02ef354f",
     "w": 1078,
     "h": 158
   },
   "workbench:diff": {
-    "hash": "c8b71ff2-00d70be0-03a6c299",
+    "hash": "1d8fc88e-00d6a4be-03a6925d",
     "w": 1078,
     "h": 198
   },
@@ -790,12 +790,12 @@
     "h": 514
   },
   "velocity:semblance": {
-    "hash": "fd6fd443-04be1cd6-09312782",
+    "hash": "e6eb7449-04bdf4f8-09311546",
     "w": 1116,
     "h": 514
   },
   "velocity:zoomed": {
-    "hash": "7372e618-04bf39d4-092f49a9",
+    "hash": "29113fc6-04bf1291-092f37d8",
     "w": 1116,
     "h": 514
   },
@@ -805,12 +805,12 @@
     "h": 514
   },
   "spectrum:spectrogram:zoomed": {
-    "hash": "fcfd6b91-049adbbc-091c6896",
+    "hash": "a3e90a84-049a36db-091bfdd6",
     "w": 1116,
     "h": 514
   },
   "spectrum:fk:zoomed": {
-    "hash": "b8804903-0565d26b-09eea2f7",
+    "hash": "a87e4610-05651a71-09ee3644",
     "w": 1116,
     "h": 514
   },
@@ -820,67 +820,67 @@
     "h": 514
   },
   "zoom:trace": {
-    "hash": "e5562015-01fa4cc9-07f6c803",
+    "hash": "4543138c-01f91cf7-07f603b0",
     "w": 868,
     "h": 525
   },
   "zoom:trace:mag": {
-    "hash": "776fe632-01e51b8b-07e26804",
+    "hash": "151bae8a-01e44604-07e1cc0b",
     "w": 868,
     "h": 525
   },
   "section:zoomed": {
-    "hash": "8bafd0dd-0d84a766-0f341f38",
+    "hash": "2d5e170e-0d847f6f-0f34140c",
     "w": 1116,
     "h": 514
   },
   "zoom:section": {
-    "hash": "878cc588-0a5e4eb1-0be72562",
+    "hash": "36b4ec76-0a5dde20-0be6c4ef",
     "w": 868,
     "h": 525
   },
   "zoom:section:mag": {
-    "hash": "4a06efde-0a1bd351-0ba48bbe",
+    "hash": "4c72ff13-0a1d27da-0ba5fa54",
     "w": 868,
     "h": 525
   },
   "section:health-overlay": {
-    "hash": "bd2d1681-0dc988aa-0f7930c6",
+    "hash": "4cb697de-0dc950f3-0f79116a",
     "w": 1116,
     "h": 514
   },
   "section:fb-seeds": {
-    "hash": "fb1cd09a-0dc3572a-0f78c0f9",
+    "hash": "6daab643-0dc32aa6-0f789d66",
     "w": 1116,
     "h": 514
   },
   "section:fb-filled": {
-    "hash": "1b82a8ae-0dc31a20-0f78ad59",
+    "hash": "abebaae3-0dc2e8ee-0f788502",
     "w": 1116,
     "h": 514
   },
   "sweeps:signal": {
-    "hash": "e8ac15f4-02098b12-0446e83f",
+    "hash": "5e6d0eb2-02053a3d-0445051e",
     "w": 551,
     "h": 318
   },
   "sweeps:freq": {
-    "hash": "2cc235ff-00b01c1d-0300176b",
+    "hash": "57039263-00afdd11-02fff7db",
     "w": 551,
     "h": 318
   },
   "sweeps:spectrum": {
-    "hash": "90622c41-0100eba8-0338ad88",
+    "hash": "6be24f5d-00ffae8c-03380bd6",
     "w": 551,
     "h": 318
   },
   "sweeps:klauder": {
-    "hash": "b5dc5b0c-00b484bb-0303e9e2",
+    "hash": "3fbb2cf6-00b435c7-0303c20c",
     "w": 551,
     "h": 318
   },
   "sweeps:freq:boxzoom": {
-    "hash": "fad156ae-00b079ea-03004745",
+    "hash": "e5e83b6e-00b024be-03001ee3",
     "w": 551,
     "h": 318
   },
@@ -895,67 +895,67 @@
     "h": 318
   },
   "section:hidden-fallback": {
-    "hash": "d3f54b6d-02868037-0868177d",
+    "hash": "95e3893f-02658c55-08533d0d",
     "w": 900,
     "h": 500
   },
   "trace:hidden-fallback": {
-    "hash": "92aa0917-019adcc7-066e8307",
+    "hash": "96d89589-0199a154-066da63a",
     "w": 800,
     "h": 460
   },
   "spectrum:empty": {
-    "hash": "19551f67-0231c07c-09c816c2",
+    "hash": "54983c06-0231bada-09c81483",
     "w": 1116,
     "h": 514
   },
   "gather:by=channel:ch=12:mode=vd": {
-    "hash": "451c5da5-0dac301b-0f58250d",
+    "hash": "b43c4de5-0dab8ae0-0f579b2a",
     "w": 1103,
     "h": 514
   },
   "gather:by=channel:ch=12:mode=wiggle": {
-    "hash": "8e3157b0-02b94e59-0a21083a",
+    "hash": "b8269060-02a6ba85-0a14f196",
     "w": 1103,
     "h": 514
   },
   "gather:by=index:pos=0:mode=vd": {
-    "hash": "396af350-0da4152d-0f501466",
+    "hash": "81b79e61-0da3f80d-0f5012b1",
     "w": 1103,
     "h": 514
   },
   "section:attr-strip": {
-    "hash": "c629f46b-00f03307-0362719d",
+    "hash": "cb547b54-00efb5fb-03620708",
     "w": 1116,
     "h": 172
   },
   "section:attr-strip:zoomed": {
-    "hash": "9650d378-00ea408e-035f645f",
+    "hash": "a24c77f2-00e9b869-035f1040",
     "w": 1116,
     "h": 172
   },
   "section:reduce=off:offsets:mode=vd": {
-    "hash": "a24b4c5a-0dc9ddac-0f7a8155",
+    "hash": "3b8074b3-0dc9a4d2-0f7a659a",
     "w": 1116,
     "h": 514
   },
   "section:reduce=on:v=8:mode=vd": {
-    "hash": "22a5b4ef-0df69f67-0fa6f7a9",
+    "hash": "ac1e977c-0df668d4-0fa6dedf",
     "w": 1116,
     "h": 514
   },
   "section:reduce=on:v=20:mode=vd": {
-    "hash": "8b7d89ea-0ddf1508-0f8fe3d7",
+    "hash": "24157cd6-0ddedb44-0f8fc743",
     "w": 1116,
     "h": 514
   },
   "section:reduce=on:v=20:mode=wiggle": {
-    "hash": "a058bf69-02fd1bf1-0a8c9e2f",
+    "hash": "e5a3f360-02fd0e47-0a8c976a",
     "w": 1116,
     "h": 514
   },
   "section:spacing=offset:mode=vd": {
-    "hash": "c15d813f-0dccabb4-0f7cbac8",
+    "hash": "63baa972-0dcc8011-0f7ca6f6",
     "w": 1116,
     "h": 514
   },
@@ -965,22 +965,22 @@
     "h": 514
   },
   "section:spacing=channel:mode=vd": {
-    "hash": "0470f486-0dc9c69b-0f7a9c2a",
+    "hash": "848b1258-0dc9a3f7-0f7a8f82",
     "w": 1116,
     "h": 514
   },
   "section:spacing=offset:reduce=on:v=20:mode=vd": {
-    "hash": "a0952e79-0de25e32-0f925420",
+    "hash": "42b03412-0de22fbb-0f923d6e",
     "w": 1116,
     "h": 514
   },
   "section:spacing=offset:fallback:mode=vd": {
-    "hash": "4dbe92c5-0dca5f06-0f7a078e",
+    "hash": "abd166c0-0dca275c-0f79ebaf",
     "w": 1116,
     "h": 514
   },
   "section:clip=90:reduce=on:v=8:mode=vd": {
-    "hash": "a7f6ae29-0d6adff9-0f1b381d",
+    "hash": "d9f08c78-0d6aad2b-0f1b233a",
     "w": 1116,
     "h": 514
   }

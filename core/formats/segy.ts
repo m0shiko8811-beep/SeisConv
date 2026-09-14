@@ -338,11 +338,35 @@ export function writeSEGY(pd: ParsedFile, rev: number): Bytes {
   // (e.g. an aux/timebreak) under-allocates `out` and the per-trace write below
   // runs past the buffer end ('Offset is outside the bounds of the DataView').
   const spt = trc.reduce((m, t) => Math.max(m, t.nSamples || 0), 0);
-  // The samples-per-trace fields are 16-bit: ns > 65535 CANNOT be represented in
-  // SEG-Y. Refuse loudly - the old clamp silently truncated every longer trace.
-  if (spt > 65535)
-    throw new Error(`trace has ${spt} samples; SEG-Y max 65535 - resample or split before export`);
+  // The samples-per-trace fields are 16-bit, and the ceiling depends on the
+  // revision being declared. Rev 1 defines EVERY binary-header and trace-header
+  // value as a two's complement integer (rev 1.0 printed page 6 and page 12), so
+  // its 16-bit fields stop at 32767; a larger count would be written as a NEGATIVE
+  // number in a file claiming rev 1, and rev 1 has no extended count field to
+  // escape into (3269-3272 is rev 2 only). Rev 2.0 changed that sentence to
+  // "two's complement or unsigned" (printed page 6), which is what allows 65535
+  // there. Refuse loudly - the old clamp silently truncated every longer trace.
+  const maxNs = rev <= 1 ? 32767 : 65535;
+  if (spt > maxNs)
+    throw new Error(
+      `trace has ${spt} samples; SEG-Y rev ${rev} max ${maxNs} - resample or split before export` +
+        (rev <= 1 ? ' (SEG-Y Rev 2 allows up to 65535)' : '')
+    );
   const si = pd.bh?.sampleInt || 2000;
+  // Same two's complement ceiling as the sample count above, applied to the
+  // sample interval field (bytes 3217-3218 in the binary header): rev 1 defines
+  // every binary-header value as a two-byte two's complement integer (rev 1.0
+  // printed page 6), so a sample interval above 32767 microseconds would be
+  // written as a NEGATIVE number in a file claiming rev 0 or rev 1
+  // (qa/conform SEGY1-BH-3217-TWOS-COMPLEMENT-RANGE). Rev 2.0 changed that
+  // sentence to "two's complement or unsigned" (printed page 6), which is what
+  // allows 65535 there. Refuse loudly rather than silently write garbage.
+  const maxSi = rev <= 1 ? 32767 : 65535;
+  if (si > maxSi)
+    throw new Error(
+      `sample interval ${si}us; SEG-Y rev ${rev} max ${maxSi} - resample before export` +
+        (rev <= 1 ? ' (SEG-Y Rev 2 allows up to 65535)' : '')
+    );
   const tsz = 240 + spt * 4;
   const out = new Uint8Array(3600 + trc.length * tsz);
 
@@ -351,11 +375,15 @@ export function writeSEGY(pd: ParsedFile, rev: number): Bytes {
     `C 2 Traces: ${trc.length}  Samples: ${spt}`,
     `C 3 SI: ${si} us IEEE Float32`,
     `C 4 Input: ${pd.format} Rev ${pd.revision || 0}`,
-    `C40 END TEXTUAL HEADER`,
   ];
+  // The end-of-header marker belongs in the LAST card, card 40, not in whatever
+  // card the array above happens to end on: "C40 END EBCDIC is also acceptable
+  // but C40 END TEXTUAL HEADER is the preferred encoding" (rev 1.0 Table 1
+  // footnote 4, printed page 5; rev 2.0 Table 1 footnote 5, same page). Carrying
+  // it as a 5th array entry stamped it into card 5 and left card 40 as the stub.
   let txt = '';
   for (let i = 0; i < 40; i++) {
-    const l = lines[i] || `C${String(i + 1).padStart(2, ' ')}`;
+    const l = i === 39 ? `C40 END TEXTUAL HEADER` : lines[i] || `C${String(i + 1).padStart(2, ' ')}`;
     txt += l.slice(0, 80).padEnd(80, ' ');
   }
   // Textual header encoding: EBCDIC for rev 0/1 (rev 0 REQUIRES it; it is the
@@ -414,8 +442,16 @@ export function writeSEGY(pd: ParsedFile, rev: number): Bytes {
     // coordScalar (bytes 71-72) MUST accompany the raw coordinates below: with
     // e.g. coordScalar=-100 data, omitting it makes readers see coords 100× too
     // large. elevScalar is written alongside for the same reason.
-    if (hi(h, 'elevScalar')) w16(out, off + 68, hi(h, 'elevScalar'));
-    if (hi(h, 'coordScalar')) w16(out, off + 70, hi(h, 'coordScalar'));
+    // With no scalar on the input the field would stay 0, which rev 1 never
+    // enumerates: Table 3 rows 69-70 and 71-72 (rev 1.0 printed page 14) list
+    // "Scalar = 1, +/-10, +/-100, +/-1000, or +/-10,000" and say nothing about
+    // zero - only rev 2.0 added "A value of zero is assumed to be a scalar value
+    // of 1". So rev 0/1 output writes that 1 explicitly: identical meaning, and a
+    // value the enumeration actually lists. Rev 2 may leave the field at 0.
+    const elevScalar = hi(h, 'elevScalar') || (rev <= 1 ? 1 : 0);
+    const coordScalar = hi(h, 'coordScalar') || (rev <= 1 ? 1 : 0);
+    if (elevScalar) w16(out, off + 68, elevScalar);
+    if (coordScalar) w16(out, off + 70, coordScalar);
     // Write the PADDED sample count, not the trace's own: every record slot is
     // sized from the longest trace, so a reader walking by the trace header (ours
     // included) would land inside the padding of a short trace and desynchronise

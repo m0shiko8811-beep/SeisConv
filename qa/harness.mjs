@@ -95,13 +95,18 @@ export function launchEnv(extra = {}) {
 }
 
 /** Launch the BUILT app; returns { app, win, errors } where errors collects
- *  pageerrors + console.error for the whole session. */
-export async function launch() {
+ *  pageerrors + console.error for the whole session.
+ *
+ *  `switches` appends extra CHROMIUM command-line switches to the launch. Default
+ *  empty, so every existing caller launches exactly as before; qa/render-golden.mjs
+ *  uses it to pin the 2D raster backend (and asserts the switch was honoured - a
+ *  switch that is silently ignored must not look like a pass). */
+export async function launch({ switches = [] } = {}) {
   // Isolated profile (opt-in): run against a throwaway --user-data-dir so the QA
   // instance never contends for the installed app's single-instance lock (or its
   // settings). Set SEISCONV_QA_USER_DATA_DIR to a temp path to enable.
   const udd = process.env.SEISCONV_QA_USER_DATA_DIR;
-  const args = udd ? ['.', `--user-data-dir=${udd}`] : ['.'];
+  const args = [...(udd ? ['.', `--user-data-dir=${udd}`] : ['.']), ...switches];
   const app = await electron.launch({ args, cwd: APP_DIR, env: launchEnv() });
   const win = await app.firstWindow();
   const errors = [];

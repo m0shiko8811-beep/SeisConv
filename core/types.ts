@@ -59,6 +59,50 @@ export interface BinaryHeader {
   [key: string]: number | undefined;
 }
 
+/**
+ * One SEG-D channel-set descriptor, decoded from the 32-byte (rev ≤ 2) or
+ * 96-byte (rev 3) descriptor block that follows the general headers. The trace
+ * walk needs `ns` / `siUs` / `chanCount` to size and count the trace records;
+ * the whole set is retained on {@link ParsedFile} because a general header only
+ * reports the TOTALS, so per-set geometry (which sets are seismic, which are
+ * aux, how many channels each holds) is unrecoverable from `gh1` alone.
+ */
+export interface SegdChanSet {
+  scanType: number;
+  csNum: number;
+  /** The channel type code EXACTLY as the file's own revision defines it, which
+   *  is not the same field in both: rev <= 2 stores a NIBBLE (seismic = 1) and
+   *  rev 3 a whole BYTE (seismic = 0x10). Use {@link segdChanTypeIsSeismic} to
+   *  test it rather than comparing to a literal, and see the two citations at the
+   *  channel-set descriptor reader in core/formats/segd.ts. Other codes are
+   *  aux/time-break/etc - all are stored on disk. */
+  chanType: number;
+  chanCount: number;
+  /** 32-byte trace-header extensions per trace in this set. */
+  theCount: number;
+  /** Samples per trace derived from the descriptor (fallback when THE1 absent). */
+  ns: number;
+  /** Sampling interval in microseconds: carried per set by rev 3, inherited from
+   *  the general header's base scan interval by rev ≤ 2. */
+  siUs: number;
+}
+
+/** Is this channel set the SEISMIC one, given the revision the file declares?
+ *
+ *  The code for "Seis" moved with the field's width: rev <= 2 packs the channel
+ *  type into the high nibble of channel-set-descriptor byte 11 and spells seismic
+ *  as nibble 1, while rev 3 widened it to the whole of byte 4 and spells seismic
+ *  as 0x10 (SEG-D Rev 2.1, 8.5 Channel Set Descriptor, byte 11 row, printed page
+ *  43; SEG-D Rev 3.0, 8.16 Channel Set Descriptor, byte 4 row, printed page 111).
+ *  Comparing a stored code against a bare 1 therefore answers the question for
+ *  one revision and silently mis-answers it for the other, so every caller - the
+ *  parser choosing which set supplies the sample interval, and the two UI tables
+ *  that name a set - goes through this one predicate. Lives here, beside the type
+ *  it interprets, because core/ and renderer/ both need it. */
+export function segdChanTypeIsSeismic(chanType: number, revMajor: number): boolean {
+  return chanType === (revMajor >= 3 ? 0x10 : 1);
+}
+
 /** Result of parsing any supported seismic file. */
 export interface ParsedFile {
   format: string;
@@ -70,6 +114,11 @@ export interface ParsedFile {
   errors: string[];
   /** SEG-D general header 1 fields (only present for SEG-D). */
   gh1?: Record<string, number>;
+  /** SEG-D channel-set descriptors in file order, one entry per set; its length
+   *  is the count `gh1.numChanSets` reports. Present only for SEG-D read by the
+   *  spec decoder: the frozen legacy decoder skips the descriptor blocks by size
+   *  without decoding them, so it has none to report. */
+  chanSets?: SegdChanSet[];
   /** SEG-2 file descriptor block fields (only present for SEG-2). */
   fileHeader?: Record<string, number>;
 }

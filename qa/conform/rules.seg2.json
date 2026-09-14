@@ -1,0 +1,742 @@
+{
+  "_what": "Conformance rules for the SEG-2 that SeisConv WRITES, one row per rule, every row carrying the document, section and page it was read out of.",
+  "_theRuleAboutRules": "No rule without a citation. Every row below was extracted from seg_2.pdf on this machine with `pdftotext -f <page> -l <page> -layout`, and `citation.quote` is the sentence it came from. A byte offset that could only be recalled rather than read is NOT in this file; qa/conform/README.md and the `uncovered` block below list what that left out.",
+  "_quotesAreTranscribed": "Quotes are transcribed with plain hyphens and plain ASCII where the PDF uses typographic dashes. TWO ARTEFACTS OF THIS PARTICULAR PDF ARE LEFT IN RATHER THAN SILENTLY CORRECTED, because correcting a quote is editing evidence: (1) the typeface makes pdftotext render some lowercase 'l' as a capital 'I', so `Iow` inside a quote is the word `low` - it appears in the byte-order sentence, where the same sentence spells the word both ways; (2) the document itself contains typographic errors which are quoted as printed, including `byes` for `bytes` in the Trace Descriptor Block size sentence and `detected with an asterisk` where page 7 of the same document says `denoted with an asterisk`.",
+  "_pageNumbers": "pagePrinted is the number printed on the page, in the form 'N of 20'. pagePdf is the 1-based page index `pdftotext -f/-l` takes. For seg_2.pdf the two are EQUAL (offset 0), verified against the printed footers of pages 1 through 6.",
+  "_byteNumbering": "SEG-2 numbers its own bytes from ZERO ('The first two bytes (bytes 0 and 1)'), unlike SEG-Y and SEG-D which number from one. The `bytes` field of every row below uses the DOCUMENT'S numbering, so a citation can be checked against the page without an off-by-one translation, and `offset0` is the same number because the document is already zero-based.",
+  "_appliesTo": "The DECLARED revision of the written file, read from File Descriptor Block bytes 2-3. writeSEG2 declares 1, which is the version this document defines.",
+  "_levels": "mandatory: the standard states the requirement outright ('must be divisible by 4', 'must be between 4 and 65,532'), and a failure drives a non-zero exit. recommended: the standard states a preference ('It is strongly recommended'), or the check is deliberately stricter than the standard, or the row is derived from more than one sentence rather than stated in one; checkNote says which. Reported, never fatal.",
+  "_docs": {
+    "SEG-2": "seg_2.pdf, 'SEG-2 seismic data exchange format for portable digital seismographs', prepared by the SEG Engineering and Groundwater Geophysics Committee (Pullan, 1990), 20 pages"
+  },
+  "_independentRead": "ObsPy's obspy.io.seg2 reader, in the container built by qa/oracle/obspy/Dockerfile, is the independent implementation for this format. It is a real second opinion about the sample matrix, but it is NOT the authority for any row here: the authority for every row is the sentence quoted in it.",
+  "rules": [
+    {
+      "id": "SEG2-FDB-00-BLOCK-ID",
+      "format": "SEG-2",
+      "appliesTo": [
+        "1"
+      ],
+      "scope": "fileDescriptorBlock",
+      "bytes": "0-1",
+      "field": "File Descriptor Block identifier",
+      "level": "mandatory",
+      "rule": "The first two bytes of the file hold the integer 3a55h, read in the byte order those same two bytes declare.",
+      "check": {
+        "kind": "seg2BlockId",
+        "value": 14933
+      },
+      "checkNote": "14933 decimal is 3a55 hexadecimal. The stored byte pair is 55 3a on a low-byte-first file and 3a 55 on a low-byte-last one; both read as 3a55h in their own order, which is the whole point of the field.",
+      "citation": [
+        {
+          "doc": "SEG-2",
+          "section": "B1. File Descriptor Block",
+          "pagePrinted": 4,
+          "pagePdf": 4,
+          "quote": "The first two bytes (bytes 0 and 1) of this block (and of the file) contain the integer 3a55h. This integer identifies the file as a seismic (/radar) data file following this standard, identifies this block as the File Descriptor Block, and provides the means to determine whether the Iow byte (least-significant bits) of multibyte entities is written first or last."
+        }
+      ]
+    },
+    {
+      "id": "SEG2-FDB-00-BYTE-ORDER-MARK",
+      "format": "SEG-2",
+      "appliesTo": [
+        "1"
+      ],
+      "scope": "fileDescriptorBlock",
+      "bytes": "0",
+      "field": "Byte order mark (first byte of the file)",
+      "level": "mandatory",
+      "rule": "The first byte of the file is 55h (recorded low byte first) or 3ah (recorded low byte last). No other value declares a byte order.",
+      "check": {
+        "kind": "seg2ByteOrderMark"
+      },
+      "citation": [
+        {
+          "doc": "SEG-2",
+          "section": "B1. File Descriptor Block",
+          "pagePrinted": 4,
+          "pagePdf": 4,
+          "quote": "If the first byte of the file is 55h, the file is recorded low byte first as on an IBM PC; but if the first byte is 3ah, the file is recorded Iow byte last as on some 68000 based UNIX machines."
+        }
+      ]
+    },
+    {
+      "id": "SEG2-FDB-02-REVISION",
+      "format": "SEG-2",
+      "appliesTo": [
+        "1"
+      ],
+      "scope": "fileDescriptorBlock",
+      "bytes": "2-3",
+      "field": "Revision number of this standard",
+      "level": "recommended",
+      "rule": "Bytes 2-3 state the revision of the SEG-2 standard used. The version this document defines is version 1.",
+      "check": {
+        "kind": "seg2Scalar",
+        "field": "revision",
+        "op": "equals",
+        "value": 1
+      },
+      "checkNote": "Deliberately NOT mandatory. The document says the field states the revision used and that the version it defines is version 1; it does not say in so many words that the field must hold 1. The value still matters more than most: every other row in this table quotes THIS document, so a file declaring another revision is being judged against a document it does not claim to follow. That is a reason to read the finding, not a reason to fail the run on a sentence the standard did not write.",
+      "citation": [
+        {
+          "doc": "SEG-2",
+          "section": "B1. File Descriptor Block",
+          "pagePrinted": 4,
+          "pagePdf": 4,
+          "quote": "The next two bytes (bytes 2 and 3) contain an integer stating the revision number of this standard used by the data-generating device or program. The version defined by this paper shall be referred to as version 1."
+        }
+      ]
+    },
+    {
+      "id": "SEG2-FDB-04-INTEGER-BYTE-ORDER",
+      "format": "SEG-2",
+      "appliesTo": [
+        "1"
+      ],
+      "scope": "fileLayout",
+      "bytes": "0-1 against every integer after them",
+      "field": "Byte order of every integer in the file, against the order bytes 0-1 declare",
+      "level": "mandatory",
+      "rule": "Every integer in the file is written in the byte order the first two bytes declare. A file whose block id says low byte last and whose integers are low byte first is unreadable by any conformant reader.",
+      "check": {
+        "kind": "seg2IntegerByteOrder"
+      },
+      "checkNote": "The test is the whole record, not one field: the walk is run in the DECLARED order and, if that fails, in the other one. Resolving only in the opposite order is the proof, because a 24-trace record that closes exactly on the file size in one order and collapses in the other did not do that by chance. If neither order resolves the row reports INCONCLUSIVE rather than FAIL - the file is broken in some other way and this row cannot say which order was intended. This is the SEG-2 counterpart of SEGY1-BYTEORDER-BIG-ENDIAN, which asks the same question of a SEG-Y file the same way.",
+      "citation": [
+        {
+          "doc": "SEG-2",
+          "section": "B1. File Descriptor Block",
+          "pagePrinted": 4,
+          "pagePdf": 4,
+          "quote": "The integer byte order of this and all following integers is interpreted according to the first two bytes of this file"
+        },
+        {
+          "doc": "SEG-2",
+          "section": "B1. File Descriptor Block",
+          "pagePrinted": 4,
+          "pagePdf": 4,
+          "quote": "If the first byte of the file is 55h, the file is recorded low byte first as on an IBM PC; but if the first byte is 3ah, the file is recorded Iow byte last as on some 68000 based UNIX machines."
+        }
+      ]
+    },
+    {
+      "id": "SEG2-FDB-04-POINTER-SUBBLOCK-DIVISIBLE-BY-4",
+      "format": "SEG-2",
+      "appliesTo": [
+        "1"
+      ],
+      "scope": "fileDescriptorBlock",
+      "bytes": "4-5",
+      "field": "Size (M) of the Trace Pointer Subblock, in bytes",
+      "level": "mandatory",
+      "rule": "M must be divisible by 4.",
+      "check": {
+        "kind": "seg2Scalar",
+        "field": "M",
+        "op": "divisibleBy",
+        "value": 4
+      },
+      "citation": [
+        {
+          "doc": "SEG-2",
+          "section": "B1. File Descriptor Block",
+          "pagePrinted": 4,
+          "pagePdf": 4,
+          "quote": "Bytes 4 and 5 contain an unsigned integer giving the size (M) of the Trace Pointer Subblock in bytes. The integer byte order of this and all following integers is interpreted according to the first two bytes of this file This number, as all block sizes, must be divisible by 4 since all blocks must start on double word boundaries."
+        }
+      ]
+    },
+    {
+      "id": "SEG2-FDB-04-POINTER-SUBBLOCK-RANGE",
+      "format": "SEG-2",
+      "appliesTo": [
+        "1"
+      ],
+      "scope": "fileDescriptorBlock",
+      "bytes": "4-5",
+      "field": "Size (M) of the Trace Pointer Subblock, in bytes",
+      "level": "mandatory",
+      "rule": "M must be between 4 and 65,532 inclusive.",
+      "check": {
+        "kind": "seg2Scalar",
+        "field": "M",
+        "op": "inRange",
+        "min": 4,
+        "max": 65532
+      },
+      "citation": [
+        {
+          "doc": "SEG-2",
+          "section": "B1. File Descriptor Block",
+          "pagePrinted": 4,
+          "pagePdf": 4,
+          "quote": "This number must be between 4 and 65,532."
+        }
+      ]
+    },
+    {
+      "id": "SEG2-FDB-06-NUMBER-OF-TRACES-RANGE",
+      "format": "SEG-2",
+      "appliesTo": [
+        "1"
+      ],
+      "scope": "fileDescriptorBlock",
+      "bytes": "6-7",
+      "field": "Number of traces (N) in this file",
+      "level": "mandatory",
+      "rule": "N must be between 1 and 16,383 inclusive.",
+      "check": {
+        "kind": "seg2Scalar",
+        "field": "N",
+        "op": "inRange",
+        "min": 1,
+        "max": 16383
+      },
+      "citation": [
+        {
+          "doc": "SEG-2",
+          "section": "B1. File Descriptor Block",
+          "pagePrinted": 4,
+          "pagePdf": 4,
+          "quote": "the number of traces actually contained in the file (N) is specified in bytes 6 and 7. N is an unsigned integer with an allowable range of 1 to 16,383. N must be less than or equal to M/4."
+        }
+      ]
+    },
+    {
+      "id": "SEG2-FDB-06-N-AT-MOST-M-OVER-4",
+      "format": "SEG-2",
+      "appliesTo": [
+        "1"
+      ],
+      "scope": "fileDescriptorBlock",
+      "bytes": "6-7",
+      "field": "Number of traces (N) against the Trace Pointer Subblock size (M)",
+      "level": "mandatory",
+      "rule": "N must be less than or equal to M/4: the subblock has to be big enough to hold N four-byte pointers.",
+      "check": {
+        "kind": "seg2NAtMostMOver4"
+      },
+      "citation": [
+        {
+          "doc": "SEG-2",
+          "section": "B1. File Descriptor Block",
+          "pagePrinted": 4,
+          "pagePdf": 4,
+          "quote": "N must be less than or equal to M/4."
+        }
+      ]
+    },
+    {
+      "id": "SEG2-FDB-08-STRING-TERMINATOR-SIZE",
+      "format": "SEG-2",
+      "appliesTo": [
+        "1"
+      ],
+      "scope": "fileDescriptorBlock",
+      "bytes": "8",
+      "field": "Size of the String Terminator, in characters",
+      "level": "mandatory",
+      "rule": "Byte 8 is 01h or 02h.",
+      "check": {
+        "kind": "seg2Scalar",
+        "field": "strTermSize",
+        "op": "inSet",
+        "values": [
+          1,
+          2
+        ]
+      },
+      "citation": [
+        {
+          "doc": "SEG-2",
+          "section": "B1. File Descriptor Block",
+          "pagePrinted": 4,
+          "pagePdf": 4,
+          "quote": "Byte 8 is 01h or 02h depending on the number of characters in the String Terminator and the two following bytes contain the String Terminator characters. If only one character is used, that character is in byte 9."
+        }
+      ]
+    },
+    {
+      "id": "SEG2-FDB-09-STRING-TERMINATOR-NONPRINTABLE",
+      "format": "SEG-2",
+      "appliesTo": [
+        "1"
+      ],
+      "scope": "fileDescriptorBlock",
+      "bytes": "9-10",
+      "field": "String Terminator characters",
+      "level": "mandatory",
+      "rule": "Every String Terminator character is a nonprintable ASCII character, decimal code 0 through 31.",
+      "check": {
+        "kind": "seg2TerminatorChars",
+        "which": "string"
+      },
+      "citation": [
+        {
+          "doc": "SEG-2",
+          "section": "B1. File Descriptor Block",
+          "pagePrinted": 4,
+          "pagePdf": 4,
+          "quote": "The String Terminator is one or two nonprintable ASCII characters (decimal ASCII codes 0 through 31) used to separate the strings that hold the information in character string form in this block (the File Descriptor Block) and the Trace Descriptor Blocks."
+        }
+      ]
+    },
+    {
+      "id": "SEG2-FDB-11-LINE-TERMINATOR-SIZE",
+      "format": "SEG-2",
+      "appliesTo": [
+        "1"
+      ],
+      "scope": "fileDescriptorBlock",
+      "bytes": "11",
+      "field": "Size of the Line Terminator, in characters",
+      "level": "mandatory",
+      "rule": "Byte 11 is 01h or 02h.",
+      "check": {
+        "kind": "seg2Scalar",
+        "field": "lineTermSize",
+        "op": "inSet",
+        "values": [
+          1,
+          2
+        ]
+      },
+      "citation": [
+        {
+          "doc": "SEG-2",
+          "section": "B1. File Descriptor Block",
+          "pagePrinted": 4,
+          "pagePdf": 4,
+          "quote": "Byte 11 is 01h or 02h depending on the number of characters in the Line Terminator and the two following bytes contain the Line Terminator characters. If only one character is used that character is in byte 12."
+        }
+      ]
+    },
+    {
+      "id": "SEG2-FDB-12-LINE-TERMINATOR-NONPRINTABLE",
+      "format": "SEG-2",
+      "appliesTo": [
+        "1"
+      ],
+      "scope": "fileDescriptorBlock",
+      "bytes": "12-13",
+      "field": "Line Terminator characters",
+      "level": "mandatory",
+      "rule": "Every Line Terminator character is a nonprintable ASCII character, decimal code 0 through 31.",
+      "check": {
+        "kind": "seg2TerminatorChars",
+        "which": "line"
+      },
+      "checkNote": "The nonprintable restriction is stated once, for both terminators, in the paragraph quoted here: 'The restriction of allowable String and Line Terminators to nonprintable ASCII characters'. The numeric range 0 through 31 is stated in the String Terminator paragraph on the same page and is quoted in SEG2-FDB-09-STRING-TERMINATOR-NONPRINTABLE.",
+      "citation": [
+        {
+          "doc": "SEG-2",
+          "section": "B1. File Descriptor Block",
+          "pagePrinted": 4,
+          "pagePdf": 4,
+          "quote": "The restriction of allowable String and Line Terminators to nonprintable ASCII characters is to avoid any potential conflicts with the characters allowed in the definition of such strings as JOB-ID, etc."
+        },
+        {
+          "doc": "SEG-2",
+          "section": "B1. File Descriptor Block",
+          "pagePrinted": 4,
+          "pagePdf": 4,
+          "quote": "The Line Terminator is one or two nonprintable ASCII characters (normally CR or CR and LF) used to separate the lines of text in a NOTE string."
+        }
+      ]
+    },
+    {
+      "id": "SEG2-FDB-32-POINTERS-CLEAR-THE-SUBBLOCK",
+      "format": "SEG-2",
+      "appliesTo": [
+        "1"
+      ],
+      "scope": "fileDescriptorBlock",
+      "bytes": "32 onwards",
+      "field": "Trace pointers against the declared Trace Pointer Subblock",
+      "level": "mandatory",
+      "rule": "The Trace Pointer Subblock occupies M bytes starting at byte 32, and the free format section follows it, so no Trace Descriptor Block may begin before byte 32 + M.",
+      "check": {
+        "kind": "seg2PointersClearSubblock"
+      },
+      "checkNote": "Derived from the two sentences quoted, not stated as one sentence: the subblock starts at byte 32, its length is M, and what follows it is the File Descriptor Block's own free format string section. A Trace Descriptor Block that begins inside byte 32 + M therefore overlaps a region the File Descriptor Block has already claimed, and a reader that trusts M looks for the file-level strings inside a trace. It is held mandatory rather than recommended because the two regions cannot both be right and nothing in the document allows the overlap.",
+      "citation": [
+        {
+          "doc": "SEG-2",
+          "section": "B1. File Descriptor Block",
+          "pagePrinted": 4,
+          "pagePdf": 4,
+          "quote": "The Trace Pointer Subblock starts at byte 32, and contains pointers (unsigned long integers) to the start of each Trace Descriptor Block contained in the file. The length of this subblock in bytes (M) is specified in bytes 4 and 5, and the number of pointers contained in the subblock (N) is specified in bytes 6 and 7 (see above)."
+        },
+        {
+          "doc": "SEG-2",
+          "section": "B1. File Descriptor Block",
+          "pagePrinted": 4,
+          "pagePdf": 4,
+          "quote": "Following the Trace Pointer Subblock is a free format section containing strings to provide optional information pertinent to all traces in the record."
+        }
+      ]
+    },
+    {
+      "id": "SEG2-TDB-00-BLOCK-ID",
+      "format": "SEG-2",
+      "appliesTo": [
+        "1"
+      ],
+      "scope": "traceDescriptorBlock",
+      "bytes": "0-1",
+      "field": "Trace Descriptor Block identifier",
+      "level": "mandatory",
+      "rule": "The first two bytes of every Trace Descriptor Block hold the unsigned integer 4422h.",
+      "check": {
+        "kind": "seg2PerTdb",
+        "field": "blockId",
+        "op": "equals",
+        "value": 17442
+      },
+      "checkNote": "17442 decimal is 4422 hexadecimal, read in the byte order the File Descriptor Block declared.",
+      "citation": [
+        {
+          "doc": "SEG-2",
+          "section": "B2. Trace Descriptor Block",
+          "pagePrinted": 5,
+          "pagePdf": 5,
+          "quote": "The first two bytes contain the unsigned integer 4422h to identify this block as a Trace Descriptor Block."
+        }
+      ]
+    },
+    {
+      "id": "SEG2-TDB-02-BLOCK-SIZE-DIVISIBLE-BY-4",
+      "format": "SEG-2",
+      "appliesTo": [
+        "1"
+      ],
+      "scope": "traceDescriptorBlock",
+      "bytes": "2-3",
+      "field": "Size of the Trace Descriptor Block, in bytes",
+      "level": "mandatory",
+      "rule": "The Trace Descriptor Block size must be divisible by 4.",
+      "check": {
+        "kind": "seg2PerTdb",
+        "field": "blockSize",
+        "op": "divisibleBy",
+        "value": 4
+      },
+      "citation": [
+        {
+          "doc": "SEG-2",
+          "section": "B2. Trace Descriptor Block",
+          "pagePrinted": 5,
+          "pagePdf": 5,
+          "quote": "Bytes 2 and 3 contain an unsigned integer giving the size of this block in byes. This number, as all block sizes, must be divisible by 4 since all blocks must start on double word"
+        }
+      ]
+    },
+    {
+      "id": "SEG2-TDB-02-BLOCK-SIZE-RANGE",
+      "format": "SEG-2",
+      "appliesTo": [
+        "1"
+      ],
+      "scope": "traceDescriptorBlock",
+      "bytes": "2-3",
+      "field": "Size of the Trace Descriptor Block, in bytes",
+      "level": "mandatory",
+      "rule": "The Trace Descriptor Block size must be between 32 and 65,532 inclusive.",
+      "check": {
+        "kind": "seg2PerTdb",
+        "field": "blockSize",
+        "op": "inRange",
+        "min": 32,
+        "max": 65532
+      },
+      "citation": [
+        {
+          "doc": "SEG-2",
+          "section": "B2. Trace Descriptor Block",
+          "pagePrinted": 6,
+          "pagePdf": 6,
+          "quote": "boundaries. This number must be between 32 and 65,532."
+        }
+      ]
+    },
+    {
+      "id": "SEG2-TDB-04-DATA-BLOCK-SIZE-DIVISIBLE-BY-4",
+      "format": "SEG-2",
+      "appliesTo": [
+        "1"
+      ],
+      "scope": "traceDescriptorBlock",
+      "bytes": "4-7",
+      "field": "Size of the following Data Block, in bytes",
+      "level": "mandatory",
+      "rule": "The Data Block size must be divisible by 4.",
+      "check": {
+        "kind": "seg2PerTdb",
+        "field": "dataSize",
+        "op": "divisibleBy",
+        "value": 4
+      },
+      "citation": [
+        {
+          "doc": "SEG-2",
+          "section": "B2. Trace Descriptor Block",
+          "pagePrinted": 6,
+          "pagePdf": 6,
+          "quote": "Bytes 4 through 7 contain an unsigned long (32 bit) integer giving the size of the following Data Block in bytes. This number must be divisible by 4."
+        }
+      ]
+    },
+    {
+      "id": "SEG2-TDB-08-SAMPLES-FILL-THE-DATA-BLOCK",
+      "format": "SEG-2",
+      "appliesTo": [
+        "1"
+      ],
+      "scope": "traceDescriptorBlock",
+      "bytes": "4-7 against 8-11 and 12",
+      "field": "Number of samples times the sample width against the Data Block size",
+      "level": "mandatory",
+      "rule": "The Data Block holds exactly the declared number of samples, each of the width the declared data format code gives, so samples * width == Data Block size.",
+      "check": {
+        "kind": "seg2SamplesFillDataBlock"
+      },
+      "checkNote": "The file's own arithmetic against its own declared fields, derived from the three sentences quoted. The sample widths are the ones the byte 12 table states: code 1 is 16-bit so 2 bytes, code 2 is 32-bit so 4, code 4 is 32-bit so 4, code 5 is 64-bit so 8. Code 3, 20-bit SEG-D floating point, packs two samples into five bytes and is NOT a whole number of bytes per sample; a file declaring code 3 reports this row as SKIP with that reason rather than being measured against a width that does not exist.",
+      "citation": [
+        {
+          "doc": "SEG-2",
+          "section": "B2. Trace Descriptor Block",
+          "pagePrinted": 6,
+          "pagePdf": 6,
+          "quote": "Bytes 8 through 11 contain an unsigned long integer giving the number of samples in the Data Block."
+        },
+        {
+          "doc": "SEG-2",
+          "section": "B2. Trace Descriptor Block",
+          "pagePrinted": 6,
+          "pagePdf": 6,
+          "quote": "Byte 12 specifies the format of the data in the following Data Block according to the table below: 01h 16-bit fixed point 02h 32-bit fixed point 03h 20-bit floating point (SEG-D) 04h 32-bit floating point (IEEE standard) 05h 64-bit floating point (IEEE standard)"
+        },
+        {
+          "doc": "SEG-2",
+          "section": "B3. Data Block",
+          "pagePrinted": 6,
+          "pagePdf": 6,
+          "quote": "A Data Block follows each Trace Descriptor Block. Each Data Block is a collection of numbers of the size and in the format specified in the preceding Trace Descriptor Block."
+        }
+      ]
+    },
+    {
+      "id": "SEG2-TDB-12-DATA-FORMAT-CODE",
+      "format": "SEG-2",
+      "appliesTo": [
+        "1"
+      ],
+      "scope": "traceDescriptorBlock",
+      "bytes": "12",
+      "field": "Data format code",
+      "level": "recommended",
+      "rule": "Byte 12 is one of the five codes the table defines: 1, 2, 3, 4 or 5.",
+      "check": {
+        "kind": "seg2PerTdb",
+        "field": "formatCode",
+        "op": "inSet",
+        "values": [
+          1,
+          2,
+          3,
+          4,
+          5
+        ]
+      },
+      "checkNote": "Deliberately NOT mandatory, for the same reason the SEG-D table leaves array forming and gain control method uncovered: the document lists the defined codes but nowhere says that a value outside the list is forbidden. Encoding a prohibition the standard does not state would be inventing a rule. It is worth reading all the same, because a code outside the table leaves a reader with no stated way to decode the Data Block at all.",
+      "citation": [
+        {
+          "doc": "SEG-2",
+          "section": "B2. Trace Descriptor Block",
+          "pagePrinted": 6,
+          "pagePdf": 6,
+          "quote": "Byte 12 specifies the format of the data in the following Data Block according to the table below: 01h 16-bit fixed point 02h 32-bit fixed point 03h 20-bit floating point (SEG-D) 04h 32-bit floating point (IEEE standard) 05h 64-bit floating point (IEEE standard)"
+        }
+      ]
+    },
+    {
+      "id": "SEG2-TDB-32-STRING-LIST-WALKS",
+      "format": "SEG-2",
+      "appliesTo": [
+        "1"
+      ],
+      "scope": "traceDescriptorBlock",
+      "bytes": "32 onwards",
+      "field": "Free format string sub-block of each Trace Descriptor Block",
+      "level": "mandatory",
+      "rule": "Every string starts with a two-byte offset to the next string; the list ends with a two-byte offset of 0. Walking those offsets from byte 32 must stay inside the block and must reach the terminating zero.",
+      "check": {
+        "kind": "seg2StringListWalks"
+      },
+      "checkNote": "This is the single most load-bearing row for interoperability in the whole table. The offsets ARE the string list: a reader has no other way to find the second string, so a free format section written as plain lines with no offsets is not a short-form of the format, it is unreadable. An empty list - a two-byte zero at byte 32 - passes, because the document allows a block with no strings.",
+      "citation": [
+        {
+          "doc": "SEG-2",
+          "section": "C. String format",
+          "pagePrinted": 6,
+          "pagePdf": 6,
+          "quote": "All strings start with an offset (2 bytes) to the next string and a keyword that identifies the nature of the string, contain a numeric and/or alphanumeric value(s), and end with the string terminator indicated in the File Descriptor Block. An offset of 0 (2 bytes), after the final string, marks the end of the string list."
+        },
+        {
+          "doc": "SEG-2",
+          "section": "B2. Trace Descriptor Block",
+          "pagePrinted": 6,
+          "pagePdf": 6,
+          "quote": "A series of free format strings providing information on the acquisition or processing history of the data are found starting at byte 32."
+        }
+      ]
+    },
+    {
+      "id": "SEG2-STR-KEYWORD-UPPERCASE",
+      "format": "SEG-2",
+      "appliesTo": [
+        "1"
+      ],
+      "scope": "traceDescriptorBlock",
+      "bytes": "32 onwards",
+      "field": "Keyword of each free format string",
+      "level": "mandatory",
+      "rule": "Keywords carry no embedded spaces and every alphabetic character in a keyword is uppercase.",
+      "check": {
+        "kind": "seg2KeywordsUppercase"
+      },
+      "checkNote": "Evaluable only when SEG2-TDB-32-STRING-LIST-WALKS found a list to read. A block whose offsets do not walk reports this row as SKIP rather than passing on an empty reading.",
+      "citation": [
+        {
+          "doc": "SEG-2",
+          "section": "C. String format",
+          "pagePrinted": 6,
+          "pagePdf": 6,
+          "quote": "Keywords cannot have embedded spaces. The keyword and the associated data are separated by spaces or tabs. All alpha characters in the keywords themselves must be uppercase."
+        }
+      ]
+    },
+    {
+      "id": "SEG2-STR-ALPHABETICAL-ORDER",
+      "format": "SEG-2",
+      "appliesTo": [
+        "1"
+      ],
+      "scope": "traceDescriptorBlock",
+      "bytes": "32 onwards",
+      "field": "Order of the free format strings",
+      "level": "mandatory",
+      "rule": "Strings are ordered alphabetically by keyword, with NOTE, if present, last.",
+      "check": {
+        "kind": "seg2KeywordsAlphabetical"
+      },
+      "checkNote": "Evaluable only when SEG2-TDB-32-STRING-LIST-WALKS found a list to read. The document states this as 'must', with one named exception, so it is graded as the document grades it even though a tolerant reader would not notice.",
+      "citation": [
+        {
+          "doc": "SEG-2",
+          "section": "C. String format",
+          "pagePrinted": 6,
+          "pagePdf": 6,
+          "quote": "To assist application program string searches, strings must be ordered alphabetically according to keyword. The only exception to this rule is the NOTE string, which is always at the end of the string list, if it exists at all."
+        }
+      ]
+    },
+    {
+      "id": "SEG2-STR-SAMPLE-INTERVAL-PRESENT",
+      "format": "SEG-2",
+      "appliesTo": [
+        "1"
+      ],
+      "scope": "traceDescriptorBlock",
+      "bytes": "32 onwards",
+      "field": "SAMPLE_INTERVAL string in every Trace Descriptor Block",
+      "level": "recommended",
+      "rule": "SAMPLE_INTERVAL is one of the asterisked strings the document strongly recommends in all Trace Descriptor Blocks, and its value is the period between samples in SECONDS.",
+      "check": {
+        "kind": "seg2KeywordPresent",
+        "keyword": "SAMPLE_INTERVAL"
+      },
+      "checkNote": "Recommended, exactly as the document grades its asterisked strings. The unit is the part worth reading: SAMPLE_INTERVAL is in SECONDS, so a writer that emits milliseconds mistimes every trace by a factor of 1000 for every conformant reader. This row only checks that the string is present; the value's unit cannot be decided from the bytes, because 0.002 is a legal number of seconds and a legal number of milliseconds.",
+      "citation": [
+        {
+          "doc": "SEG-2",
+          "section": "C2. Strings that may be included in the Trace Descriptor Block",
+          "pagePrinted": 10,
+          "pagePdf": 10,
+          "quote": "*SAMPLE_INTERVAL <value> The value is a floating point number expressing the period between samples in seconds."
+        },
+        {
+          "doc": "SEG-2",
+          "section": "C2. Strings that may be included in the Trace Descriptor Block",
+          "pagePrinted": 8,
+          "pagePdf": 8,
+          "quote": "that are likely to be required by application software routines are detected with an asterisk. It is strongly recommended that these strings exist in all Trace Descriptor Blocks."
+        }
+      ]
+    },
+    {
+      "id": "SEG2-LAYOUT-CLOSES",
+      "format": "SEG-2",
+      "appliesTo": [
+        "1"
+      ],
+      "scope": "fileLayout",
+      "bytes": "whole file",
+      "field": "The record the file declares, against its real size",
+      "level": "mandatory",
+      "rule": "Walking the file by its own declared fields - 32-byte fixed header, Trace Pointer Subblock, then for each of the N pointers a Trace Descriptor Block of its declared size followed by a Data Block of its declared size - must land exactly on the real file size, with no block overlapping another and no gap unaccounted for.",
+      "check": {
+        "kind": "seg2LayoutCloses"
+      },
+      "citationCaveat": "This row is the one place in this table where the check is arithmetic rather than a quoted preference, and it is graded mandatory on that basis: a file whose own declared block sizes do not add up to its own length contradicts itself under any reading of the document. The block sizes it walks are the ones without which no other row here could be reached at all.",
+      "citation": [
+        {
+          "doc": "SEG-2",
+          "section": "A. General description",
+          "pagePrinted": 3,
+          "pagePdf": 3,
+          "quote": "The file consists of a File Descriptor Block, one or more Trace Descriptor Blocks, and"
+        },
+        {
+          "doc": "SEG-2",
+          "section": "B3. Data Block",
+          "pagePrinted": 6,
+          "pagePdf": 6,
+          "quote": "A Data Block follows each Trace Descriptor Block. Each Data Block is a collection of numbers of the size and in the format specified in the preceding Trace Descriptor Block."
+        }
+      ]
+    }
+  ],
+  "uncovered": [
+    {
+      "what": "The reserved bytes, File Descriptor Block 14-31 and Trace Descriptor Block 13-31",
+      "why": "The document says 'Bytes 14 through 31 are reserved' and 'Bytes 13 through 31 are reserved'. It does not say what a conformant writer must put in them, so requiring zero would be inventing a rule."
+    },
+    {
+      "what": "The File Descriptor Block's own free format string section",
+      "why": "The document places it after the Trace Pointer Subblock and lists its strings in section C1, but writeSEG2 emits none at all, so there is no string list there to walk. SEG2-FDB-32-POINTERS-CLEAR-THE-SUBBLOCK is what notices that the region has been given away to a Trace Descriptor Block instead."
+    },
+    {
+      "what": "The units of SAMPLE_INTERVAL, and of every other numeric string value",
+      "why": "SAMPLE_INTERVAL is in seconds and the ACQUISITION strings have recommended formats, but a number in a file cannot be judged against a unit: 0.002 is a legal count of seconds and a legal count of milliseconds. Only a round trip through a second implementation would notice, and that belongs to the independent read layer, not to a cited rule."
+    },
+    {
+      "what": "Data format code 3, 20-bit SEG-D floating point",
+      "why": "It packs two samples into five bytes, so it has no whole number of bytes per sample. SEG2-TDB-08-SAMPLES-FILL-THE-DATA-BLOCK reports SKIP with that reason on a file declaring code 3 rather than measuring it against a width that does not exist. writeSEG2 always declares code 4."
+    },
+    {
+      "what": "Everything in sections C1 and C2 except SAMPLE_INTERVAL",
+      "why": "The document defines dozens of optional strings - CLIENT, COMPANY, JOB_ID, NOTE, RECEIVER_LOCATION and the rest. Their VALUES name real surveys and crews, which is exactly what this harness is forbidden to print, and their presence is optional. Only the one keyword whose absence stops a conformant reader outright is checked."
+    },
+    {
+      "what": "Whether the sample values are right",
+      "why": "The same limit every format in this harness has. Whether a coordinate is the right coordinate, or an amplitude the right amplitude, cannot be decided from the bytes. The independent read layer compares the matrix against the source; it does not judge it."
+    },
+    {
+      "what": "SEG-2 output written from a SEG-D or SEG-Y source",
+      "why": "The SEG-2 fixture is a real SEG-2 file, so what runs is SEG-2 in, SEG-2 out. Cross-format conversion into SEG-2 is not exercised here."
+    }
+  ]
+}

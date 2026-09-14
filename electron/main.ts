@@ -52,7 +52,7 @@ const FEEDBACK_PRIVACY =
   'Please keep survey, client and station names, line numbers, coordinates and machine paths out of this report - the issue is public.';
 
 const SEISMIC_FILTERS = [
-  { name: 'Seismic files', extensions: ['segy', 'sgy', 'segd', 'seg', 'su', 'seg2', 'dat', 'bat'] },
+  { name: 'Seismic files', extensions: ['segy', 'sgy', 'segd', 'sgd', 'seg', 'su', 'seg2', 'dat', 'bat'] },
   { name: 'All files', extensions: ['*'] },
 ];
 
@@ -63,11 +63,11 @@ const SEISMIC_FILTERS = [
 // SEISMIC_FILTERS (a save should default to the writer's own extension).
 const OPEN_FILTERS = [
   { name: 'All files', extensions: ['*'] },
-  { name: 'Seismic files', extensions: ['segy', 'sgy', 'segd', 'seg', 'su', 'seg2', 'dat', 'bat'] },
+  { name: 'Seismic files', extensions: ['segy', 'sgy', 'segd', 'sgd', 'seg', 'su', 'seg2', 'dat', 'bat'] },
 ];
 
 // Input-folder enumeration: extensions (lower-case, no dot) we treat as seismic.
-const INPUT_EXTS = new Set(['.segy', '.sgy', '.segd', '.seg', '.seg2', '.dat', '.bat', '.su']);
+const INPUT_EXTS = new Set(['.segy', '.sgy', '.segd', '.sgd', '.seg', '.seg2', '.dat', '.bat', '.su']);
 
 // Largest file a non-tape batch convert will dispatch: the worker reads each input
 // WHOLE into memory (readFileSync) to convert it, so refuse anything above the
@@ -2066,14 +2066,31 @@ ipcMain.handle('seisconv:firstBreaks', async (_e, opts: Record<string, unknown>)
 
 ipcMain.handle('seisconv:exportText', async (_e, args: { name: string; text: string }) => {
   if (!win) return { ok: false };
-  // Same gap as exportBinary: sanitize the base, keep the extension verbatim.
+  // Sanitize the base only, keep the extension verbatim in the suggested name
+  // (same discipline as exportBinary below).
   const rawExt = path.extname(args.name || '');
   const ext = rawExt.replace(/^\./, '');
   const safeName = ext ? `${sanitizeBaseName(args.name.slice(0, -rawExt.length))}.${ext}` : sanitizeBaseName(args.name);
-  const save = await dialog.showSaveDialog(win, { defaultPath: safeName });
+  // Derive a filter from the extension like exportBinary does, so the CSV / text
+  // exports (trace-health, first-breaks, observer log, sweep sheets, ...) get a
+  // matching dialog filter instead of "All files". Unknown extensions (json,
+  // html, tsv, ...) leave filters undefined, exactly as exportBinary does for the
+  // extensions it does not recognise.
+  const filters =
+    ext.toLowerCase() === 'csv' ? [{ name: 'CSV file', extensions: ['csv'] }] :
+    ext.toLowerCase() === 'txt' ? [{ name: 'Text file', extensions: ['txt'] }] :
+    undefined;
+  const save = await dialog.showSaveDialog(
+    win,
+    filters ? { defaultPath: safeName, filters } : { defaultPath: safeName },
+  );
   if (save.canceled || !save.filePath) return { ok: false, canceled: true };
-  await writeFile(save.filePath, args.text, 'utf8');
-  return { ok: true, path: save.filePath };
+  // Same protection as exportBinary: a save dialog that dropped the suffix (some
+  // platforms do this when the operator retypes the file name) must not yield an
+  // extension-less file.
+  const outPath = ext ? ensureExt(save.filePath, ext) : save.filePath;
+  await writeFile(outPath, args.text, 'utf8');
+  return { ok: true, path: outPath };
 });
 
 // Append `.ext` to a path unless it already ends with it (case-insensitive), so a

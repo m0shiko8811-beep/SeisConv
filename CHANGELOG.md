@@ -5,6 +5,132 @@ All notable changes to SeisConv are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- **The File Viewer now has a Header values panel.** Below the section, it shows the header
+  values of the open file and of the trace under the cursor, following the cursor as you
+  move it. Click a trace to hold it still so the numbers can be read, and a "Follow the
+  cursor" control hands the panel back to the hover. It lists the file level header, every
+  populated field of the current trace, and, for SEG-Y, the text header shown as the 40
+  lines of 80 characters it really is. SEG-D files also show one row per channel set. Two
+  SEG-D trace values, the sample interval and the channel type, come from the channel set
+  descriptor rather than from that trace's own bytes, and the panel says so on screen.
+  Pinning a trace is unavailable while First breaks, Send to Workbench or the Magnifier is
+  active, since a click there already does something else.
+- **The File Viewer can now mark a fixed time or trace with a reference line.** Open the
+  Reference lines panel from the section toolbar, then type a time in milliseconds or a
+  trace number and add a line, or arm click to place and click the line straight onto the
+  section. Many lines can exist at once, each removable, with a clear all. Lines appear in
+  the section, the box zoom popup and the gather modal; the Trace Inspector and the gather
+  modal show time lines only, since neither has a trace axis to put a vertical line on. A
+  time line stays at its true time even when reduced time is flattening the display, and
+  every line survives a display reset, stepping to another file, and closing and reopening
+  the app.
+- **A new check verifies the files SeisConv writes against the standards they claim.** It
+  covers SEG-Y, SEG-D, SEG-2 and Seismic Unix output, and for each format it reports how
+  many cited rules it applied, so a pass means conformance against a named set of rules
+  rather than a bare claim. Run on this app's own output it found real defects, fixed
+  below, not just a clean bill of health. The check is also wired to read each written
+  file back with a second, unrelated program, which is what would catch a mistake shared
+  between this app's reader and its writer. That second opinion is not running yet: only
+  the SEG-Y reader's container image exists, the images for the SEG-D, SEG-2 and Seismic
+  Unix readers have never been built, and until they are the report says "not run" for
+  that format instead of claiming agreement.
+- **SEG-D files now show far more per-trace detail.** Sensor type, receiver position, depth
+  and timing are read from the trace header extension blocks and shown alongside the fields
+  already there. This applies to Rev 3 files. A Rev 2.1 file gains only the sensor type,
+  because that revision of the standard defines no layout for the later extension blocks
+  and leaves them to the manufacturer, so they cannot be read without a layout from the
+  recorder vendor.
+
+### Fixed
+
+> **Re-export any file an earlier version wrote.** Defects in this app's writers are fixed
+> below, and every release up to and including 0.8.3 produced files carrying them:
+> **SEG-Y** (the text header's end of header marker sat on card 5 instead of card 40),
+> **SEG-D Rev 3** (four separate departures from the Rev 3 standard), **SEG-D Rev 1 and
+> Rev 3** (a vertical stack of zero declared on traces that were not zero) and **SEG-2**
+> (the byte order mark written backwards, and text fields a conformant reader cannot walk).
+> A reader that follows the standard will misread those files; there is no "may" about it.
+> The remedy is to re-export with this version: if any of them has already gone to a
+> client, re-export it and send the replacement.
+
+- **SEG-D field records named `.sgd` are now recognized.** Previously only `.segd` was on the
+  seismic extension list, so `.sgd` files were skipped when converting a whole folder, skipped
+  by Prev/Next navigation, skipped by the trigger watcher, and hidden behind the
+  "Seismic files" filter in the open dialog. Opening a single `.sgd` file by hand always
+  worked, because the format is identified from the file contents rather than the extension.
+  Output files are still written as `.segd`.
+- **A clean trace health report now exports plainly instead of misleading you.** When a
+  file scanned with no flagged traces, exporting the health report returned "Run a health
+  scan first" even though the scan had already run and found nothing. It now reports that
+  there are no flagged traces to export, and the button stays available so a clean result
+  is still a result.
+- **Text and CSV exports now keep their file extensions in all cases.** If the save dialog
+  dropped the file type suffix, the export still completed but wrote without its extension.
+  The dialog now offers a matching file type and the extension is always applied, so text
+  exports become `.txt` and CSV exports become `.csv`.
+- **Background errors are now visible instead of disappearing silently.** When something
+  went wrong behind the scenes, nothing appeared on screen and no notice was shown. The app
+  now displays a brief message on the status strip when an error occurs, pointing to the
+  Feedback button for the operator, keeping the technical details out of the way.
+- **Every SEG-Y this app writes now carries a complete text header.** The end of header
+  marker was landing on card 5 instead of card 40, so card 40 was left a stub. Any client
+  that validates a file against the standard would have flagged it. Every file now carries
+  the marker on the correct, final card.
+- **A SEG-Y written as Rev 0 or Rev 1 can no longer carry a coordinate or elevation scalar
+  of zero.** Those revisions do not allow a zero scalar; it is only Rev 2 that legitimises
+  one. Rev 0 and Rev 1 output now writes 1 instead, which those revisions do allow and which
+  means the same thing.
+- **The Health scan and First breaks picker now explain why they are unavailable on a file
+  too large to read all at once.** Previously the buttons were simply greyed out with no
+  reason on screen; both tools now state, right where the button sits, that the file is
+  being read a block at a time and why that disables them.
+- **SEG-D files exported as Rev 3 were not conformant Rev 3.** A required general header
+  block was missing entirely, several block identifier bytes were left unset, the channel
+  set description was empty where the standard forbids it, and the record's end time was
+  one sampling interval short. All four are fixed. A Rev 3 file exported now is slightly
+  larger and declares a record length one sampling interval longer than before, which is
+  what the standard's own formula always required.
+- **A SEG-D channel set no longer declares a vertical stack of zero on traces that are not
+  zero.** The standard reads a vertical stack of zero as a declaration that the trace data
+  was deliberately set to real zero, which was never true of this app's output. This affected
+  Rev 1 output too, and both are fixed.
+- **Every SEG-2 file this app wrote declared the wrong byte order.** The mark at the very
+  start of a SEG-2 file exists for one purpose only, to tell a reader which way round the
+  numbers that follow are stored, and SeisConv wrote that mark backwards while going on to
+  store the numbers the other way. A reader that honours the mark, which is what the
+  standard requires it to do, would read a 24 channel record as 6144 channels. A file
+  written now has its opening bytes identical to what a Geode recorder writes. A second
+  fault in the same files made the text fields unreadable to a conformant reader, and that
+  is fixed too, in the next entry.
+- **SEG-2 text fields are now written in the form the standard requires.** Each one now
+  carries the offset to the next field and the fields are in the order other software
+  expects, so a conformant reader can walk them where before it could not.
+
+### Changed
+
+- **Exporting to SEG-Y Rev 0 or Rev 1 now refuses, with a clear message, traces longer than
+  32767 samples or with a sample interval above 32767 microseconds.** Those revisions store
+  both values as two's complement 16-bit numbers, so a value past that limit used to be
+  written as a negative number and the resulting file was silently unreadable by a
+  conformant reader. The message names the limit that was hit and points at Rev 2, which
+  has no such limit. This is a refusal where a file used to be produced, so an operator who
+  hits it now gets an explanation instead of a bad file handed to a client.
+- **SEG-D files now carry more header detail, including the channel set descriptors.** The
+  trace header shows more of what the file actually stores, and the new Header values panel
+  in the File Viewer (see Added, above) is where it surfaces.
+- **Trace numbers now count from one everywhere in the app, so the first trace of a file is
+  trace 1.** Previously the section's bottom axis and the numeric trace fields counted from
+  zero while the read-outs already counted from one, so the same trace could show two
+  different numbers on the same screen. They now agree everywhere. The trace number column
+  in the exported health report and first break CSV has also been renamed to traceNumber
+  (it was traceIndex in the health report and absIdx in the first break CSV), so it matches
+  what is on screen instead of reading one lower: a spreadsheet built against the old column
+  name will fail to find it rather than silently reading the wrong trace.
+
 ## [0.8.3] - 2026-09-09
 
 ### Changed

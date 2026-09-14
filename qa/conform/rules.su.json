@@ -1,0 +1,233 @@
+{
+  "_what": "Conformance rules for the Seismic Unix (SU) that SeisConv WRITES. Read `_authority` FIRST: SU is the one format in this harness with no standard document, and what these rows can and cannot claim is different because of it.",
+  "_authority": "THERE IS NO SEG-2 STYLE DOCUMENT FOR SU AND NONE IS BEING PRETENDED. SU is CWP/Colorado School of Mines' working format: the SEG-Y 240-byte trace header with CWP's own definitions in the trailing bytes, no 3200-byte Textual File Header, no 400-byte Binary File Header, traces starting at byte 0, IEEE float samples in the writing machine's native byte order. SEG has never published it and there is no SU specification PDF on this machine. So the harness uses TWO authorities and says which is which on every row. (1) For the position and meaning of a trace-header field, SEG-Y rev 1.0, quoted the same way every SEG-Y row in rules.segy.json is quoted, because the leading bytes of an SU trace header ARE the SEG-Y trace header. That is a PREMISE, not a citation: no SEG document says SU uses the SEG-Y trace header, so every row resting on it is `recommended` and carries `citationCaveat`, exactly the way the Tier B rev-1 rows in rules.segd.json do. (2) For the container - a whole number of equal-size records of 240 + ns*4 bytes and nothing else in the file - the authority is the file's own arithmetic against its own declared sample count, which is a self-contradiction to fail under any reading. That single row, SU-LAYOUT-CLOSES, is the only mandatory row in this table.",
+  "_whatTheIndependentReadIsFor": "Because the rule table is weak here by construction, the independent read matters MORE for SU than for any other format in this harness, not less. ObsPy's obspy.io.segy SU reader, in the container built by qa/oracle/obspy/Dockerfile, decodes the written file with its own byte-order autodetection and its own trace walk and hands back a sample matrix to hash against the source. A third party opening the file at all is the closest thing to a conformance statement SU can have.",
+  "_theRuleAboutRules": "No rule without a citation still holds, and it is what keeps this table short. Rows that could only be asserted from memory about CWP's segy.h - the meanings of the trailing 60 bytes, the CWP field names, the -DSUXDR big-endian build switch - are NOT here. They are in `uncovered`.",
+  "_quotesAreTranscribed": "Quotes are transcribed with plain hyphens and plain ASCII. SEG-Y rev 1.0's Table 3 prints a superscript footnote marker directly against the byte range, which pdftotext renders as a trailing digit ('115-1167' is bytes 115-116 with footnote 7); the `table` field of each citation says so instead. The micro sign in 'microseconds' is written as 'us' because pdftotext renders it as a replacement character on this PDF.",
+  "_pageNumbers": "pagePrinted is the number printed on the page; pagePdf is the 1-based index `pdftotext -f/-l` takes. For seg_y_rev1.0.pdf pagePdf = pagePrinted + 3, the same offset rules.segy.json states.",
+  "_appliesTo": "SU declares nothing - it has no revision field, no magic number and no file-wide header of any kind. There is one output and one applicability key, 'su'.",
+  "_levels": "mandatory: the file's own arithmetic contradicts itself. recommended: everything else in this table, because everything else rests on the SU-equals-SEG-Y-trace-header premise, which has no SEG document behind it. A recommended failure is reported in full and is never fatal.",
+  "_docs": {
+    "SEG-Y rev 1.0": "seg_y_rev1.0.pdf, 'SEG Y rev 1 Data Exchange Format', May 2002, 48 pages"
+  },
+  "rules": [
+    {
+      "id": "SU-LAYOUT-CLOSES",
+      "format": "SU",
+      "appliesTo": ["su"],
+      "scope": "fileLayout",
+      "bytes": "whole file",
+      "field": "The record stride the first trace header declares, against the real file size",
+      "level": "mandatory",
+      "rule": "The file is an exact whole number of records of 240 + ns*4 bytes, with ns read from the first trace header at bytes 115-116 and four bytes per IEEE float sample. Nothing precedes the first trace.",
+      "check": { "kind": "suLayoutCloses" },
+      "citationCaveat": "The quoted sentence is about SEG-Y, and it is quoted because it states the principle exactly: the byte count of a trace record must be consistent with the sample count its own header declares. Applying it to SU rests on the premise that SU uses the SEG-Y trace header, which no SEG document states. The row is graded mandatory anyway, and it is the only one here that is, because what it actually measures is the file against ITSELF: a declared sample count that does not divide the file into whole equal records is a self-contradiction under any reading, SEG-Y premise or not. It is the same basis on which SEGD-LAYOUT-CLOSES is the one mandatory exception in the SEG-D Rev 1 tier scheme.",
+      "citation": [
+        {
+          "doc": "SEG-Y rev 1.0",
+          "section": "7.1. Trace Header",
+          "table": "Table 3 Trace Header, rows 115-116 and 117-118, both carrying footnote 7",
+          "pagePrinted": 15,
+          "pagePdf": 18,
+          "quote": "The number of bytes in a trace record must be consistent with the number of samples written in the trace header. This is important for all recording media; but it is particularly crucial for the correct processing of SEG Y data in disk files (see Appendix C)."
+        }
+      ]
+    },
+    {
+      "id": "SU-BYTE-ORDER-DECIDABLE",
+      "format": "SU",
+      "appliesTo": ["su"],
+      "scope": "fileLayout",
+      "bytes": "115-116",
+      "field": "Byte order, as the file's own arithmetic decides it",
+      "level": "recommended",
+      "rule": "The stride closes on the file size in exactly ONE byte order, so a reader with no magic number to go on can still decide which order the file is in.",
+      "check": { "kind": "suByteOrderDecidable" },
+      "checkNote": "SU carries no byte-order marker of any kind: the samples and the headers are in the writing machine's native order and nothing in the file says which. Every SU reader therefore guesses, and the only signal any of them has is this arithmetic - ObsPy's autodetect_endian_and_sanity_check_su requires filesize modulo (240 + 4*ns) to be 0 for the order it picks, and raises outright if BOTH orders satisfy it. A file that closes in both orders is not malformed; it is undecidable, and this row reports INCONCLUSIVE rather than FAIL when that happens, because the file has not broken a rule, it has failed to contain one.",
+      "citationCaveat": "The premise here is not that SU uses the SEG-Y trace header but that ns lives at bytes 115-116 at all, which is the same premise. No SEG document describes SU's byte order, because no SEG document describes SU. The row is never fatal.",
+      "citation": [
+        {
+          "doc": "SEG-Y rev 1.0",
+          "section": "7.1. Trace Header",
+          "table": "Table 3 Trace Header, rows 115-116 and 117-118, both carrying footnote 7",
+          "pagePrinted": 15,
+          "pagePdf": 18,
+          "quote": "The number of bytes in a trace record must be consistent with the number of samples written in the trace header. This is important for all recording media; but it is particularly crucial for the correct processing of SEG Y data in disk files (see Appendix C)."
+        }
+      ]
+    },
+    {
+      "id": "SU-TH-0115-SAMPLES-NONZERO",
+      "format": "SU",
+      "appliesTo": ["su"],
+      "scope": "traceHeader",
+      "bytes": "115-116",
+      "offset0": 114,
+      "type": "uint16be",
+      "field": "Number of samples in this trace",
+      "level": "recommended",
+      "rule": "Every trace declares a non-zero sample count.",
+      "check": { "kind": "suTraceField", "op": "inRange", "min": 1, "max": 65535 },
+      "citationCaveat": "SEG-Y rev 1.0's sentence is quoted for the field's position and meaning. Applying it to an SU file rests on the premise that SU uses the SEG-Y trace header unchanged, which no SEG document states, so this row is never fatal.",
+      "citation": [
+        {
+          "doc": "SEG-Y rev 1.0",
+          "section": "7.1. Trace Header",
+          "table": "Table 3 Trace Header, row 115-116 with footnote 7",
+          "pagePrinted": 15,
+          "pagePdf": 18,
+          "quote": "Number of samples in this trace. Highly recommended for all types of data."
+        }
+      ]
+    },
+    {
+      "id": "SU-TH-0115-SAMPLES-UNIFORM",
+      "format": "SU",
+      "appliesTo": ["su"],
+      "scope": "traceHeader",
+      "bytes": "115-116",
+      "offset0": 114,
+      "type": "uint16be",
+      "field": "Number of samples in this trace, against the first trace's",
+      "level": "recommended",
+      "rule": "Every trace declares the same sample count as the first trace.",
+      "check": { "kind": "suTraceField", "op": "equalsFirst" },
+      "checkNote": "SEG-Y allows a variable-length file and says so; SU has no binary header in which to declare the fixed-length flag, and no reader can walk the file at all unless the records are equal, because there is nothing but the stride to walk by. This row is therefore deliberately STRICTER than the sentence it quotes, which is the other reason it is held at recommended.",
+      "citationCaveat": "SEG-Y rev 1.0's sentence is quoted for the field's position and meaning. Applying it to an SU file rests on the premise that SU uses the SEG-Y trace header unchanged, which no SEG document states, so this row is never fatal.",
+      "citation": [
+        {
+          "doc": "SEG-Y rev 1.0",
+          "section": "7.1. Trace Header",
+          "table": "Table 3 Trace Header, rows 115-116 and 117-118, both carrying footnote 7",
+          "pagePrinted": 15,
+          "pagePdf": 18,
+          "quote": "If the fixed length trace flag in bytes 3503-3504 of the Binary File Header is set, the sample interval and number of samples in every trace in the SEG Y file must be the same as the values recorded in the Binary File Header. If the fixed length trace flag is not set, the sample interval and number of samples may vary from trace to trace."
+        }
+      ]
+    },
+    {
+      "id": "SU-TH-0117-SAMPLE-INTERVAL-NONZERO",
+      "format": "SU",
+      "appliesTo": ["su"],
+      "scope": "traceHeader",
+      "bytes": "117-118",
+      "offset0": 116,
+      "type": "uint16be",
+      "field": "Sample interval in microseconds for this trace",
+      "level": "recommended",
+      "rule": "Every trace declares a non-zero sample interval in microseconds.",
+      "check": { "kind": "suTraceField", "op": "inRange", "min": 1, "max": 65535 },
+      "checkNote": "The field is two bytes, so the largest interval SU can state is 65535 us. That is a property of the field width, not a rule the document states, and it is why a trace resampled to a slower rate than that cannot be written as SU at all.",
+      "citationCaveat": "SEG-Y rev 1.0's sentence is quoted for the field's position and meaning. Applying it to an SU file rests on the premise that SU uses the SEG-Y trace header unchanged, which no SEG document states, so this row is never fatal.",
+      "citation": [
+        {
+          "doc": "SEG-Y rev 1.0",
+          "section": "7.1. Trace Header",
+          "table": "Table 3 Trace Header, row 117-118 with footnote 7",
+          "pagePrinted": 15,
+          "pagePdf": 18,
+          "quote": "Sample interval in microseconds (us) for this trace."
+        }
+      ]
+    },
+    {
+      "id": "SU-TH-0117-SAMPLE-INTERVAL-UNIFORM",
+      "format": "SU",
+      "appliesTo": ["su"],
+      "scope": "traceHeader",
+      "bytes": "117-118",
+      "offset0": 116,
+      "type": "uint16be",
+      "field": "Sample interval for this trace, against the first trace's",
+      "level": "recommended",
+      "rule": "Every trace declares the same sample interval as the first trace.",
+      "check": { "kind": "suTraceField", "op": "equalsFirst" },
+      "citationCaveat": "SEG-Y rev 1.0's sentence is quoted for the field's position and meaning. Applying it to an SU file rests on the premise that SU uses the SEG-Y trace header unchanged, which no SEG document states, so this row is never fatal.",
+      "citation": [
+        {
+          "doc": "SEG-Y rev 1.0",
+          "section": "7.1. Trace Header",
+          "table": "Table 3 Trace Header, rows 115-116 and 117-118, both carrying footnote 7",
+          "pagePrinted": 15,
+          "pagePdf": 18,
+          "quote": "If the fixed length trace flag in bytes 3503-3504 of the Binary File Header is set, the sample interval and number of samples in every trace in the SEG Y file must be the same as the values recorded in the Binary File Header. If the fixed length trace flag is not set, the sample interval and number of samples may vary from trace to trace."
+        }
+      ]
+    },
+    {
+      "id": "SU-TH-0001-SEQUENCE-NON-DECREASING",
+      "format": "SU",
+      "appliesTo": ["su"],
+      "scope": "traceHeader",
+      "bytes": "1-4",
+      "offset0": 0,
+      "type": "int32be",
+      "field": "Trace sequence number within line",
+      "level": "recommended",
+      "rule": "The trace sequence number never decreases across the file.",
+      "check": { "kind": "suTraceField", "op": "nonDecreasing" },
+      "checkNote": "Held to the same shape as SEGY-TH-0001-SEQ-WITHIN-LINE in rules.segy.json, which checks non-decreasing rather than exactly i+1, because the quoted sentence is about numbers that continue to increase across files and does not say the first is 1.",
+      "citationCaveat": "SEG-Y rev 1.0's sentence is quoted for the field's position and meaning. Applying it to an SU file rests on the premise that SU uses the SEG-Y trace header unchanged, which no SEG document states, so this row is never fatal.",
+      "citation": [
+        {
+          "doc": "SEG-Y rev 1.0",
+          "section": "7.1. Trace Header",
+          "table": "Table 3 Trace Header, row 1-4 with footnote 7",
+          "pagePrinted": 12,
+          "pagePdf": 15,
+          "quote": "Trace sequence number within line -- Numbers continue to increase if the same line continues across multiple SEG Y files. Highly recommended for all types of data. [footnote 7] Strongly recommended that this information always be recorded."
+        }
+      ]
+    },
+    {
+      "id": "SU-TH-0029-TRACE-ID-CODE",
+      "format": "SU",
+      "appliesTo": ["su"],
+      "scope": "traceHeader",
+      "bytes": "29-30",
+      "offset0": 28,
+      "type": "int16be",
+      "field": "Trace identification code",
+      "level": "recommended",
+      "rule": "The trace identification code is one of the values the table defines, -1 through 32,767.",
+      "check": { "kind": "suTraceField", "op": "inRange", "min": -1, "max": 32767 },
+      "citationCaveat": "SEG-Y rev 1.0's sentence is quoted for the field's position and meaning. Applying it to an SU file rests on the premise that SU uses the SEG-Y trace header unchanged, which no SEG document states, so this row is never fatal.",
+      "citation": [
+        {
+          "doc": "SEG-Y rev 1.0",
+          "section": "7.1. Trace Header",
+          "table": "Table 3 Trace Header, row 29-30 with footnote 7",
+          "pagePrinted": 13,
+          "pagePdf": 16,
+          "quote": "Trace identification code: -1 = Other, 0 = Unknown, 1 = Seismic data ... 22 = Time-velocity pairs, 23 ... N = optional use, (maximum N = 32,767). Highly recommended for all types of data."
+        }
+      ]
+    }
+  ],
+  "uncovered": [
+    {
+      "what": "Everything specific to CWP/SU rather than to SEG-Y",
+      "why": "SU's trailing 60 header bytes carry CWP's own fields - d1, f1, d2, f2, ungpow, unscale as floats, then ntr, mark, shortpad - where SEG-Y rev 1 puts ensemble coordinates and in-line/cross-line numbers as integers. The authority for that layout is CWP's segy.h, which is not on this machine, so not one of those bytes is judged. A rule read out of memory is not a rule. Note that ObsPy decodes those same 60 bytes with the SEG-Y rev 1 table too, so the independent read does not judge them either."
+    },
+    {
+      "what": "Which byte order an SU file OUGHT to be in",
+      "why": "There is no canonical SU byte order. CWP/SU writes the host's native order unless the package is built with -DSUXDR, which makes it big-endian - which is why the suswapbytes utility exists at all. SeisConv's writer always emits big-endian. Nothing here grades that choice, because no document grades it; SU-BYTE-ORDER-DECIDABLE only asks that the file be decidable, not that it be big-endian."
+    },
+    {
+      "what": "The absence of the 3600-byte SEG-Y file header",
+      "why": "It is the defining property of SU and there is no positive test for it that is not circular: a file with no magic number cannot prove what it is NOT. What stands in its place is SU-LAYOUT-CLOSES, which fails if anything at all sits in front of the first trace, because the stride would no longer divide the file."
+    },
+    {
+      "what": "The sample encoding",
+      "why": "SU-LAYOUT-CLOSES assumes four bytes per sample, and that assumption is what makes the arithmetic close. It is not independently checked, and it could not be: an SU file carries no data format code. ObsPy's SU reader makes the same assumption and says so - 'It currently can only read IEEE 4 byte float encoded SU data files' - so the independent read confirms the assumption is shared, not that it is right."
+    },
+    {
+      "what": "SU written from a SEG-D source",
+      "why": "SU output is exercised from the SEG-Y fixtures and from the SEG-2 fixture, so two source families reach writeSU. SEG-D in, SU out is not exercised."
+    },
+    {
+      "what": "Whether the sample values are right",
+      "why": "The same limit every format in this harness has. The independent read compares the written matrix against the source's; it does not judge either."
+    }
+  ]
+}

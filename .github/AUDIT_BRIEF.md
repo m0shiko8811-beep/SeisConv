@@ -94,7 +94,7 @@ a mistake.
 The project contact is the GitHub repo itself: Issues for bugs, Discussions for questions, and
 GitHub private vulnerability reporting for security. The only email anywhere in the project is
 `m0shiko8811@gmail.com`, kept as a deliberate fallback for anyone with no GitHub account.
-`moshef@gii.co.il` is no longer a project address. If you find it anywhere in a published file,
+The retired institutional address must never appear anywhere in a published file; use the address in package.json instead. If you find the retired address anywhere in a published file,
 that is a finding: report it like any other leak.
 
 ## The report

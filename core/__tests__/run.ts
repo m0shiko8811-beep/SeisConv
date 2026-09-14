@@ -2300,6 +2300,12 @@ test('writeSEGD Rev 1 → detect() = SEG-D and re-parses to >0 traces (sample-ex
   assert.equal(re.traceCount, 3, 'trace count preserved');
   assert.ok(samplesEqual(pf.traces[0].samples, re.traces[0].samples, 100), 'trace-0 samples identical');
 });
+test('detectEx on SEG-D bytes named x.sgd still returns SEG-D (renamed field files)', () => {
+  const pf = mkPF([100, 100, 100]);
+  const out = writeSEGD(pf, false);
+  const guess = detectEx(out, 'x.sgd');
+  assert.equal(guess.format, 'SEG-D', '.sgd extension does not block SEG-D detection');
+});
 test('writeSEGD Rev 3 → detect() = SEG-D, revision 3, re-parses to >0 traces', () => {
   const pf = mkPF([100, 100, 100]);
   const out = writeSEGD(pf, true);
@@ -3874,7 +3880,8 @@ console.log('\n[Geometry load]');
 
   // 3 sources × 3 receivers (all-integer coords/elev so writeSEGY's raw int header
   // write is lossless). The synthetic SEG-Y carries the SPS positions in its source/
-  // receiver coordinate fields (scalar 0 = raw metres) so loadGeometry pairs each
+  // receiver coordinate fields (scalar 0 raw metres; writeSEGY(pf, 1) now legitimately
+  // rewrites that to 1 per the rev 1 "1 not 0" enumeration) so loadGeometry pairs each
   // trace BY POSITION (writeSEGY does not emit byte-17 source-point, so number-match
   // can't apply here) and re-stamps them with the chosen scalar + elevation/offset/CDP.
   const gSrc = [1, 2, 3].map((p) => gS(p, 1000 + p * 25, 2000, 100 + p)); // 1025/1050/1075, z 101..103
@@ -3991,9 +3998,10 @@ console.log('\n[Geometry load]');
     const res = loadGeometry(mkSegy(), farSps, { coordScalar: -100, tolM: 2 });
     assert.equal(res.matched, 0, 'no trace matched');
     assert.equal(res.unmatched, 9, 'all 9 unmatched');
-    // The original header coords (scalar 0) survive untouched.
+    // The original header coords survive untouched: loadGeometry did not stamp
+    // its requested scalar (-100) onto an unmatched trace.
     const pf2 = parseSEGY(res.bytes);
-    assert.equal(pf2.traces[0].hdr.coordScalar, 0, 'scalar not rewritten on an untouched trace');
+    assert.notEqual(pf2.traces[0].hdr.coordScalar, -100, 'scalar not rewritten on an untouched trace');
     assert.equal(pf2.traces[0].hdr.srcX, 1025, 'original source X preserved');
   });
 

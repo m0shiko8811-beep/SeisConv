@@ -31,3 +31,10 @@ design/readme-options/
 
 # Retracted figures: false claims baked into pixels, must never be published
 design/_retracted/
+
+# Throwaway QA drivers: one-off scripts written to drive a single flow, read the
+# shots and then be deleted. Scratch, not part of the harness, never committed.
+qa/_*
+
+# Promo design candidates: bulk generated variants kept only until one is picked
+design/promo/candidates*/

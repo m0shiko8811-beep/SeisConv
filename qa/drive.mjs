@@ -410,7 +410,7 @@ const globalPageErrors = [];
     // pick the little-endian file and add a trace from it (proves LE reading + 2nd trace)
     await mockDialogs(app, [LE]);
     await win.click('#wbPickBtn'); await sleep(600);
-    await win.fill('#wbIndex', '0').catch(() => {});
+    await win.fill('#wbIndex', '1').catch(() => {});
     // there is no separate "add picked" button - picking arms wbPickBtn flow; add open adds from picked too.
     await win.click('#wbAddOpenBtn').catch(() => {}); await sleep(400);
     const listChars = ((await win.textContent('#wbList'))?.trim() || '').length;

@@ -10,8 +10,20 @@
 // implied by the first two bytes of the File Descriptor Block (block ID 3A55h).
 // Every file seen in practice (and every Geode file) is little-endian, which is
 // what this reader assumes throughout; a big-endian SEG-2 file would not decode.
-// Handles both classic SEG-2 (null/line-terminated free-form headers) and
-// Geode's length-prefixed free-form variant. Ported from the SeisConv reference.
+// FREE FORMAT STRINGS: the offset-prefixed form is the STANDARD one, not a
+// vendor variant. SEG-2 (Pullan 1990), C. String format, printed page 6: "All
+// strings start with an offset (2 bytes) to the next string and a keyword that
+// identifies the nature of the string, contain a numeric and/or alphanumeric
+// value(s), and end with the string terminator indicated in the File Descriptor
+// Block. An offset of 0 (2 bytes), after the final string, marks the end of the
+// string list." Geometrics Geode hardware writes exactly that, because it is
+// what the document requires; calling it "Geode's variant" is what let a writer
+// that emitted plain separated text look like the normal case for years.
+// This reader ALSO accepts a section written as plain terminator-separated
+// lines, which is NOT conformant and cannot be walked by a conformant reader.
+// It is kept only so files SeisConv itself wrote before the offset-prefix fix,
+// and any other tool that took the same shortcut, still open.
+// Ported from the SeisConv reference.
 
 import { dv, getF32, getF64 } from '../binary';
 import type { Bytes, ParsedFile, Trace, TraceHeader } from '../types';
@@ -26,11 +38,21 @@ function seg2BytesPerSample(trDataFmt: number): number {
   return trDataFmt === 1 ? 2 : trDataFmt === 2 ? 4 : trDataFmt === 3 ? 2.5 : trDataFmt === 5 ? 8 : 4;
 }
 
+/** Most traces a conformant SEG-2 file can hold, and therefore the most this
+ *  writer will emit. SEG-2 (Pullan 1990), B1. File Descriptor Block, printed page
+ *  4: "N is an unsigned integer with an allowable range of 1 to 16,383. N must be
+ *  less than or equal to M/4." N (bytes 6-7) is the trace count and M (bytes 4-5)
+ *  the Trace Pointer Subblock size, both 16-bit, and M = 4N here - see the guard
+ *  in writeSEG2 for what the overflow does to a reader. */
+const SEG2_MAX_TRACES = 16383;
+
 const ri16 = (buf: Bytes, o: number): number => buf[o] | (buf[o + 1] << 8); // always LE
 const ri32 = (buf: Bytes, o: number): number =>
   (buf[o] | (buf[o + 1] << 8) | (buf[o + 2] << 16) | (buf[o + 3] << 24)) >>> 0;
 
-/** Classic free-form text block → string (line-terminator → newline). */
+/** Free format section → one flat string (line-terminator → newline), used for
+ * the File Descriptor Block's textHeader. Offset prefixes, where present, are
+ * non-printing bytes and drop out with everything else below decimal 32. */
 function seg2FreeFormStr(b: Bytes, s: number, e: number, st: number, lt: number): string {
   let r = '';
   for (let i = s; i < e; i++) {
@@ -40,8 +62,15 @@ function seg2FreeFormStr(b: Bytes, s: number, e: number, st: number, lt: number)
   return r.trim();
 }
 
-/** Length-prefixed free-form parser - Geode .dat.
- * Each entry: [uint16LE total_block_size][key value\x00] (size includes the 2-byte length field). */
+/** The STANDARD free format string parser - SEG-2 section C, printed page 6:
+ * "All strings start with an offset (2 bytes) to the next string and a keyword
+ * ... An offset of 0 (2 bytes), after the final string, marks the end of the
+ * string list."
+ * Each entry: [uint16LE offset-to-next][keyword value][string terminator], and
+ * the offset counts its own two bytes. This is what real Geometrics Geode
+ * hardware writes and what every conformant reader walks; it is the normal
+ * case, not a vendor quirk. `seg2FreeFormObj` below is the non-conformant
+ * fallback, not the other way round. */
 function seg2LenPrefixObj(b: Bytes, start: number, end: number): TraceHeader {
   const p: TraceHeader = {};
   let i = start;
@@ -64,7 +93,11 @@ function seg2LenPrefixObj(b: Bytes, start: number, end: number): TraceHeader {
   return p;
 }
 
-/** Null/line-terminated free-form parser - classic SEG-2. */
+/** NON-CONFORMANT fallback: a free format section written as plain
+ * terminator-separated lines with no two-byte offsets. The standard gives a
+ * reader no way to find the second string in such a section, so this is a
+ * tolerance, not a supported form. It exists because SeisConv's own writer
+ * emitted it until the offset-prefix fix, so those files must keep opening. */
 function seg2FreeFormObj(b: Bytes, start: number, end: number, st: number, lt: number): TraceHeader {
   const p: TraceHeader = {};
   let i = start;
@@ -97,7 +130,13 @@ function num(v: number | string | undefined): number {
 
 export function parseSEG2(b: Bytes): ParsedFile {
   const r: ParsedFile = { format: 'SEG-2', revision: 1, fileHeader: {}, textHeader: '', bh: {}, traces: [], traceCount: 0, errors: [] };
-  // Both 0x3A55 (standard LE) and 0x553A (Geode LE) are treated as little-endian.
+  // Byte pair 55 3A is the CONFORMANT low-byte-first mark (3A55h stored low byte
+  // first; SEG-2 / Pullan 1990, B1, printed page 4: "If the first byte of the
+  // file is 55h, the file is recorded low byte first as on an IBM PC"), and it is
+  // what real Geometrics Geode hardware writes. Byte pair 3A 55 declares low byte
+  // LAST; it is accepted here only because SeisConv's own writer emitted it
+  // before the byte-order fix below, so files already on disk must keep opening.
+  // Both are decoded little-endian, which is what those legacy files really are.
   const valid = (b[0] === 0x3a && b[1] === 0x55) || (b[0] === 0x55 && b[1] === 0x3a);
   if (!valid) {
     r.errors.push('Invalid SEG-2 magic');
@@ -122,7 +161,10 @@ export function parseSEG2(b: Bytes): ParsedFile {
   const ffFDBEnd = ptrBase;
   if (ffFDBStart < ffFDBEnd) r.textHeader = seg2FreeFormStr(b, ffFDBStart, ffFDBEnd, strTerm, lineTerm);
 
-  // Per-trace free-form: length-prefix (Geode) vs classic, decided by a heuristic.
+  // Per-trace free format section: the STANDARD offset-prefixed form, or the
+  // non-conformant plain-lines fallback, decided by a heuristic on the first two
+  // bytes. A plausible offset (3..512 and inside the block) means the section is
+  // the conformant one; anything else is read as plain lines.
   function getTrHdr(trcOff: number, tdbSize: number): TraceHeader {
     const ffStart = trcOff + 32;
     const ffEnd = trcOff + tdbSize;
@@ -280,7 +322,7 @@ export function parseSEG2(b: Bytes): ParsedFile {
 // of seisconv_v5.11_22.html). LITTLE-ENDIAN throughout. Emits a Geode-style
 // ".dat": a fixed 32-byte file descriptor block (FDB) header, an N-entry 32-bit
 // trace-pointer array, then per-trace 32-byte trace descriptor blocks (TDB) with
-// null/LT-terminated free-form string headers, followed by IEEE float32 (LE)
+// standard offset-prefixed free format strings, followed by IEEE float32 (LE)
 // samples.
 //
 // CAVEAT: this is an approximate, lossless-for-samples SEG-2 export - it writes
@@ -305,19 +347,116 @@ export function writeSEG2(pd: ParsedFile): Bytes {
   const LT = 0x0a; // line terminator
   const ST = 0x00; // string terminator
 
+  // CONFORMANCE (SEG2-FDB-04-POINTER-SUBBLOCK-DIVISIBLE-BY-4 /
+  // SEG2-FDB-32-POINTERS-CLEAR-THE-SUBBLOCK): bytes 4-5 are the Trace Pointer
+  // Subblock ALONE, not the whole 32-byte header plus the subblock.
+  // SEG-2 (Pullan 1990), B1. File Descriptor Block, printed page 4:
+  //   "Bytes 4 and 5 contain an unsigned integer giving the size (M) of the
+  //    Trace Pointer Subblock in bytes. ... This number, as all block sizes,
+  //    must be divisible by 4 since all blocks must start on double word
+  //    boundaries. This number must be between 4 and 65,532."
+  //   "The Trace Pointer Subblock starts at byte 32, and contains pointers
+  //    (unsigned long integers) to the start of each Trace Descriptor Block
+  //    contained in the file. The length of this subblock in bytes (M) is
+  //    specified in bytes 4 and 5, and the number of pointers contained in the
+  //    subblock (N) is specified in bytes 6 and 7 (see above)."
+  //   "N must be less than or equal to M/4."
+  // We emit exactly N four-byte pointers, so M = 4N: divisible by 4, N = M/4,
+  // and (with 1 <= N <= 16,383 from the same page) 4 <= M <= 65,532. Writing
+  // 32 + 4N instead declared a subblock that swallowed the first Trace
+  // Descriptor Block, which is the region byte 32 + M hands to the File
+  // Descriptor Block's own free format section.
+  //
+  // That makes 16,383 a hard ceiling on the trace count, and the same page states
+  // it outright:
+  //   "N is an unsigned integer with an allowable range of 1 to 16,383. N must be
+  //    less than or equal to M/4."
+  // Both fields are 16 bits, so nothing above that can even be stated: at 20,000
+  // traces M = 80,000 wraps to 14,464 and a conformant reader places the first
+  // Trace Descriptor Block inside the pointer array, and at exactly 16,384 M
+  // wraps to 0 - below the standard's own minimum of 4. MAX_TRACES is 500,000, so
+  // the parser will happily hand over a gather this writer cannot describe.
+  // Refuse it, the way writeSEGD refuses above its 4-digit BCD trace number.
+  if (n > SEG2_MAX_TRACES)
+    throw new Error(`${n} traces; SEG-2 trace-pointer subblock max ${SEG2_MAX_TRACES} - split the gather`);
+  const ptrSubblockBytes = n * 4; // M, bytes 4-5
+  // First Trace Descriptor Block sits at byte 32 + M, immediately after the
+  // pointer subblock. The FDB free format section (optional, "a series of
+  // optional strings", same page) is empty here, so there is no gap.
+  const firstTdb = 32 + ptrSubblockBytes;
+
   // FDB free-form (acquisition date) - written between the term chars and the
   // trace-pointer array within the fixed 32-byte FDB. One LT-terminated line,
   // ST-terminated section. Kept short so it never collides with the ptr array.
   const acqDate = new Date().toISOString().slice(0, 10).replace(/-/g, '/'); // YYYY/MM/DD
 
-  // Per-trace free-form header bytes (written into the TDB).
+  // Per-trace free format strings (written into the TDB from byte 32 on).
+  //
+  // CONFORMANCE (SEG2-TDB-32-STRING-LIST-WALKS, and with it
+  // SEG2-STR-KEYWORD-UPPERCASE, SEG2-STR-ALPHABETICAL-ORDER and
+  // SEG2-STR-SAMPLE-INTERVAL-PRESENT): the offsets ARE the string list. A
+  // reader has no other way to find the second string, so a section written as
+  // plain separated lines is not a short form of the format, it is unreadable.
+  // SEG-2 (Pullan 1990), C. String format, printed page 6:
+  //   "The File and Trace Descriptor Blocks contain strings that provide other
+  //    required or optional information. All strings start with an offset (2
+  //    bytes) to the next string and a keyword that identifies the nature of the
+  //    string, contain a numeric and/or alphanumeric value(s), and end with the
+  //    string terminator indicated in the File Descriptor Block. An offset of 0
+  //    (2 bytes), after the final string, marks the end of the string list."
+  //   "Keywords cannot have embedded spaces. The keyword and the associated data
+  //    are separated by spaces or tabs. All alpha characters in the keywords
+  //    themselves must be uppercase."
+  //   "To assist application program string searches, strings must be ordered
+  //    alphabetically according to keyword. The only exception to this rule is
+  //    the NOTE string, which is always at the end of the string list, if it
+  //    exists at all."
+  // The same requirement is restated per block in C1 and C2, printed pages 7
+  // and 8: "The keywords must be arranged in alphabetical order except for the
+  // NOTE string, which will be at the end of the string list, if it exists at
+  // all."
+  //
+  // The writer emitted 'SAMPLE_INTERVAL ...' as the very first bytes of the
+  // section, so a conformant reader took the ASCII pair "SA" as the offset to
+  // the next string: 16723, well past the end of a 104-byte block.
+  //
+  // ORDER: the keys are written CHANNEL_NUMBER, SAMPLES_PER_TRACE,
+  // SAMPLE_INTERVAL, which is alphabetical in ASCII order. The alphabetical
+  // requirement itself is not a judgement call - the document states it three
+  // times as "must". What the document never states is how the underscore
+  // collates, and these three keys are a case where it decides the answer:
+  // 'S' (53h) sorts before '_' (5Fh), so ASCII order puts SAMPLES_PER_TRACE
+  // before SAMPLE_INTERVAL, while an order that ignored the underscore would
+  // put SAMPLE_INTERVAL first. ASCII is taken here because C1 and C2 define the
+  // separator as "an underscore (decimal ASCII code 95)" - the keyword is an
+  // ASCII byte string - and because the stated purpose is "to assist
+  // application program string searches", which is a program comparing those
+  // bytes. Neither the document's own C1/C2 keyword lists nor a real Geode
+  // recorder's string list settles it on its own: both are alphabetical and
+  // NOTE-last, but neither happens to contain a pair where the underscore is
+  // the deciding character.
+  // NOTE is not written here, so the one exception does not arise.
+  //
+  // Each string is [uint16 LE offset-to-next][KEYWORD value][ST], where the
+  // offset COUNTS ITS OWN TWO BYTES, and a uint16 zero closes the list. This is
+  // byte-for-byte the shape a real Geode recorder writes.
   function makeFreeFormBytes(tr: Trace, idx: number): Bytes {
     const ch = Number(tr.hdr?.channelNum ?? tr.hdr?.CHANNEL_NUMBER ?? idx + 1);
-    // Lines separated by LT (0x0A), section terminated by ST (0x00).
-    const text = 'SAMPLE_INTERVAL ' + si_s + '\nSAMPLES_PER_TRACE ' + spt + '\nCHANNEL_NUMBER ' + ch + '\n';
-    const buf = new Uint8Array(text.length + 1); // +1 for ST
-    for (let j = 0; j < text.length; j++) buf[j] = text.charCodeAt(j) & 0xff;
-    buf[text.length] = ST;
+    const texts = ['CHANNEL_NUMBER ' + ch, 'SAMPLES_PER_TRACE ' + spt, 'SAMPLE_INTERVAL ' + si_s];
+    // offset = 2 (the offset field) + the text + 1 (the string terminator).
+    const total = texts.reduce((a, t) => a + 3 + t.length, 0) + 2; // + the closing zero offset
+    const buf = new Uint8Array(total);
+    let p = 0;
+    for (const t of texts) {
+      const off = 3 + t.length;
+      buf[p] = off & 0xff;
+      buf[p + 1] = (off >> 8) & 0xff;
+      for (let j = 0; j < t.length; j++) buf[p + 2 + j] = t.charCodeAt(j) & 0xff;
+      buf[p + 2 + t.length] = ST;
+      p += off;
+    }
+    buf[p] = 0;
+    buf[p + 1] = 0; // "An offset of 0 (2 bytes), after the final string, marks the end"
     return buf;
   }
   const ffBufs = trc.map((tr, i) => makeFreeFormBytes(tr, i));
@@ -325,21 +464,40 @@ export function writeSEG2(pd: ParsedFile): Bytes {
   // TDB size = 32-byte fixed header + free-form length, padded to a 4-byte boundary.
   const tdbSizes = ffBufs.map((ff) => Math.ceil((32 + ff.length) / 4) * 4);
   const trD = spt * 4; // data block bytes (IEEE float32)
-  const fdb = 32 + n * 4; // FDB header (32) + trace pointer array
 
-  let totalSize = fdb;
+  let totalSize = firstTdb;
   for (let t = 0; t < n; t++) totalSize += tdbSizes[t] + trD;
 
   const out = new Uint8Array(totalSize);
   const odv = dv(out);
 
   // -- File Descriptor Block (32 bytes) --
-  out[0] = 0x3a;
-  out[1] = 0x55; // LE magic 0x553A
+  // CONFORMANCE (SEG2-FDB-04-INTEGER-BYTE-ORDER, SEG2-FDB-00-BYTE-ORDER-MARK,
+  // SEG2-LAYOUT-CLOSES): the first two bytes ARE the byte-order declaration for
+  // every integer that follows, so they must be stored in the order this writer
+  // actually uses. SEG-2 (Pullan 1990), B1. File Descriptor Block, printed page 4:
+  //   "The first two bytes (bytes 0 and 1) of this block (and of the file)
+  //    contain the integer 3a55h. This integer identifies the file as a seismic
+  //    (/radar) data file following this standard, identifies this block as the
+  //    File Descriptor Block, and provides the means to determine whether the
+  //    Iow byte (least-significant bits) of multibyte entities is written first
+  //    or last."
+  //   "If the first byte of the file is 55h, the file is recorded low byte first
+  //    as on an IBM PC; but if the first byte is 3ah, the file is recorded Iow
+  //    byte last as on some 68000 based UNIX machines."
+  //   "The integer byte order of this and all following integers is interpreted
+  //    according to the first two bytes of this file"
+  // This writer stores every integer low byte first, so byte 0 must be 55h and
+  // byte 1 3Ah - the same pair real Geometrics Geode hardware writes. Emitting
+  // 3A 55 while still writing little-endian integers declared low-byte-LAST and
+  // then contradicted itself: a conformant reader took the trace count 0003h as
+  // 0300h = 768, and a 24-channel record as 6144.
+  out[0] = 0x55;
+  out[1] = 0x3a; // block id 3A55h stored low byte first (= little-endian file)
   out[2] = 1;
   out[3] = 0; // revision 1
-  out[4] = fdb & 0xff;
-  out[5] = (fdb >> 8) & 0xff; // size of trace pointer sub-block (FDB size)
+  out[4] = ptrSubblockBytes & 0xff;
+  out[5] = (ptrSubblockBytes >> 8) & 0xff; // M: size of the Trace Pointer Subblock alone
   out[6] = n & 0xff;
   out[7] = (n >> 8) & 0xff; // number of traces (Geode: bytes 6-7)
   // SEG-2 FDB terminator definitions, 'BccBcc' @ byte 8 (Pullan 1990; ObsPy /
@@ -360,7 +518,7 @@ export function writeSEG2(pd: ParsedFile): Bytes {
   void acqDate;
 
   // -- Trace pointer array (32-bit LE offsets) --
-  let pos = fdb;
+  let pos = firstTdb;
   for (let t = 0; t < n; t++) {
     const po = 32 + t * 4;
     out[po] = pos & 0xff;
@@ -371,7 +529,7 @@ export function writeSEG2(pd: ParsedFile): Bytes {
   }
 
   // -- Trace descriptor blocks + sample data --
-  pos = fdb;
+  pos = firstTdb;
   for (let t = 0; t < n; t++) {
     const tr = trc[t];
     const to = pos;

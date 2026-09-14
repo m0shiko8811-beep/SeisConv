@@ -1,0 +1,1091 @@
+{
+  "_what": "Conformance rules for the SEG-D that SeisConv WRITES, one row per rule, every row carrying the document, section, table row and page it was read out of. Same shape and same discipline as rules.segy.json.",
+  "_theRuleAboutRules": "No rule without a citation. Every row below was extracted from a PDF on this machine with `pdftotext -f <page> -l <page> -layout`, and `citation.quote` is the sentence it came from. A byte offset that could only be recalled rather than read is NOT in this file; the `uncovered` block at the end says what that left out.",
+  "_quotesAreTranscribed": "Quotes are transcribed with plain hyphens where the PDF uses typographic dashes, and the multiplication sign in the channel-set formula is written as *. SEG-D prints hexadecimal constants with a subscript 16, which pdftotext renders inline: '3016' in a quote means 30 hexadecimal, 'FFFF16' means FFFF hexadecimal. That is what the page says and it is left as the page says it. Nothing else in a quote is altered.",
+  "_pageNumbers": "pagePrinted is the number printed on the page. pagePdf is the 1-based page index `pdftotext -f/-l` takes. For BOTH seg_d_rev2.1.pdf and seg_d_rev3.0.pdf the two are equal (verified against the page footers), unlike the SEG-Y documents where they differ.",
+  "_appliesTo": "The DECLARED major revision of the written file, read from General Header Block #2 byte 11. SeisConv registers two SEG-D writers, `segd1` (SEG-D Rev 1) and `segd3` (SEG-D Rev 3), in core/formats/registry.ts; writeSEGD(pd,false) puts 1 in that byte and writeSEGD(pd,true) puts 3, so the two values here are \"1\" and \"3\".",
+  "_noRev1Document": "THERE IS NO SEG-D Rev 1 DOCUMENT ON THIS MACHINE. Only Rev 2.1, Rev 3.0 and Rev 3.1 are here. Rev-1 rows are therefore cited from SEG-D Rev 2.1 and are graded by where in that document the sentence sits, which is the only honest way to use a later document against an earlier revision: TIER A, the sentence itself speaks about Rev 1 (section 2.2 'Changes Introduced in Rev 1', or section 5.1's 'as was also required in SEG-D, Rev 1', or section 2.1's corrections to the Rev 1 document) - graded as the sentence states it, mandatory where it says must or set to. TIER B, the sentence is a Rev 2.1 field-table definition that sections 2.0 and 2.1 do NOT list among the changes introduced in Rev 2.1 or Rev 2.0, so it probably predates Rev 1 but the document does not say so - carried at level `recommended` ONLY, never fatal, and every such row carries `citationCaveat`. TIER C, sections 2.0 or 2.1 list the field as introduced in Rev 2.1 or Rev 2.0 - NOT APPLIED to rev-1 output at all, and listed under `uncovered`.",
+  "_levels": "mandatory: the standard states the requirement outright, and a failure drives a non-zero exit. recommended: the standard states a preference ('should', 'would be'), or the row is TIER B above, or the two documents contradict each other on the point and the checkNote says so; reported, never fatal.",
+  "_noIndependentReader": "SEG-D has no independent reader on this machine and none is containerised. The third layer qa/oracle gives SEG-Y (decode the written file with a foreign implementation) DOES NOT EXIST for SEG-D. Everything here is specification conformance only, and conform.mjs prints that on the SEG-D line rather than leaving a reader to assume a cross-check ran.",
+  "_docs": {
+    "SEG-D Rev 2.1": "seg_d_rev2.1.pdf, 'SEG-D, Rev 2.1 SEG Field Tape Standards', January 2006",
+    "SEG-D Rev 3.0": "seg_d_rev3.0.pdf, 'SEG-D Rev 3.0', September 2014"
+  },
+  "_anInconsistencyInsideTheRev21Document": "Rev 2.1 says three different things about which byte of the Demux Trace Header holds the count of Trace Header Extension blocks. Section 2.2 item 15 says byte 10 is the Trace Edit byte. Section 5.2 ground rule 6 says the Trace Header Extension field is 'in Byte 11 of the Trace Header'. The field table in section 8.6 says byte 10 is Trace Header Extensions, byte 11 is Sample Skew and byte 12 is Trace edit, and the Channel Set Descriptor byte 29 in section 8.5 says the extension count 'Must match byte 10 of the Demux Trace Header'. Section 2.1 item 9 also says byte 10. Rev 3.0 sections 8.17 and 5.2 settle it the same way: byte 10 is the extension count, byte 12 is the trace edit. The field tables win, two of the loose sentences agree with them, and the rows affected say so in `checkNote`.",
+
+  "rules": [
+    {
+      "id": "SEGD-LAYOUT-GENERAL-HEADERS-PRESENT",
+      "format": "SEG-D",
+      "appliesTo": ["1", "3"],
+      "scope": "fileLayout",
+      "bytes": "1-64",
+      "field": "General Header Block #1 followed by General Header Block #2",
+      "level": "mandatory",
+      "rule": "Every SEG-D record opens with General Header Block #1, which is 32 bytes long, and General Header Block #2 is required as well, so the first 64 bytes are fixed.",
+      "check": { "kind": "fileAtLeast", "bytes": 64 },
+      "citation": [
+        { "doc": "SEG-D Rev 2.1", "section": "5.1 General Headers (General Header #1 and #2 are required)", "pagePrinted": 21, "pagePdf": 21, "quote": "General Header #1 is 32 bytes long and contains information similar to SEG A, B, C, and the original SEG-D headers. ... SEG-D, Rev 2.1 and 2.0 requires the use of General Header #1 and General Header #2 (as was also required in SEG-D, Rev 1)." },
+        { "doc": "SEG-D Rev 3.0", "section": "5.1 General Headers (General Header Block #1, #2 and #3 are required)", "pagePrinted": 39, "pagePdf": 39, "quote": "General Header Block #1 is 32 bytes long and contains information similar to SEG A, B, C, and the original SEG-D headers. ... SEG-D, Rev 3.0 requires the use of General Header Block #1, General Header Block #2 (as was also required in SEG-D, Rev 2.x), and General Header #3 (new with SEG-D, Rev 3.0)." }
+      ]
+    },
+    {
+      "id": "SEGD-LAYOUT-CLOSES",
+      "format": "SEG-D",
+      "appliesTo": ["1", "3"],
+      "scope": "fileLayout",
+      "bytes": "whole file",
+      "field": "Declared layout versus real file size",
+      "level": "mandatory",
+      "rule": "The record the header fields DECLARE must close exactly on the real file size: 32 * (1 + additional general header blocks) + scanTypes * (channelSets * channelSetDescriptorSize + skewBlocks * 32) + (extendedHeaderBlocks + externalHeaderBlocks) * 32, then, for every channel set, its declared number of channels each occupying 20 + traceHeaderExtensions * 32 + samplesPerTrace * bytesPerSample, then generalTrailerBlocks * 32.",
+      "check": { "kind": "layoutCloses" },
+      "tier": "A for a file declaring Rev 3; the Rev 1 application is the one documented exception to the tier scheme, see citationCaveat",
+      "citationCaveat": "For a file declaring Rev 1 the block sizes come from SEG-D Rev 2.1 sections 5.1, 5.2 and 5.3, which by the tier scheme in _noRev1Document is Tier B and would normally be carried at `recommended`. This row is the one deliberate exception and stays mandatory, for two reasons. First, what it checks is not a value the standard prefers, it is the file's own arithmetic against its own size: a record that does not close contradicts ITSELF, under any revision's reading of it. Second, these are the sizes without which nothing about the file can be walked at all, so demoting the row would not make the harness more careful, it would make every other rev-1 row unreachable. The exception is stated here rather than left implicit.",
+      "checkNote": "This is the SEG-D counterpart of SEGY-LAYOUT-CLOSES: the walk is driven only by fields the file itself declares, never by what the writer intended, and it steps trace by trace rather than assuming a constant stride. The channel-set descriptor is 96 bytes for a file declaring Rev 3 and 32 bytes for one declaring Rev 1; samples per trace come from channel set descriptor bytes 13-16 in Rev 3 and from Trace Header Extension bytes 8-10 in Rev 1; bytes per sample come from the General Header Block #1 format code. A file whose own arithmetic does not close is malformed whatever its field values say.",
+      "citation": [
+        { "doc": "SEG-D Rev 2.1", "section": "5.2 Scan Type Headers (required)", "pagePrinted": 21, "pagePdf": 21, "quote": "Within the scan type header, each channel set descriptor is composed of a 32 byte field, and up to 99 channel set descriptors may be present. In addition, up to 99 scan type headers may be utilized in a record. Following the channel set descriptors of a scan type are a number of 32 byte fields (SK, specified in byte 30 of the general header #1) that specify sample skew." },
+        { "doc": "SEG-D Rev 2.1", "section": "5.3 Trace Header (required)", "pagePrinted": 23, "pagePdf": 23, "quote": "The trace header length is 20 bytes and is an identifier that precedes each channel's data. The trace header and the trace data are recorded as one block of data. A trace is restricted to one channel of data from one channel set of one scan type." },
+        { "doc": "SEG-D Rev 3.0", "section": "5.2 Scan Type Headers", "pagePrinted": 41, "pagePdf": 41, "quote": "Within the Scan Type Header, each channel set descriptor is composed of a 96 byte field, and up to 65535 channel set descriptors may be present. In addition, up to 99 scan type headers may be utilized in a record. Following the channel set descriptors of a scan type are a number of 32 byte fields (SK, specified in byte 30 of General Header #1) that specify sample skew." },
+        { "doc": "SEG-D Rev 3.0", "section": "5.3 Demux Trace Header (required)", "pagePrinted": 42, "pagePdf": 42, "quote": "The Demux Trace Header length is 20 bytes and is an identifier that precedes each channel's data. The trace header and the trace data are recorded as one block of data." },
+        { "doc": "SEG-D Rev 3.0", "section": "5.4 Extended Header (optional) / 5.5 External Header (optional)", "pagePrinted": 44, "pagePdf": 44, "quote": "Byte 31 of General Header Block #1 contains the number of 32 byte fields in the Extended Header. ... Byte 32 of General Header Block #1 contains the number of 32 byte fields in the external header." }
+      ]
+    },
+
+    {
+      "id": "SEGD3-GH1-01-FILE-NUMBER-BCD",
+      "format": "SEG-D",
+      "appliesTo": ["3"],
+      "scope": "generalHeader1",
+      "bytes": "1-2",
+      "offset0": 0,
+      "width": 2,
+      "field": "File number (four digits, packed BCD)",
+      "level": "mandatory",
+      "rule": "Four packed BCD digits, 0 to 9999, or FFFF when the extended file number in General Header Block #2 bytes 1-3 is used.",
+      "check": { "kind": "bcdInRange", "min": 0, "max": 9999, "allowAllF": true },
+      "citation": [
+        { "doc": "SEG-D Rev 3.0", "section": "8.1 General Header, Block #1", "table": "byte 1-2 row", "pagePrinted": 87, "pagePdf": 87, "quote": "File number of four digits (0-9999), set to FFFF16 when the file number is greater than 9999. The expanded file number is contained in Bytes 1, 2, and 3 of General Header, Block #2." }
+      ]
+    },
+    {
+      "id": "SEGD3-GH1-03-FORMAT-CODE",
+      "format": "SEG-D",
+      "appliesTo": ["3"],
+      "scope": "generalHeader1",
+      "bytes": "3-4",
+      "offset0": 2,
+      "width": 2,
+      "field": "Format code",
+      "level": "mandatory",
+      "rule": "The four hexadecimal digits in bytes 3 and 4 must be one of the defined format codes. 0200 and 0000 are named illegal outright.",
+      "check": { "kind": "hexDigitsInSet", "values": ["8015", "8022", "8024", "8036", "8038", "8042", "8044", "8048", "8058", "8080"] },
+      "checkNote": "SeisConv writes 8058, 32 bit IEEE. The sample width the layout arithmetic uses comes from this same row: 32 bit means 4 bytes per sample.",
+      "citation": [
+        { "doc": "SEG-D Rev 3.0", "section": "8.1 General Header, Block #1", "table": "byte 3-4 row", "pagePrinted": 87, "pagePdf": 87, "quote": "Format code: 8015 20 bit binary 8022 8 bit quaternary 8024 16 bit quaternary 8036 24 bit 2's complement integer 8038 32 bit 2's complement integer 8042 8 bit hexadecimal 8044 16 bit hexadecimal 8048 32 bit hexadecimal 8058 32 bit IEEE 8080 64 bit IEEE 0200 Illegal, do not use 0000 Illegal, do not use" }
+      ]
+    },
+    {
+      "id": "SEGD3-GH1-11-YEAR-BCD",
+      "format": "SEG-D",
+      "appliesTo": ["3"],
+      "scope": "generalHeader1",
+      "bytes": "11",
+      "offset0": 10,
+      "width": 1,
+      "field": "Last two digits of year",
+      "level": "mandatory",
+      "rule": "Two packed BCD digits, 0 to 99.",
+      "check": { "kind": "bcdInRange", "min": 0, "max": 99 },
+      "citation": [
+        { "doc": "SEG-D Rev 3.0", "section": "8.1 General Header, Block #1", "table": "byte 11 row (YR1, YR2)", "pagePrinted": 87, "pagePdf": 87, "quote": "Last two digits of year (0-99)" }
+      ]
+    },
+    {
+      "id": "SEGD3-GH1-12-ADDITIONAL-GENERAL-HEADER-BLOCKS",
+      "format": "SEG-D",
+      "appliesTo": ["3"],
+      "scope": "generalHeader1",
+      "bytes": "12 (upper nibble)",
+      "offset0": 11,
+      "width": 1,
+      "field": "Number of additional blocks in the General Header",
+      "level": "mandatory",
+      "rule": "For a file declaring Rev 3 this count is 2 or greater, because General Header Blocks #1, #2 and #3 are all required and the count excludes block #1.",
+      "check": { "kind": "nibbleInRange", "half": "high", "min": 2, "max": 15 },
+      "checkNote": "The value 15 (F16) means the real count is in General Header Block #2 bytes 23-24; the harness follows that indirection before judging, and reports which field it used.",
+      "citation": [
+        { "doc": "SEG-D Rev 3.0", "section": "8.1 General Header, Block #1", "table": "byte 12 row (GH)", "pagePrinted": 87, "pagePdf": 87, "quote": "Number of additional Blocks in General Header (unsigned binary). This number will be 2 or greater for Rev 3 (e.g., if only General Header Blocks #1, #2 and #3 are present then GH = 2). For each additional block, the value is increased by one.). If more than 14 are required, set to GH to F16, and use bytes 23-24 of the General Header Block #2." },
+        { "doc": "SEG-D Rev 3.0", "section": "8.2 General Header Block #2", "table": "byte 23-24 row (EGH)", "pagePrinted": 90, "pagePdf": 90, "quote": "Extended Number of additional Blocks in the General Header (two bytes, unsigned binary). This number will be 2 or greater for Rev 3 (e.g. If only General Header Blocks #1, #2 and #3 are present then EGH = 2). For each additional block, the value is increased by one.) When using this field, the upper nibble of byte 12 of General Header Block #1 must be set to F16." }
+      ]
+    },
+    {
+      "id": "SEGD3-GH3-BLOCK-PRESENT",
+      "format": "SEG-D",
+      "appliesTo": ["3"],
+      "scope": "generalHeader",
+      "bytes": "byte 32 of each 32-byte general header block",
+      "field": "General Header Block #3 (Timestamp and size header)",
+      "level": "mandatory",
+      "rule": "A file declaring Rev 3 must carry General Header Block #3. Every general header block identifies itself in its byte 32, and block #3 sets that byte to 03.",
+      "check": { "kind": "generalHeaderBlockPresent", "id": 3 },
+      "citation": [
+        { "doc": "SEG-D Rev 3.0", "section": "5.1 General Headers (General Header Block #1, #2 and #3 are required)", "pagePrinted": 39, "pagePdf": 39, "quote": "SEG-D, Rev 3.0 requires the use of General Header Block #1, General Header Block #2 (as was also required in SEG-D, Rev 2.x), and General Header #3 (new with SEG-D, Rev 3.0). ... General Header Block #3 contains an accurate timestamp for the record in addition to size information for the record to allow quick searching through the record." },
+        { "doc": "SEG-D Rev 3.0", "section": "5.1, Table 2: Header block types defined in SEG-D Rev 3.0", "table": "row 0316", "pagePrinted": 39, "pagePdf": 39, "quote": "0316 General Header 3 (Timestamp and size header)" },
+        { "doc": "SEG-D Rev 3.0", "section": "8.3 General Header Block #3 (Timestamp and size header)", "table": "byte 32 row (HT)", "pagePrinted": 92, "pagePdf": 92, "quote": "Header block type (one byte, unsigned binary). The header type indicates what type of information is contained in this header. For General Header Block #3 this byte is set to 0316." }
+      ]
+    },
+    {
+      "id": "SEGD3-GH1-13-JULIAN-DAY",
+      "format": "SEG-D",
+      "appliesTo": ["3"],
+      "scope": "generalHeader1",
+      "bytes": "12 (lower nibble) and 13",
+      "offset0": 11,
+      "width": 2,
+      "field": "Julian day",
+      "level": "mandatory",
+      "rule": "Three packed BCD digits, 1 to 366, held in the lower nibble of byte 12 and both nibbles of byte 13.",
+      "check": { "kind": "bcdInRange", "min": 1, "max": 366, "skipHighNibble": true },
+      "citation": [
+        { "doc": "SEG-D Rev 3.0", "section": "8.1 General Header, Block #1", "table": "byte 12 row (DY1) and byte 13 row (DY2, DY3)", "pagePrinted": 87, "pagePdf": 87, "quote": "Julian day, 3 digits (1-366)." }
+      ]
+    },
+    {
+      "id": "SEGD3-GH1-14-HOUR",
+      "format": "SEG-D",
+      "appliesTo": ["3"],
+      "scope": "generalHeader1",
+      "bytes": "14",
+      "offset0": 13,
+      "width": 1,
+      "field": "Hour of day (UTC)",
+      "level": "mandatory",
+      "rule": "Two packed BCD digits, 0 to 23, in UTC.",
+      "check": { "kind": "bcdInRange", "min": 0, "max": 23 },
+      "citation": [
+        { "doc": "SEG-D Rev 3.0", "section": "8.1 General Header, Block #1", "table": "byte 14 row (H1, H2)", "pagePrinted": 88, "pagePdf": 88, "quote": "Hour of day, 2 digits (0-23) (UTC Time)." }
+      ]
+    },
+    {
+      "id": "SEGD3-GH1-15-MINUTE",
+      "format": "SEG-D",
+      "appliesTo": ["3"],
+      "scope": "generalHeader1",
+      "bytes": "15",
+      "offset0": 14,
+      "width": 1,
+      "field": "Minute of hour",
+      "level": "mandatory",
+      "rule": "Two packed BCD digits, 0 to 59.",
+      "check": { "kind": "bcdInRange", "min": 0, "max": 59 },
+      "citation": [
+        { "doc": "SEG-D Rev 3.0", "section": "8.1 General Header, Block #1", "table": "byte 15 row (MI1, MI2)", "pagePrinted": 88, "pagePdf": 88, "quote": "Minute of hour, 2 digits (0-59)." }
+      ]
+    },
+    {
+      "id": "SEGD3-GH1-16-SECOND",
+      "format": "SEG-D",
+      "appliesTo": ["3"],
+      "scope": "generalHeader1",
+      "bytes": "16",
+      "offset0": 15,
+      "width": 1,
+      "field": "Second of minute",
+      "level": "mandatory",
+      "rule": "Two packed BCD digits, 0 to 60, where 60 is legal only during a UTC leap second.",
+      "check": { "kind": "bcdInRange", "min": 0, "max": 60 },
+      "citation": [
+        { "doc": "SEG-D Rev 3.0", "section": "8.1 General Header, Block #1", "table": "byte 16 row (SE1, SE2)", "pagePrinted": 88, "pagePdf": 88, "quote": "Second of minute, 2 digits (0-60). The value 60 is a legal value of this field only during UTC leap seconds." }
+      ]
+    },
+    {
+      "id": "SEGD3-GH1-23-BASE-SCAN-INTERVAL",
+      "format": "SEG-D",
+      "appliesTo": ["3"],
+      "scope": "generalHeader1",
+      "bytes": "23",
+      "offset0": 22,
+      "width": 1,
+      "field": "Base scan interval",
+      "level": "mandatory",
+      "rule": "A binary number whose LSB is 1/16 msec, allowing 1/16, 1/8, 1/4, 1/2, 1, 2, 4 and 8 msec only, so the byte is one of 1, 2, 4, 8, 16, 32, 64 or 128; FF means the real value is in General Header Block #2 bytes 25-27.",
+      "check": { "kind": "uintInSet", "values": [1, 2, 4, 8, 16, 32, 64, 128, 255] },
+      "checkNote": "The list of allowable intervals is the standard's own; the eight byte values follow from 'the LSB equal to 1/16 msec' and 'in binary steps'. 255 (FF16) is admitted here because the same row defines it as the escape to the Dominant Sampling Interval in General Header Block #2.",
+      "citation": [
+        { "doc": "SEG-D Rev 3.0", "section": "8.1 General Header, Block #1", "table": "byte 23 row (I3 - I-4)", "pagePrinted": 88, "pagePdf": 88, "quote": "Base scan interval. This is coded as a binary number with the LSB equal to 1/16 msec. This will allow sampling intervals from 1/16 through 8 msec in binary steps. Thus, the allowable base scan intervals are 1/16, 1/8, 1/4, 1/2, 1, 2, 4, and 8 msec. ... If a different base scan interval is required, set to FF16, and use byte 25-27 in General Header Block #2." }
+      ]
+    },
+    {
+      "id": "SEGD3-GH1-26-RECORD-TYPE",
+      "format": "SEG-D",
+      "appliesTo": ["3"],
+      "scope": "generalHeader1",
+      "bytes": "26 (upper nibble)",
+      "offset0": 25,
+      "width": 1,
+      "field": "Record type",
+      "level": "mandatory",
+      "rule": "The upper nibble of byte 26 is the record type and must be one of the five defined codes.",
+      "check": { "kind": "nibbleInSet", "half": "high", "values": [1, 2, 4, 6, 8] },
+      "citation": [
+        { "doc": "SEG-D Rev 3.0", "section": "8.1 General Header, Block #1", "table": "byte 26 row (Z)", "pagePrinted": 88, "pagePdf": 88, "quote": "Record type 216 Test record 416 Parallel channel test 616 Direct channel test 816 Normal record 116 Other" }
+      ]
+    },
+    {
+      "id": "SEGD3-GH1-26-RECORD-LENGTH-FFF-WHEN-EXTENDED",
+      "format": "SEG-D",
+      "appliesTo": ["3"],
+      "scope": "generalHeader1",
+      "bytes": "26 (lower nibble) and 27",
+      "offset0": 25,
+      "width": 2,
+      "field": "Record length from time zero, three nibbles",
+      "level": "mandatory",
+      "rule": "When the Extended Record Length in General Header Block #2 bytes 17-20 is in use, the three record-length nibbles (the lower nibble of byte 26 plus both nibbles of byte 27) must all be F.",
+      "check": { "kind": "recordLengthFFFWhenExtended", "extendedField": "rev3" },
+      "checkNote": "The rule applies only when the extended field is actually in use, so the check is skipped when General Header Block #2 bytes 17-20 hold zero, which the same page defines as 'record length is indeterminate'. That the three nibbles are byte 26's lower nibble plus byte 27 is the Rev 3.0 index column, which splits byte 26 into Z (record type) and R1 and puts R2, R3 in byte 27.",
+      "citation": [
+        { "doc": "SEG-D Rev 3.0", "section": "8.1 General Header, Block #1", "table": "byte 27 row (R2, R3)", "pagePrinted": 89, "pagePdf": 89, "quote": "Record length from time zero (in increments of 0.5 times 1.024 sec). ... These three nibbles must be set to FFF16 when using the Extended Record Length (record length in milliseconds), bytes 17-20, in General Header Block #2." },
+        { "doc": "SEG-D Rev 3.0", "section": "8.2 General Header Block #2", "table": "byte 17-20 row (ERL)", "pagePrinted": 90, "pagePdf": 90, "quote": "Extended Record Length (four bytes, unsigned binary) indicates the record length in microseconds. When using extended record length, the record length in the General Header Block #1, the Record Length in bytes 26 and 27 must be set to FFF16. A value of 0.0 means record length is indeterminate." }
+      ]
+    },
+    {
+      "id": "SEGD3-GH1-28-SCAN-TYPES-PER-RECORD",
+      "format": "SEG-D",
+      "appliesTo": ["3"],
+      "scope": "generalHeader1",
+      "bytes": "28",
+      "offset0": 27,
+      "width": 1,
+      "field": "Scan types per record",
+      "level": "mandatory",
+      "rule": "Two packed BCD digits, 0 to 99.",
+      "check": { "kind": "bcdInRange", "min": 0, "max": 99 },
+      "citation": [
+        { "doc": "SEG-D Rev 3.0", "section": "8.1 General Header, Block #1", "table": "byte 28 row (ST/R1, ST/R2)", "pagePrinted": 89, "pagePdf": 89, "quote": "Scan types per record. This 2 digit code is the number of scan types per record (0-99)." }
+      ]
+    },
+    {
+      "id": "SEGD3-GH1-29-CHANNEL-SETS-PER-SCAN-TYPE",
+      "format": "SEG-D",
+      "appliesTo": ["3"],
+      "scope": "generalHeader1",
+      "bytes": "29",
+      "offset0": 28,
+      "width": 1,
+      "field": "Number of channel sets per scan type",
+      "level": "mandatory",
+      "rule": "Two packed BCD digits, 0 to 99, or FF when the extended channel set count in General Header Block #2 bytes 4-5 is used.",
+      "check": { "kind": "bcdInRange", "min": 0, "max": 99, "allowAllF": true },
+      "citation": [
+        { "doc": "SEG-D Rev 3.0", "section": "8.1 General Header, Block #1", "table": "byte 29 row (CS1, CS2)", "pagePrinted": 89, "pagePdf": 89, "quote": "Number of channel sets per scan type (0-99). (Set to FF16 when using Extended Channel Sets/Scan Type.) This 2 digit code is the number of channel sets per scan." }
+      ]
+    },
+    {
+      "id": "SEGD3-GH2-11-MAJOR-REVISION",
+      "format": "SEG-D",
+      "appliesTo": ["3"],
+      "scope": "generalHeader2",
+      "bytes": "11",
+      "offset0": 10,
+      "width": 1,
+      "field": "Major SEG-D revision number",
+      "level": "mandatory",
+      "rule": "One byte unsigned binary, set to 03 for Rev 3.",
+      "check": { "kind": "equals", "value": 3 },
+      "citation": [
+        { "doc": "SEG-D Rev 3.0", "section": "8.2 General Header Block #2", "table": "byte 11 row (RMJ)", "pagePrinted": 90, "pagePdf": 90, "quote": "Major SEG-D Revision Number (one byte, unsigned binary). Set to 0316." }
+      ]
+    },
+    {
+      "id": "SEGD3-GH2-12-MINOR-REVISION",
+      "format": "SEG-D",
+      "appliesTo": ["3"],
+      "scope": "generalHeader2",
+      "bytes": "12",
+      "offset0": 11,
+      "width": 1,
+      "field": "Minor SEG-D revision number",
+      "level": "mandatory",
+      "rule": "One byte unsigned binary, set to 00 for Rev 3.0.",
+      "check": { "kind": "equals", "value": 0 },
+      "citation": [
+        { "doc": "SEG-D Rev 3.0", "section": "8.2 General Header Block #2", "table": "byte 12 row (RMN)", "pagePrinted": 90, "pagePdf": 90, "quote": "Minor SEG-D Revision Number (one byte, unsigned binary). Set to 0016. Revisions 0 to 0.N are not valid. This version is Rev 3.0." }
+      ]
+    },
+    {
+      "id": "SEGD3-GH2-32-HEADER-BLOCK-TYPE",
+      "format": "SEG-D",
+      "appliesTo": ["3"],
+      "scope": "generalHeader2",
+      "bytes": "32",
+      "offset0": 31,
+      "width": 1,
+      "field": "Header block type of General Header Block #2",
+      "level": "mandatory",
+      "rule": "Byte 32 of General Header Block #2 identifies the block and is set to 02.",
+      "check": { "kind": "equals", "value": 2 },
+      "checkNote": "In Rev 3.0 byte 32 of EVERY header block carries its type; that is what lets the optional blocks appear in any order. A zero there is not a defined block type in Table 2.",
+      "citation": [
+        { "doc": "SEG-D Rev 3.0", "section": "8.2 General Header Block #2", "table": "byte 32 row (HT)", "pagePrinted": 91, "pagePdf": 91, "quote": "Header block type (one byte, unsigned binary). The header type indicates what type of information is contained in this header. For General Header Block #2 this byte is set to 0216." },
+        { "doc": "SEG-D Rev 3.0", "section": "5.1 General Headers", "pagePrinted": 39, "pagePdf": 39, "quote": "Rev 3.0 has a much more flexible information structure in the General Header than Rev 2.x. All General Header blocks except General Header Blocks #1-3 are optional, and can appear in any order, and a lot more information can be entered. ... To achieve this, byte 32 of all header blocks have been assigned an ID depending on its contents." }
+      ]
+    },
+    {
+      "id": "SEGD3-CSD-01-SCAN-TYPE-NUMBER",
+      "format": "SEG-D",
+      "appliesTo": ["3"],
+      "scope": "channelSetDescriptor",
+      "bytes": "1",
+      "offset0": 0,
+      "width": 1,
+      "field": "Scan type header number",
+      "level": "mandatory",
+      "rule": "One byte BCD, 1 to 99, identifying the scan type header this descriptor belongs to; the first is 1.",
+      "check": { "kind": "bcdInRange", "min": 1, "max": 99 },
+      "citation": [
+        { "doc": "SEG-D Rev 3.0", "section": "8.16 Channel Set Descriptor", "table": "byte 1 row (ST1, ST2)", "pagePrinted": 111, "pagePdf": 111, "quote": "These two digits (one byte BCD) (1-99) identify the number of the scan type header to be described by the subsequent bytes. The first scan type header is 1 and the last scan type header number is the same value as Byte 28 (ST/R) of the General Header Block #1." }
+      ]
+    },
+    {
+      "id": "SEGD3-CSD-02-CHANNEL-SET-NUMBER",
+      "format": "SEG-D",
+      "appliesTo": ["3"],
+      "scope": "channelSetDescriptor",
+      "bytes": "2-3",
+      "offset0": 1,
+      "width": 2,
+      "field": "Channel set number",
+      "level": "mandatory",
+      "rule": "Two bytes unsigned binary, 1 to 65535; the first channel set is 1.",
+      "check": { "kind": "uintInRange", "min": 1, "max": 65535 },
+      "citation": [
+        { "doc": "SEG-D Rev 3.0", "section": "8.16 Channel Set Descriptor", "table": "byte 2,3 row (CS15 - CS0)", "pagePrinted": 111, "pagePdf": 111, "quote": "Channel Set Number (two bytes, unsigned binary). These digits (1-65535) identify the channel set to be described in the next 94 bytes within this scan type header. The first channel set is \"1\" and the last channel set number is the same number as Byte 29 (CS) of the General Header Block #1 (or bytes 4-5 (EN) of General Header #2 if Extended Channel Sets/Scan Type is used)." }
+      ]
+    },
+    {
+      "id": "SEGD3-CSD-04-CHANNEL-TYPE",
+      "format": "SEG-D",
+      "appliesTo": ["3"],
+      "scope": "channelSetDescriptor",
+      "bytes": "4",
+      "offset0": 3,
+      "width": 1,
+      "field": "Channel type identification",
+      "level": "mandatory",
+      "rule": "One byte unsigned binary; must be one of the defined channel type codes.",
+      "check": { "kind": "uintInSet", "values": [0, 16, 17, 32, 33, 34, 48, 64, 80, 96, 97, 98, 99, 112, 128, 144, 145, 146, 147, 148, 149, 150, 151, 152, 153, 154, 155, 156, 160, 176, 177, 178, 179, 192, 193, 194, 195, 196, 197, 198, 199, 200, 201, 240] },
+      "checkNote": "The value list is the standard's own code table read across two pages, converted from the hexadecimal the page prints (0016 Unused, 1016 Seis, ... F016 Calibration trace) to decimal. SeisConv writes 1016, Seis.",
+      "citation": [
+        { "doc": "SEG-D Rev 3.0", "section": "8.16 Channel Set Descriptor", "table": "byte 4 row (C7 - C0)", "pagePrinted": "111 to 112", "pagePdf": "111 to 112", "quote": "Channel type Identification (one byte, unsigned binary). 0016 Unused 1016 Seis 1116 Electromagnetic (EM) 2016 Time break 2116 Clock timebreak 2216 Field timebreak 3016 Up hole 4016 Water break 5016 Time counter 6016 External Data ... 9C16 Source overload A016 Auxiliary Data Trailer (no longer used) B016 True reference sweep (correlation reference) ... C916 Angle measurement F016 Calibration trace (time series)" }
+      ]
+    },
+    {
+      "id": "SEGD3-CSD-13-END-TIME-FORMULA",
+      "format": "SEG-D",
+      "appliesTo": ["3"],
+      "scope": "channelSetDescriptor",
+      "bytes": "13-16",
+      "offset0": 12,
+      "width": 4,
+      "field": "Number of samples, against channel set start time, end time and sampling interval",
+      "level": "recommended",
+      "rule": "The number of samples NS, the sampling interval SR, the channel set start time TF and the channel set end time TE should satisfy TE = TF + NS * SR.",
+      "check": { "kind": "endTimeFormulaRev3" },
+      "checkNote": "The standard says 'should', so a failure is reported and is not fatal. Note the formula puts TE one whole sampling interval after the LAST sample: for NS samples starting at TF the last sample sits at TF + (NS-1)*SR, so a writer that sets TE to the time of the last sample fails this row by exactly one sampling interval.",
+      "citation": [
+        { "doc": "SEG-D Rev 3.0", "section": "8.16 Channel Set Descriptor", "table": "byte 13-16 row (NS31 - NS0)", "pagePrinted": 113, "pagePdf": 113, "quote": "Number of samples in each trace of this channel set (four bytes, unsigned binary). It can assume a value from 0 to 4,294,967,295. For the purpose of this SEG-D standard, the number of samples NS, sampling interval SR, channel set start time TF, and channel set end time TE should be related by the formula TE=TF+NS*SR." }
+      ]
+    },
+    {
+      "id": "SEGD3-CSD-28-TRACE-HEADER-EXTENSIONS",
+      "format": "SEG-D",
+      "appliesTo": ["3"],
+      "scope": "channelSetDescriptor",
+      "bytes": "28",
+      "offset0": 27,
+      "width": 1,
+      "field": "Number of trace header extensions in this channel set",
+      "level": "mandatory",
+      "rule": "One byte unsigned binary in the range 1 to 255, zero not allowed, and it must equal byte 10 of the Demux Trace Header of every trace in the channel set.",
+      "check": { "kind": "theCountMatchesDemux", "min": 1, "max": 255 },
+      "citation": [
+        { "doc": "SEG-D Rev 3.0", "section": "8.16 Channel Set Descriptor", "table": "byte 28 row (THE7 - THE0)", "pagePrinted": 113, "pagePdf": 113, "quote": "Number of Trace Header Extensions (one byte, unsigned binary). Must match byte 10 of the Demux Trace Header. Range 1-255. 0 is not allowed." },
+        { "doc": "SEG-D Rev 3.0", "section": "5.2 Scan Type Headers, ground rule 5", "pagePrinted": 42, "pagePdf": 42, "quote": "Byte 28 of the Channel Set Descriptor contains the number of Trace Extension Headers in the channel set. This must match the byte 10 of the Demux Trace Header of traces in the channel set. Each trace is hence limited to a maximum of 255 Trace Header Extension blocks." }
+      ]
+    },
+    {
+      "id": "SEGD3-CSD-30-VERTICAL-STACK",
+      "format": "SEG-D",
+      "appliesTo": ["3"],
+      "scope": "channelSetDescriptor",
+      "bytes": "30",
+      "offset0": 29,
+      "width": 1,
+      "field": "Vertical stack (effective stack order)",
+      "level": "recommended",
+      "rule": "Zero asserts that the trace data was intentionally set to real zero; a channel set carrying real samples must declare 1 (no stack) or the effective stack order.",
+      "check": { "kind": "verticalStackAgainstSamples" },
+      "checkNote": "Deliberately checked only in the direction the bytes can settle: the row fails only when the channel set declares zero AND at least one sample in it is non-zero, which is a statement about the file that the file itself contradicts. It never asserts the stack ORDER is right, only that zero is the wrong claim for data that exists. Recommended, not mandatory, because the standard states the meaning of the value rather than issuing a prohibition.",
+      "citation": [
+        { "doc": "SEG-D Rev 3.0", "section": "8.16 Channel Set Descriptor", "table": "byte 30 row (VS7 - VS0)", "pagePrinted": 114, "pagePdf": 114, "quote": "Vertical Stack (one byte, unsigned binary). Effective stack order. Set to zero if the trace data was intentionally set to real zero. Set to one if no stack. Set to the effective stack order if the data is the result of stacked data (with or without processing)." }
+      ]
+    },
+    {
+      "id": "SEGD3-CSD-32-BLOCK-TYPE-1",
+      "format": "SEG-D",
+      "appliesTo": ["3"],
+      "scope": "channelSetDescriptor",
+      "bytes": "32",
+      "offset0": 31,
+      "width": 1,
+      "field": "Header block type of channel set descriptor block 1",
+      "level": "mandatory",
+      "rule": "Byte 32 of the 96-byte channel set descriptor is set to 30.",
+      "check": { "kind": "equals", "value": 48 },
+      "checkNote": "48 decimal is 3016, the value the page prints.",
+      "citation": [
+        { "doc": "SEG-D Rev 3.0", "section": "8.16 Channel Set Descriptor", "table": "byte 32 row (HT7 - HT0)", "pagePrinted": 114, "pagePdf": 114, "quote": "Header block type (one byte, unsigned binary). Set to 3016 for Channel Set Descriptor block 1." }
+      ]
+    },
+    {
+      "id": "SEGD3-CSD-64-BLOCK-TYPE-2",
+      "format": "SEG-D",
+      "appliesTo": ["3"],
+      "scope": "channelSetDescriptor",
+      "bytes": "64",
+      "offset0": 63,
+      "width": 1,
+      "field": "Header block type of channel set descriptor block 2",
+      "level": "mandatory",
+      "rule": "Byte 64 of the 96-byte channel set descriptor is set to 31.",
+      "check": { "kind": "equals", "value": 49 },
+      "checkNote": "49 decimal is 3116, the value the page prints.",
+      "citation": [
+        { "doc": "SEG-D Rev 3.0", "section": "8.16 Channel Set Descriptor", "table": "byte 64 row (HT7 - HT0)", "pagePrinted": 114, "pagePdf": 114, "quote": "Header block type (one byte, unsigned binary). Set to 3116 for Channel Set Description block 2." }
+      ]
+    },
+    {
+      "id": "SEGD3-CSD-69-DESCRIPTION-NO-NULLS",
+      "format": "SEG-D",
+      "appliesTo": ["3"],
+      "scope": "channelSetDescriptor",
+      "bytes": "69-95",
+      "offset0": 68,
+      "width": 27,
+      "field": "Channel set description (27 bytes ASCII)",
+      "level": "mandatory",
+      "rule": "27 bytes of ASCII text, left justified and padded with spaces; a zero byte is not allowed anywhere in the field.",
+      "check": { "kind": "bytesNoZero" },
+      "citation": [
+        { "doc": "SEG-D Rev 3.0", "section": "8.16 Channel Set Descriptor", "table": "byte 69-95 row (DSC)", "pagePrinted": 114, "pagePdf": 114, "quote": "Description (27 bytes, ASCII text). Channel set description 27 byte free-text as defined by the recording system. Left justified, padded with spaces (2016) for unused characters. zero (0016) is not allowed." }
+      ]
+    },
+    {
+      "id": "SEGD3-CSD-96-BLOCK-TYPE-3",
+      "format": "SEG-D",
+      "appliesTo": ["3"],
+      "scope": "channelSetDescriptor",
+      "bytes": "96",
+      "offset0": 95,
+      "width": 1,
+      "field": "Header block type of channel set descriptor block 3",
+      "level": "mandatory",
+      "rule": "Byte 96 of the 96-byte channel set descriptor is set to 32.",
+      "check": { "kind": "equals", "value": 50 },
+      "checkNote": "50 decimal is 3216, the value the page prints.",
+      "citation": [
+        { "doc": "SEG-D Rev 3.0", "section": "8.16 Channel Set Descriptor", "table": "byte 96 row (HT7 - HT0)", "pagePrinted": 114, "pagePdf": 114, "quote": "Header block type (one byte, unsigned binary). Set to 3216 for Channel Set Descriptor block 3." }
+      ]
+    },
+    {
+      "id": "SEGD3-DEMUX-01-FILE-NUMBER-BCD",
+      "format": "SEG-D",
+      "appliesTo": ["3"],
+      "scope": "demuxTraceHeader",
+      "bytes": "1-2",
+      "offset0": 0,
+      "width": 2,
+      "field": "File number in the demux trace header",
+      "level": "mandatory",
+      "rule": "Two bytes, four BCD digits, 0 to 9999, or FFFF when the extended file number in bytes 18-20 is used.",
+      "check": { "kind": "bcdInRange", "min": 0, "max": 9999, "allowAllF": true },
+      "citation": [
+        { "doc": "SEG-D Rev 3.0", "section": "8.17 Demux Trace Header", "table": "byte 1,2 row (F1 - F4)", "pagePrinted": 115, "pagePdf": 115, "quote": "File Number (two bytes, four digits, BCD). These bytes must be set to FFFF16 when the file number is above 9999, i.e. the Extended File Number (bytes 18-20) is used." }
+      ]
+    },
+    {
+      "id": "SEGD3-DEMUX-03-SCAN-TYPE-NUMBER",
+      "format": "SEG-D",
+      "appliesTo": ["3"],
+      "scope": "demuxTraceHeader",
+      "bytes": "3",
+      "offset0": 2,
+      "width": 1,
+      "field": "Scan type number of the trace",
+      "level": "mandatory",
+      "rule": "One byte, two BCD digits, 1 to 99.",
+      "check": { "kind": "bcdInRange", "min": 1, "max": 99 },
+      "citation": [
+        { "doc": "SEG-D Rev 3.0", "section": "8.17 Demux Trace Header", "table": "byte 3 row (ST1 - ST2)", "pagePrinted": 115, "pagePdf": 115, "quote": "Scan Type Number (one byte, two digits, BCD). (1-99) Scantype this trace belongs to, see Channel Set Descriptor byte 1." }
+      ]
+    },
+    {
+      "id": "SEGD3-DEMUX-04-CHANNEL-SET-NUMBER",
+      "format": "SEG-D",
+      "appliesTo": ["3"],
+      "scope": "demuxTraceHeader",
+      "bytes": "4",
+      "offset0": 3,
+      "width": 1,
+      "field": "Channel set number of the trace",
+      "level": "mandatory",
+      "rule": "One byte, two BCD digits, 1 to 99, or FF when the extended channel set number in bytes 16-17 is used.",
+      "check": { "kind": "bcdInRange", "min": 1, "max": 99, "allowAllF": true },
+      "citation": [
+        { "doc": "SEG-D Rev 3.0", "section": "8.17 Demux Trace Header", "table": "byte 4 row (CN1 - CN2)", "pagePrinted": 115, "pagePdf": 115, "quote": "Channel Set Number (one byte, two digits, BCD). (1-99) Channel Set this trace belongs to, see Channel Set Descriptor byte 2-3. Set to FF16 if more than 99 channel sets are required, i.e. Extended Channel Set Number (byte 16-17) is used." }
+      ]
+    },
+    {
+      "id": "SEGD3-DEMUX-05-TRACE-NUMBER",
+      "format": "SEG-D",
+      "appliesTo": ["3"],
+      "scope": "demuxTraceHeader",
+      "bytes": "5-6",
+      "offset0": 4,
+      "width": 2,
+      "field": "Trace number",
+      "level": "mandatory",
+      "rule": "Two bytes, four BCD digits, 1 to 9999, and the first channel in each channel set starts with trace number one, so within a channel set trace i carries i+1 counting from zero.",
+      "check": { "kind": "bcdSequenceFromOne", "min": 1, "max": 9999, "allowAllF": true },
+      "citation": [
+        { "doc": "SEG-D Rev 3.0", "section": "8.17 Demux Trace Header", "table": "byte 5,6 row (TN1 - TN4)", "pagePrinted": 115, "pagePdf": 115, "quote": "Trace Number (two bytes, four digits, BCD). (1-9999) Set to FFFF16 if more than 9999 channels are required, i.e. Extended Trace Number (byte 22-24 of Trace Header Extension) is used." },
+        { "doc": "SEG-D Rev 3.0", "section": "5.2 Scan Type Headers, channel set rule d", "pagePrinted": 42, "pagePdf": 42, "quote": "The first channel in each channel set will start with trace number one." }
+      ]
+    },
+    {
+      "id": "SEGD3-DEMUX-10-TRACE-HEADER-EXTENSIONS",
+      "format": "SEG-D",
+      "appliesTo": ["3"],
+      "scope": "demuxTraceHeader",
+      "bytes": "10",
+      "offset0": 9,
+      "width": 1,
+      "field": "Number of trace header extension blocks",
+      "level": "mandatory",
+      "rule": "One byte unsigned binary in the range 1 to 255; at least one Trace Header Extension block is required in Rev 3.",
+      "check": { "kind": "uintInRange", "min": 1, "max": 255 },
+      "checkNote": "See _anInconsistencyInsideTheRev21Document: Rev 2.1 names three different bytes for this field in three different places. Rev 3.0's own field table and its section 5.2 ground rule 5 both say byte 10, and the Channel Set Descriptor cross-reference says byte 10, so byte 10 is what is read.",
+      "citation": [
+        { "doc": "SEG-D Rev 3.0", "section": "8.17 Demux Trace Header", "table": "byte 10 row (THE7 - THE0)", "pagePrinted": 116, "pagePdf": 116, "quote": "Trace Header Extensions (one byte, unsigned binary). Indicates the number of Trace Header Extension blocks (32 bytes each). Range 1-255. At least one Trace Header Extension block (the Trace Header Extension, block type 4016) is required. Channels within the same channel set must have the same number of Trace Header Extensions. Value must be the same as byte 28 of the matching Channel Set Descriptor." },
+        { "doc": "SEG-D Rev 3.0", "section": "5.3 Demux Trace Header (required)", "pagePrinted": 43, "pagePdf": 43, "quote": "A Trace Header Extension #1 must be added (required in rev 3.0+). The THE1 is used to include the receiver location for that trace." }
+      ]
+    },
+    {
+      "id": "SEGD3-DEMUX-12-TRACE-EDIT",
+      "format": "SEG-D",
+      "appliesTo": ["3"],
+      "scope": "demuxTraceHeader",
+      "bytes": "12",
+      "offset0": 11,
+      "width": 1,
+      "field": "Trace edit",
+      "level": "mandatory",
+      "rule": "One byte unsigned binary; only 00, 01, 02 and 03 are defined and other codes are undefined in Rev 3.0.",
+      "check": { "kind": "uintInSet", "values": [0, 1, 2, 3] },
+      "citation": [
+        { "doc": "SEG-D Rev 3.0", "section": "8.17 Demux Trace Header", "table": "byte 12 row (TR7 - TR0)", "pagePrinted": 116, "pagePdf": 116, "quote": "Trace edit (one byte, unsigned binary). 0016 No edit applied to this trace. 0116 Trace part of dead channels for roll-on or roll-off spread. Trace intentionally zeroed. 0216 Trace intentionally zeroed. 0316 Trace has been edited. This flag will indicate that the acquisition system has modified one or more samples of this trace. Other codes are undefined in Rev 3.0." }
+      ]
+    },
+    {
+      "id": "SEGD3-THE1-10-DEPTH-INDEX",
+      "format": "SEG-D",
+      "appliesTo": ["3"],
+      "scope": "traceHeaderExtension1",
+      "bytes": "10",
+      "offset0": 9,
+      "width": 1,
+      "field": "Depth index",
+      "level": "recommended",
+      "rule": "The field table says zero is not allowed and that the index starts at 1 closest to the surface.",
+      "check": { "kind": "uintInRange", "min": 1, "max": 255 },
+      "checkNote": "DELIBERATELY NOT MANDATORY, because Rev 3.0 contradicts itself here. Section 8.0's preamble says every location index should be recorded as 0 when unknown 'unless specified otherwise', the byte 10 row specifies otherwise ('0 is not allowed'), and then the closing note of section 8.18 says 0 is commonly used for exactly these indexes to indicate not set. All three sentences are quoted below. A run reports the failure so a reader sees it; it never fails the run.",
+      "citation": [
+        { "doc": "SEG-D Rev 3.0", "section": "8.18 Trace Header Extension #1", "table": "byte 10 row (DI7 - DI0)", "pagePrinted": 117, "pagePdf": 117, "quote": "Depth Index (one byte, unsigned binary). The depth index is used to indicate receivers recorded at different depths on the same location. 0 is not allowed. Starts at 1 closest to the surface, and counts up when moving downwards." },
+        { "doc": "SEG-D Rev 3.0", "section": "8.0 Header Block Parameters", "pagePrinted": 87, "pagePdf": 87, "quote": "The different location indexes for sources and receivers (Line, Point, Point index, Depth, Group and Depth) should be recorded as 0 if they are unknown/undetermined unless specified otherwise." },
+        { "doc": "SEG-D Rev 3.0", "section": "8.18 Trace Header Extension #1, closing note", "pagePrinted": 117, "pagePdf": 117, "quote": "016 is commonly used for indexes (receiver line/point, re-shoot, depth and group indexes) to indicate not set. Note that receiver point index should be set to 1 as initial value, however it may be 0 in case it is used to extend the range of depth index." }
+      ]
+    },
+    {
+      "id": "SEGD3-THE1-25-SAMPLES-MATCH-CHANNEL-SET",
+      "format": "SEG-D",
+      "appliesTo": ["3"],
+      "scope": "traceHeaderExtension1",
+      "bytes": "25-28",
+      "offset0": 24,
+      "width": 4,
+      "field": "Number of samples in this trace",
+      "level": "mandatory",
+      "rule": "Four bytes unsigned binary, and it must equal bytes 13-16 of the channel set descriptor the trace belongs to.",
+      "check": { "kind": "matchesCsdField", "csdOffset0": 12, "csdWidth": 4, "csdBytes": "13-16" },
+      "citation": [
+        { "doc": "SEG-D Rev 3.0", "section": "8.18 Trace Header Extension #1", "table": "byte 25-28 row (NS31 - NS0)", "pagePrinted": 117, "pagePdf": 117, "quote": "Number of samples in this trace (four bytes, unsigned binary) It can assume a value from 0 to 4,294,967,295. This must be the same as bytes 13-16 of channel set descriptor." }
+      ]
+    },
+    {
+      "id": "SEGD3-THE1-31-PHYSICAL-UNIT-MATCHES-CHANNEL-SET",
+      "format": "SEG-D",
+      "appliesTo": ["3"],
+      "scope": "traceHeaderExtension1",
+      "bytes": "31",
+      "offset0": 30,
+      "width": 1,
+      "field": "Physical unit measured by this sensor",
+      "level": "mandatory",
+      "rule": "One byte unsigned binary, the same as byte 62 of the channel set header.",
+      "check": { "kind": "matchesCsdField", "csdOffset0": 61, "csdWidth": 1, "csdBytes": "62" },
+      "citation": [
+        { "doc": "SEG-D Rev 3.0", "section": "8.18 Trace Header Extension #1", "table": "byte 31 row (PHU7 - PHU0)", "pagePrinted": 118, "pagePdf": 118, "quote": "Physical unit (1 byte, unsigned binary). This is the physical unit measured by this sensor. Same as byte 62 of the channel set header" }
+      ]
+    },
+    {
+      "id": "SEGD3-THE1-32-BLOCK-TYPE",
+      "format": "SEG-D",
+      "appliesTo": ["3"],
+      "scope": "traceHeaderExtension1",
+      "bytes": "32",
+      "offset0": 31,
+      "width": 1,
+      "field": "Header block type of Trace Header Extension #1",
+      "level": "mandatory",
+      "rule": "Byte 32 of Trace Header Extension #1 is set to 40.",
+      "check": { "kind": "equals", "value": 64 },
+      "checkNote": "64 decimal is 4016, the value the page prints, and the same value Table 2 assigns to 'Trace header extension 1'. Without it a reader walking a Rev 3 trace header cannot tell what the 32-byte block it just read actually was.",
+      "citation": [
+        { "doc": "SEG-D Rev 3.0", "section": "8.18 Trace Header Extension #1", "table": "byte 32 row (HT7 - HT0)", "pagePrinted": 118, "pagePdf": 118, "quote": "Header block type (1 byte, unsigned binary) Set to 4016 for Trace header extension 1." },
+        { "doc": "SEG-D Rev 3.0", "section": "5.1, Table 2: Header block types defined in SEG-D Rev 3.0", "table": "row 4016", "pagePrinted": 40, "pagePdf": 40, "quote": "4016 Trace header extension 1" }
+      ]
+    },
+
+    {
+      "id": "SEGD1-GH1-01-FILE-NUMBER-BCD",
+      "format": "SEG-D",
+      "appliesTo": ["1"],
+      "scope": "generalHeader1",
+      "bytes": "1-2",
+      "offset0": 0,
+      "width": 2,
+      "field": "File number (four digits, packed BCD)",
+      "level": "mandatory",
+      "tier": "A",
+      "rule": "Four packed BCD digits, 0 to 9999, or FFFF when the three-byte binary file number in General Header Block #2 bytes 1-3 is used.",
+      "check": { "kind": "bcdInRange", "min": 0, "max": 9999, "allowAllF": true },
+      "checkNote": "Tier A: Rev 2.1 section 2.1 item 6 states this as a correction made to the Rev 1 document itself, and section 2.2 item 5 states the FFFF escape as one of the changes introduced in Rev 1.",
+      "citation": [
+        { "doc": "SEG-D Rev 2.1", "section": "2.1 Changes Introduced in Rev 2.0, item 6", "pagePrinted": 6, "pagePdf": 6, "quote": "Another correction will be made to correctly state, for byte 1 of the General Header, \"File number of four digits (0-9999) set to FFFF (Hex) when the file number is greater than 9999." },
+        { "doc": "SEG-D Rev 2.1", "section": "2.2 Changes Introduced in Rev 1, item 5", "pagePrinted": 8, "pagePdf": 8, "quote": "Provide for the use of File Numbers greater than 9999. Bytes 1, 2, and 3 in General Header Block #2 allow for a three byte, binary file number. When the file number is greater than 9999, bytes 1 and 2 in the General Header Block #1 must be set to FFFF." }
+      ]
+    },
+    {
+      "id": "SEGD1-GH1-03-FORMAT-CODE",
+      "format": "SEG-D",
+      "appliesTo": ["1"],
+      "scope": "generalHeader1",
+      "bytes": "3-4",
+      "offset0": 2,
+      "width": 2,
+      "field": "Format code",
+      "level": "mandatory",
+      "tier": "A",
+      "rule": "The four hexadecimal digits in bytes 3 and 4 must be one of the defined format codes; 0200 and 0000 are illegal.",
+      "check": { "kind": "hexDigitsInSet", "values": ["0036", "0038", "0058", "8015", "8022", "8024", "8036", "8038", "8042", "8044", "8048", "8058"] },
+      "checkNote": "Tier A for the six codes Rev 1 added, which section 2.2 item 11 lists outright and which include the 8058 SeisConv writes. The list is NOT provably exhaustive for Rev 1: the codes that predate Rev 1 can only be read from the Rev 2.1 field table, which is a later document, so a file carrying some other legacy code would be reported as failing when it might be legal. The two illegal codes are unambiguous in both documents.",
+      "citation": [
+        { "doc": "SEG-D Rev 2.1", "section": "2.2 Changes Introduced in Rev 1, item 11", "pagePrinted": 9, "pagePdf": 9, "quote": "Allow recording data in IEEE and other new formats. Additional Valid Format Codes for bytes 3 & 4 of the General Header are: 0036 24 bit 2's compliment integer multiplexed 0038 32 bit 2's compliment integer multiplexed 0058 32 bit IEEE multiplexed 8036 24 bit 2's compliment integer demultiplexed 8038 32 bit 2's compliment integer demultiplexed 8058 32 bit IEEE demultiplexed" },
+        { "doc": "SEG-D Rev 2.1", "section": "8.1 General Header, Block #1", "table": "byte 3-4 row", "pagePrinted": 38, "pagePdf": 38, "quote": "Format code: 8015 20 bit binary demultiplexed 8022 8 bit quaternary demultiplexed 8024 16 bit quaternary demultiplexed 8036 24 bit 2's compliment integer demultiplexed 8038 32 bit 2's compliment integer demultiplexed 8042 8 bit hexadecimal demultiplexed 8044 16 bit hexadecimal demultiplexed 8048 32 bit hexadecimal demultiplexed 8058 32 bit IEEE demultiplexed 0200 Illegal, do not use 0000 Illegal, do not use" }
+      ]
+    },
+    {
+      "id": "SEGD1-GH1-12-ADDITIONAL-GENERAL-HEADER-BLOCKS",
+      "format": "SEG-D",
+      "appliesTo": ["1"],
+      "scope": "generalHeader1",
+      "bytes": "12 (upper nibble)",
+      "offset0": 11,
+      "width": 1,
+      "field": "Number of additional blocks in the General Header",
+      "level": "mandatory",
+      "tier": "A",
+      "rule": "For a file declaring Rev 1 the count of additional general header blocks is 1 or greater, since General Header Block #2 is required and the count excludes block #1.",
+      "check": { "kind": "nibbleInRange", "half": "high", "min": 1, "max": 15 },
+      "citation": [
+        { "doc": "SEG-D Rev 2.1", "section": "2.2 Changes Introduced in Rev 1, item 3", "pagePrinted": 8, "pagePdf": 8, "quote": "In addition, in the General Header Block #1, nibble 1 of byte 12 contains the number of additional blocks in the general header. Nibble 1, byte 12 is an unsigned binary number. This number will be 1 or greater for SEG D Rev 1." },
+        { "doc": "SEG-D Rev 2.1", "section": "8.1 General Header, Block #1", "table": "byte 12 row (GH)", "pagePrinted": 38, "pagePdf": 38, "quote": "Number of additional Blocks in General Header (unsigned binary). This number will be 1 or greater for SEG-D Rev 1., or Rev. 2 (e.g. If only GH Blk #1 and GH Blk #2 are present then GH = 1. For each additional block, the value is increased by one.)" }
+      ]
+    },
+    {
+      "id": "SEGD1-GH1-26-RECORD-LENGTH-FFF-WHEN-EXTENDED",
+      "format": "SEG-D",
+      "appliesTo": ["1"],
+      "scope": "generalHeader1",
+      "bytes": "26 (lower nibble) and 27",
+      "offset0": 25,
+      "width": 2,
+      "field": "Record length from time zero, three nibbles",
+      "level": "mandatory",
+      "tier": "A",
+      "rule": "When the Extended Record Length in General Header Block #2 bytes 15-17 (milliseconds) is in use, the three record-length nibbles must all be F.",
+      "check": { "kind": "recordLengthFFFWhenExtended", "extendedField": "rev1" },
+      "checkNote": "Tier A: section 2.2 item 19 is in the list of changes introduced in Rev 1 and states both the field position and the FFF requirement. Which three nibbles they are is the field-table question: Rev 2.1's own byte 27 row says 'These three nibbles' while listing R1, R2, R3 against byte 27 alone, and Rev 3.0's index column resolves it by splitting byte 26 into Z (record type) and R1, leaving R2, R3 in byte 27. The check reads the lower nibble of byte 26 plus byte 27, and is skipped when the extended field holds zero.",
+      "citation": [
+        { "doc": "SEG-D Rev 2.1", "section": "2.2 Changes Introduced in Rev 1, item 19", "pagePrinted": 11, "pagePdf": 11, "quote": "Added the option for using record lengths in millisecond increments (rather than the previous 0.5 second increments). The Extended Record Length is the record length, in unsigned binary milliseconds, and is recorded in bytes 15-17 in General Header Block #2. If this option is used, Record Length (R), in the General Header Block #1, bytes 26, 27 must be set to FFF." },
+        { "doc": "SEG-D Rev 2.1", "section": "8.2 General Header Block #2", "table": "byte 15,16,17 row (ERL23 - ERL0)", "pagePrinted": 41, "pagePdf": 41, "quote": "Extended Record Length (three bytes, unsigned binary) indicates the record length in milliseconds. When using extended record length, the record length in the General Header Blk #1, Bytes 26 & 27 must be set to FFF." }
+      ]
+    },
+    {
+      "id": "SEGD1-GH2-11-REVISION-NUMBER",
+      "format": "SEG-D",
+      "appliesTo": ["1"],
+      "scope": "generalHeader2",
+      "bytes": "11-12",
+      "offset0": 10,
+      "width": 2,
+      "field": "SEG-D revision number",
+      "level": "mandatory",
+      "tier": "A",
+      "rule": "Bytes 11 and 12 of General Header Block #2 carry the SEG-D revision number, which is 1 for a Rev 1 file: byte 11 (major) is 1 and byte 12 (minor) is 0.",
+      "check": { "kind": "majorMinorEquals", "major": 1, "minor": 0 },
+      "checkNote": "The two documents describe the same two bytes differently and the harness follows the field tables. Section 2.2 item 3 calls bytes 11 and 12 together 'a 16 bit unsigned binary number' whose value 'is 1', which read literally would put 00 in byte 11 and 01 in byte 12. Rev 2.1's own field table splits them into a one-byte Major and a one-byte Minor, and Rev 3.0 does the same with Major set to 0316 and Minor to 0016. Two field tables against one loose sentence, so major-then-minor is what is checked, and a file written the other way would be reported here.",
+      "citation": [
+        { "doc": "SEG-D Rev 2.1", "section": "2.2 Changes Introduced in Rev 1, item 3", "pagePrinted": 8, "pagePdf": 8, "quote": "Provide provision to include the revision of SEG-D format. Added to Bytes 11 and 12 of General Header Block #2 contain the SEG-D Revision Number. The revision number is a 16 bit unsigned binary number. The Revision number is 1 for the proposed version." },
+        { "doc": "SEG-D Rev 2.1", "section": "8.2 General Header Block #2", "table": "byte 11 and byte 12 rows (RMJ, RMN)", "pagePrinted": 40, "pagePdf": 40, "quote": "Major SEG-D Revision Number, one byte unsigned binary. Set to 02 (Hex). Minor SEG-D Revision Number, one byte unsigned binary. Set to 01 (Hex). Revisions 0 to 0.N are not valid.). This version is Rev 2.1." }
+      ]
+    },
+    {
+      "id": "SEGD1-CSD-30-VERTICAL-STACK",
+      "format": "SEG-D",
+      "appliesTo": ["1"],
+      "scope": "channelSetDescriptor",
+      "bytes": "30",
+      "offset0": 29,
+      "width": 1,
+      "field": "Vertical stack (effective stack order)",
+      "level": "recommended",
+      "tier": "A",
+      "rule": "Zero asserts that the trace data was intentionally set to real zero; a channel set carrying real samples must declare 1 (no stack) or the effective stack order.",
+      "check": { "kind": "verticalStackAgainstSamples" },
+      "checkNote": "Same one-directional check as the Rev 3 row: it fails only when the channel set declares zero AND at least one sample in it is non-zero.",
+      "citation": [
+        { "doc": "SEG-D Rev 2.1", "section": "2.2 Changes Introduced in Rev 1, item 13", "pagePrinted": 10, "pagePdf": 10, "quote": "Added the effective stack order (unsigned binary), in byte 30 in the Channel Set descriptor. Set to 0 if the trace data was intentionally set to real 0. Set to 1 if no stack. Set to the effective stack order if the data is the result of stacked data (with or without processing)." }
+      ]
+    },
+    {
+      "id": "SEGD1-THE-08-SAMPLES-PER-TRACE",
+      "format": "SEG-D",
+      "appliesTo": ["1"],
+      "scope": "traceHeaderExtension1",
+      "bytes": "8-10",
+      "offset0": 7,
+      "width": 3,
+      "field": "Number of samples per trace",
+      "level": "mandatory",
+      "tier": "A",
+      "rule": "Bytes 8, 9 and 10 of the Trace Header Extension hold the number of samples per trace as a three-byte unsigned binary number, and a trace that carries samples must declare a non-zero count there.",
+      "check": { "kind": "uintInRange", "min": 1, "max": 16777215 },
+      "checkNote": "This is the field the structural walk uses to step from one Rev 1 trace to the next, so a wrong value shows up twice: here, and as a layout that does not close.",
+      "citation": [
+        { "doc": "SEG-D Rev 2.1", "section": "2.2 Changes Introduced in Rev 1, item 9", "pagePrinted": 9, "pagePdf": 9, "quote": "Provide for larger number of samples per trace. Using bytes 8, 9, and 10 of the Trace Header Extension." },
+        { "doc": "SEG-D Rev 2.1", "section": "8.7 Trace Header Extension", "table": "byte 8,9,10 row (NBS23 - NBS0)", "pagePrinted": 46, "pagePdf": 46, "quote": "Number of Samples per Trace (three bytes, unsigned binary)." }
+      ]
+    },
+    {
+      "id": "SEGD1-DEMUX-05-TRACE-NUMBER",
+      "format": "SEG-D",
+      "appliesTo": ["1"],
+      "scope": "demuxTraceHeader",
+      "bytes": "5-6",
+      "offset0": 4,
+      "width": 2,
+      "field": "Trace number",
+      "level": "mandatory",
+      "tier": "A",
+      "rule": "Two bytes, four BCD digits, and the first channel in each channel set starts with trace number one, so within a channel set trace i carries i+1 counting from zero.",
+      "check": { "kind": "bcdSequenceFromOne", "min": 1, "max": 9999, "allowAllF": false },
+      "citation": [
+        { "doc": "SEG-D Rev 2.1", "section": "2.2 Changes Introduced in Rev 1, item 17", "pagePrinted": 10, "pagePdf": 10, "quote": "In addition, the first channel in each channel set will start with Trace number one." },
+        { "doc": "SEG-D Rev 2.1", "section": "8.6 Demux Trace Header", "table": "byte 5,6 row (TN1 - TN4)", "pagePrinted": 45, "pagePdf": 45, "quote": "Trace Number (two byte, four digit, BCD)." }
+      ]
+    },
+    {
+      "id": "SEGD1-GH1-23-BASE-SCAN-INTERVAL",
+      "format": "SEG-D",
+      "appliesTo": ["1"],
+      "scope": "generalHeader1",
+      "bytes": "23",
+      "offset0": 22,
+      "width": 1,
+      "field": "Base scan interval",
+      "level": "recommended",
+      "tier": "B",
+      "citationCaveat": "Cited from SEG-D Rev 2.1 against a file declaring Rev 1. Rev 2.1's own lists of changes introduced in Rev 2.0 and Rev 2.1 do not mention this field, so it very probably predates Rev 1, but the document does not say so and no Rev 1 document is on this machine. Carried as recommended for that reason.",
+      "rule": "A binary number whose LSB is 1/16 msec, allowing 1/16, 1/8, 1/4, 1/2, 1, 2, 4 and 8 msec only, so the byte is one of 1, 2, 4, 8, 16, 32, 64 or 128.",
+      "check": { "kind": "uintInSet", "values": [1, 2, 4, 8, 16, 32, 64, 128] },
+      "citation": [
+        { "doc": "SEG-D Rev 2.1", "section": "8.1 General Header, Block #1", "table": "byte 23 row (I3 thru I-4)", "pagePrinted": 39, "pagePdf": 39, "quote": "Base scan interval.--This is coded as a binary number with the LSB equal to 1/16 msec. This will allow sampling intervals from 1/16 through 8 msec in binary steps. Thus, the allowable base scan intervals are 1/16, 1/8, 1/4, 1/2, 1, 2, 4, and 8 msec. The base scan interval is always the difference between successive timing words." }
+      ]
+    },
+    {
+      "id": "SEGD1-GH1-28-SCAN-TYPES-PER-RECORD",
+      "format": "SEG-D",
+      "appliesTo": ["1"],
+      "scope": "generalHeader1",
+      "bytes": "28",
+      "offset0": 27,
+      "width": 1,
+      "field": "Scan types per record",
+      "level": "recommended",
+      "tier": "B",
+      "citationCaveat": "Cited from SEG-D Rev 2.1 against a file declaring Rev 1; not listed among the changes introduced in Rev 2.0 or Rev 2.1, but the document does not state that it applies to Rev 1 either.",
+      "rule": "Two packed BCD digits, 1 to 99. Zero is invalid.",
+      "check": { "kind": "bcdInRange", "min": 1, "max": 99 },
+      "citation": [
+        { "doc": "SEG-D Rev 2.1", "section": "8.1 General Header, Block #1", "table": "byte 28 row (ST/R1, ST/R2)", "pagePrinted": 39, "pagePdf": 39, "quote": "Scan types per record. This 2 digit code is the number of scan types per record (1-99). (Zero is invalid.)" }
+      ]
+    },
+    {
+      "id": "SEGD1-GH1-29-CHANNEL-SETS-PER-SCAN-TYPE",
+      "format": "SEG-D",
+      "appliesTo": ["1"],
+      "scope": "generalHeader1",
+      "bytes": "29",
+      "offset0": 28,
+      "width": 1,
+      "field": "Number of channel sets per scan type",
+      "level": "recommended",
+      "tier": "B",
+      "citationCaveat": "Cited from SEG-D Rev 2.1 against a file declaring Rev 1. The FF escape to General Header Block #2 bytes 4-5 IS a Rev 1 change (section 2.2 item 6); the 1 to 99 range and 'zero is invalid' come from the Rev 2.1 field table.",
+      "rule": "Two packed BCD digits, 1 to 99, or FF when the extended channel set count in General Header Block #2 bytes 4-5 is used. Zero is invalid.",
+      "check": { "kind": "bcdInRange", "min": 1, "max": 99, "allowAllF": true },
+      "citation": [
+        { "doc": "SEG-D Rev 2.1", "section": "8.1 General Header, Block #1", "table": "byte 29 row (CS1, CS2)", "pagePrinted": 39, "pagePdf": 39, "quote": "Number of channel sets per scan type (1-99). (Zero is invalid; set to FF when using Extended channel sets/scan types.) This 2 digit code is the number of channel sets per scan." },
+        { "doc": "SEG-D Rev 2.1", "section": "2.2 Changes Introduced in Rev 1, item 6", "pagePrinted": 9, "pagePdf": 9, "quote": "Provide for Extended Channel Sets/Scan Types. General Header Block #2 allows for a two byte, binary number of Channel Sets/Scan Types in bytes 4 and 5. When using the Extended Channel Sets/Scan Types, byte 29 of General Header #1 must be set to FF." }
+      ]
+    },
+    {
+      "id": "SEGD1-GH2-19-BLOCK-NUMBER",
+      "format": "SEG-D",
+      "appliesTo": ["1"],
+      "scope": "generalHeader2",
+      "bytes": "19",
+      "offset0": 18,
+      "width": 1,
+      "field": "General header block number",
+      "level": "recommended",
+      "tier": "B",
+      "citationCaveat": "Cited from SEG-D Rev 2.1 against a file declaring Rev 1; neither list of changes mentions this field, so whether Rev 1 defined it cannot be established from the documents on this machine.",
+      "rule": "One byte unsigned binary, set to 2 for General Header Block #2. Zero is not valid.",
+      "check": { "kind": "equals", "value": 2 },
+      "citation": [
+        { "doc": "SEG-D Rev 2.1", "section": "8.2 General Header Block #2", "table": "byte 19 row (BN7 - BN0)", "pagePrinted": 41, "pagePdf": 41, "quote": "General Header Block Number. (one byte unsigned binary) Set to 2 for this block. Zero is not valid." }
+      ]
+    },
+    {
+      "id": "SEGD1-CSD-01-SCAN-TYPE-NUMBER",
+      "format": "SEG-D",
+      "appliesTo": ["1"],
+      "scope": "channelSetDescriptor",
+      "bytes": "1",
+      "offset0": 0,
+      "width": 1,
+      "field": "Scan type header number",
+      "level": "recommended",
+      "tier": "B",
+      "citationCaveat": "Cited from SEG-D Rev 2.1 against a file declaring Rev 1; not listed among the Rev 2.0 or Rev 2.1 changes.",
+      "rule": "Two BCD digits, 1 to 99; the first scan type header is 1.",
+      "check": { "kind": "bcdInRange", "min": 1, "max": 99 },
+      "citation": [
+        { "doc": "SEG-D Rev 2.1", "section": "8.5 Channel Set Descriptor", "table": "byte 1 row (ST1, ST2)", "pagePrinted": 42, "pagePdf": 42, "quote": "These two digits (1-99) identify the number of the scan type header to be described by the subsequent bytes. The first scan type header is 1 and the last scan type header number is the same value as Byte 28 (ST/R) of the General Header Block #1." }
+      ]
+    },
+    {
+      "id": "SEGD1-CSD-02-CHANNEL-SET-NUMBER",
+      "format": "SEG-D",
+      "appliesTo": ["1"],
+      "scope": "channelSetDescriptor",
+      "bytes": "2",
+      "offset0": 1,
+      "width": 1,
+      "field": "Channel set number",
+      "level": "recommended",
+      "tier": "B",
+      "citationCaveat": "Cited from SEG-D Rev 2.1 against a file declaring Rev 1; not listed among the Rev 2.0 or Rev 2.1 changes. Only the 1 to 99 BCD range is applied. The FF escape to the Extended Channel Set Number in descriptor bytes 27-28 is NOT admitted here, because the Rev 2.1 byte 2 row that defines it does not say when it appeared and neither list of changes, in Rev 2.1 or in Rev 3.0, mentions it; whether a Rev 1 file could use it is not establishable from the documents on this machine.",
+      "rule": "Two BCD digits, 1 to 99; the first channel set is 1.",
+      "check": { "kind": "bcdInRange", "min": 1, "max": 99, "allowAllF": false },
+      "citation": [
+        { "doc": "SEG-D Rev 2.1", "section": "8.5 Channel Set Descriptor", "table": "byte 2 row (CN1, CN2)", "pagePrinted": 43, "pagePdf": 43, "quote": "These two digits (1-99) identify the channel set to be described in the next 30 bytes within this scan type header. The first channel set is \"1\" and the last channel set number is the same number as Byte 29 (CS) of the General Header Block #1." }
+      ]
+    },
+    {
+      "id": "SEGD1-CSD-05-END-TIME-IS-RECORD-LENGTH",
+      "format": "SEG-D",
+      "appliesTo": ["1"],
+      "scope": "channelSetDescriptor",
+      "bytes": "5-6",
+      "offset0": 4,
+      "width": 2,
+      "field": "Channel set end time, against the record length",
+      "level": "recommended",
+      "tier": "B",
+      "citationCaveat": "Cited from SEG-D Rev 2.1 against a file declaring Rev 1; not listed among the Rev 2.0 or Rev 2.1 changes. The standard says 'would be', not 'must be', so this row would be recommended in any case.",
+      "rule": "In a single scan type record, the channel set end time in bytes 5 and 6 (2 millisecond increments) is the length of the record, so it must agree with the Extended Record Length in General Header Block #2 bytes 15-17 (milliseconds) when that field is in use.",
+      "check": { "kind": "endTimeMatchesRecordLengthRev1" },
+      "checkNote": "Applied only when General Header Block #1 byte 28 declares exactly one scan type and the extended record length is non-zero; otherwise the row reports SKIP with the reason, because with several scan types a channel set may legitimately end early.",
+      "citation": [
+        { "doc": "SEG-D Rev 2.1", "section": "8.5 Channel Set Descriptor", "table": "byte 5,6 row (TE16 thru TE1)", "pagePrinted": 43, "pagePdf": 43, "quote": "Channel set end time. This is a binary number where TE1 = 21 milliseconds (2 millisecond increments). These two bytes represent the record end time of the channel set in milliseconds. TE may be used to allow the termination of a particular channel set shorter than other channel sets within its scan type. In a single scan type record, Bytes 5 and 6 would be the length of the record." }
+      ]
+    },
+    {
+      "id": "SEGD1-CSD-09-CHANNELS-BCD",
+      "format": "SEG-D",
+      "appliesTo": ["1"],
+      "scope": "channelSetDescriptor",
+      "bytes": "9-10",
+      "offset0": 8,
+      "width": 2,
+      "field": "Number of channels in this channel set",
+      "level": "recommended",
+      "tier": "B",
+      "citationCaveat": "Cited from SEG-D Rev 2.1 against a file declaring Rev 1; not listed among the Rev 2.0 or Rev 2.1 changes.",
+      "rule": "Four packed BCD digits, 0 to 9999.",
+      "check": { "kind": "bcdInRange", "min": 0, "max": 9999 },
+      "checkNote": "The structural walk uses this same field to know how many traces belong to the channel set, so a non-BCD value shows up here and again as a layout that does not close.",
+      "citation": [
+        { "doc": "SEG-D Rev 2.1", "section": "8.5 Channel Set Descriptor", "table": "byte 9,10 rows (C/S1, C/S2 and C/S3, C/S4)", "pagePrinted": 43, "pagePdf": 43, "quote": "This is the number of channels in this channel set. It can assume a number from 0-9999." }
+      ]
+    },
+    {
+      "id": "SEGD1-DEMUX-01-FILE-NUMBER-BCD",
+      "format": "SEG-D",
+      "appliesTo": ["1"],
+      "scope": "demuxTraceHeader",
+      "bytes": "1-2",
+      "offset0": 0,
+      "width": 2,
+      "field": "File number in the demux trace header",
+      "level": "recommended",
+      "tier": "B",
+      "citationCaveat": "Cited from SEG-D Rev 2.1 against a file declaring Rev 1; not listed among the Rev 2.0 or Rev 2.1 changes.",
+      "rule": "Two bytes, four BCD digits, or FFFF when the extended file number in bytes 18-20 is used.",
+      "check": { "kind": "bcdInRange", "min": 0, "max": 9999, "allowAllF": true },
+      "citation": [
+        { "doc": "SEG-D Rev 2.1", "section": "8.6 Demux Trace Header", "table": "byte 1,2 row (F1 - F4)", "pagePrinted": 45, "pagePdf": 45, "quote": "File Number (two byte, four digit, BCD). These bytes must be set to FFFF when the Extended File Number (bytes 18,19,20) is used." }
+      ]
+    },
+    {
+      "id": "SEGD1-DEMUX-03-SCAN-TYPE-NUMBER",
+      "format": "SEG-D",
+      "appliesTo": ["1"],
+      "scope": "demuxTraceHeader",
+      "bytes": "3",
+      "offset0": 2,
+      "width": 1,
+      "field": "Scan type number of the trace",
+      "level": "recommended",
+      "tier": "B",
+      "citationCaveat": "Cited from SEG-D Rev 2.1 against a file declaring Rev 1; not listed among the Rev 2.0 or Rev 2.1 changes.",
+      "rule": "One byte, two BCD digits.",
+      "check": { "kind": "bcdInRange", "min": 1, "max": 99, "allowAllF": true },
+      "citation": [
+        { "doc": "SEG-D Rev 2.1", "section": "8.6 Demux Trace Header", "table": "byte 3 row (ST1 - ST2)", "pagePrinted": 45, "pagePdf": 45, "quote": "Scan Type Number (one byte, two digit, BCD). This byte must be set to FF when the Extended Channel Set Number (bytes 16 & 17) is used." }
+      ]
+    },
+    {
+      "id": "SEGD1-DEMUX-04-CHANNEL-SET-NUMBER",
+      "format": "SEG-D",
+      "appliesTo": ["1"],
+      "scope": "demuxTraceHeader",
+      "bytes": "4",
+      "offset0": 3,
+      "width": 1,
+      "field": "Channel set number of the trace",
+      "level": "recommended",
+      "tier": "B",
+      "citationCaveat": "Cited from SEG-D Rev 2.1 against a file declaring Rev 1; not listed among the Rev 2.0 or Rev 2.1 changes.",
+      "rule": "One byte, two BCD digits.",
+      "check": { "kind": "bcdInRange", "min": 1, "max": 99, "allowAllF": true },
+      "citation": [
+        { "doc": "SEG-D Rev 2.1", "section": "8.6 Demux Trace Header", "table": "byte 4 row (CN1-CN2)", "pagePrinted": 45, "pagePdf": 45, "quote": "Channel Set Number (one byte, two digit, BCD)." }
+      ]
+    },
+    {
+      "id": "SEGD1-DEMUX-12-TRACE-EDIT",
+      "format": "SEG-D",
+      "appliesTo": ["1"],
+      "scope": "demuxTraceHeader",
+      "bytes": "12",
+      "offset0": 11,
+      "width": 1,
+      "field": "Trace edit",
+      "level": "recommended",
+      "tier": "A",
+      "rule": "One byte unsigned binary; Rev 1 defines 0 (no edit), 1 (dead channel for roll-on or roll-off, intentionally zeroed) and 2 (intentionally zeroed). Code 3 was added in Rev 2.0.",
+      "check": { "kind": "uintInSet", "values": [0, 1, 2] },
+      "checkNote": "Held at recommended although the values are Tier A, because Rev 2.1 contradicts itself about WHICH byte this is: section 2.2 item 15, the sentence quoted below, says byte 10, while the field table in section 8.6 puts Trace edit in byte 12 and Trace Header Extensions in byte 10, and Rev 3.0 agrees with the field table. See _anInconsistencyInsideTheRev21Document. The check reads byte 12; a run cannot be allowed to fail on a byte the standard names twice.",
+      "citation": [
+        { "doc": "SEG-D Rev 2.1", "section": "2.2 Changes Introduced in Rev 1, item 15", "pagePrinted": 10, "pagePdf": 10, "quote": "Added provisions for a Trace Edit byte (byte 10 of Demux Trace Header) to indicate traces zeroed for roll-on or roll-off and to indicate deliberately zeroed traces. TR=0 No edit of this trace, TR=1 Trace part of dead channels for roll-on or roll-off spread; trace intentionally zeroed. TR=2 Trace intentionally zeroed." },
+        { "doc": "SEG-D Rev 2.1", "section": "8.6 Demux Trace Header", "table": "byte 12 row (TR7 - TR0)", "pagePrinted": 45, "pagePdf": 45, "quote": "Trace edit (one byte, unsigned binary). TR=00 No edit applied to this trace. TR=01 Trace part of dead channels for roll-on or roll-off spread. Trace intentionally zeroed. TR=02 Trace intentionally zeroed. TR=03 Trace has been edited. ... Other codes are undefined at Rev 2.1 and 2.0." }
+      ]
+    }
+  ],
+
+  "uncovered": [
+    {
+      "what": "SEG-D Rev 1 as a document",
+      "why": "There is no SEG-D Rev 1 PDF on this machine, only Rev 2.1, Rev 3.0 and Rev 3.1. Every rev-1 row above is cited from Rev 2.1 and graded by the tier scheme in _noRev1Document: Tier A rows quote sentences that speak about Rev 1 explicitly, Tier B rows are Rev 2.1 field-table definitions carried at `recommended` only, and Tier C fields are not checked at all. This is the same situation SEG-Y rev 0 is in, handled the same way, except that Rev 2.1 does at least carry a chapter about what Rev 1 changed."
+    },
+    {
+      "what": "Fields Rev 2.1 states were introduced AFTER Rev 1 (Tier C), when the file declares Rev 1",
+      "why": "Section 2.1 lists them as Rev 2.0 changes and section 2.0 as Rev 2.1 changes, so they cannot be required of a Rev 1 file: the trace header extension count in the lower nibble of Channel Set Descriptor byte 29 and the 15-extension maximum (2.1 section 2.1 item 9 and item 8), the fractional receiver line and point numbers with their FFFFFF flag and the extended fields that hold them (item 7), trace edit code 03 (item 14), the sensor type in Trace Header Extension byte 21 (2.1 section 2.1 item 18), and the sequence number in General Header Block #2 bytes 21-22 (2.1 section 2.0 item 4, confirmed by Rev 3.0 section 2.1 item 3). SeisConv's rev-1 output populates several of these; none of them is judged."
+    },
+    {
+      "what": "Fields that neither list of changes mentions at all, when the file declares Rev 1",
+      "why": "A third case, distinct from the tiers: the field is defined in a Rev 2.1 field table and NEITHER the Rev 2.1 lists (sections 2.0, 2.1, 2.2) NOR Rev 3.0's own versions of them (sections 2.1, 2.2, 2.3) says when it appeared. The Extended Channel Set Number in Channel Set Descriptor bytes 27-28 is the case that came up: SEGD1-CSD-02-CHANNEL-SET-NUMBER therefore does not admit FF as an escape for a rev-1 file, because admitting it would be asserting a history the documents on this machine do not record. Where such a field is only an escape hatch, not admitting it is the conservative choice; where it would have to be read to walk the file, the row is simply absent."
+    },
+    {
+      "what": "SEG-D Rev 2.x output",
+      "why": "SeisConv registers exactly two SEG-D writers, `segd1` and `segd3` (core/formats/registry.ts). Nothing it writes declares major revision 2, so the Rev 2.1 field tables are used here only as the nearest document to Rev 1, never as rules about a Rev 2 file, and no rev-2 row exists."
+    },
+    {
+      "what": "SEG-D Rev 3.1",
+      "why": "seg_d_rev3.1.pdf is on this machine but SeisConv declares major 3 minor 0, so Rev 3.1's own additions apply to nothing it writes. A file declaring 3.1 would need its own rows read out of that document."
+    },
+    {
+      "what": "Channel type identification for a file declaring Rev 1 (Channel Set Descriptor byte 11)",
+      "why": "Rev 2.1 prints this as a bit-column table which `pdftotext -layout` interleaves into unusable text: the bit columns and the meanings separate and cannot be paired without guessing which row is which. A rule read out of a mangled extraction is a rule read out of memory. Rev 3.0 prints the same information as a clean hexadecimal code list, so the rev-3 row SEGD3-CSD-04-CHANNEL-TYPE exists and the rev-1 one does not."
+    },
+    {
+      "what": "Channel Set Descriptor array forming (Rev 3.0 byte 27, Rev 2.1 byte 32) and channel gain control method (byte 29 lower nibble / byte 12 lower nibble)",
+      "why": "Both documents list the defined codes (01 no array forming, 02..0N groups summed, 1N weighted; gain modes 1,2,3,4,8,9) but neither says that a value outside the list, zero in particular, is forbidden. SeisConv writes zero in both. Encoding a prohibition the standard does not state would be inventing a rule."
+    },
+    {
+      "what": "Julian day, hour, minute and second for a file declaring Rev 1",
+      "why": "Three BCD digits of Julian day cannot fit in one byte, so the field must span the lower nibble of byte 12 and both nibbles of byte 13. Rev 3.0's index column says exactly that (a '12 DY1' row and a '13 DY2, DY3' row); Rev 2.1's table as extracted puts DY1, DY2 and DY3 all against byte 13, which cannot be read literally. Rather than carry the Rev 3.0 split back onto a Rev 1 file, the rev-1 timestamp fields are not checked at all. The rev-3 rows are."
+    },
+    {
+      "what": "General Header Block #1 bytes 5-10, the twelve general constants, and bytes 17-19, the manufacturer code and serial number",
+      "why": "The standard defines what they hold, not what a converted file must put in them. SeisConv writes zero. Appendix A assigns manufacturer codes to recorder makers, and a format converter is not one, so there is no value the rule could demand."
+    },
+    {
+      "what": "The sample values themselves, and the descale multiplier that scales them",
+      "why": "SEG-D has no independent reader here, so nothing decodes the written samples except SeisConv. The rule table checks the shape of the record, never the numbers in it. The one exception is the vertical stack rows, which read the samples only to decide whether a declared 'intentionally set to real zero' is contradicted by the file itself."
+    },
+    {
+      "what": "Everything optional that SeisConv does not write",
+      "why": "Extended and external headers, the general trailer, the skew fields at the end of a scan type header, all the optional Rev 3 header blocks (timestamp, sensor info, orientation, position, source description), extended recording mode, and multiple scan types or multiple channel sets. The structural walk accounts for all of them when a file declares them, but SeisConv declares none, so their rules are not exercised and are not written down here."
+    },
+    {
+      "what": "SEG-Y, SEG-2 and SU sources converted to SEG-D",
+      "why": "The SEG-D fixtures are vendor SEG-D, so what is checked is SEG-D in, SEG-D out. Converting a SEG-Y source to SEG-D uses the same writer, but the fields it derives from the source (sample interval, file number, receiver line and point) come from a different parser, and that path is not exercised here."
+    }
+  ]
+}

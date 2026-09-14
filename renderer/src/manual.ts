@@ -75,7 +75,7 @@ export const MANUAL: Record<string, HelpTopic> = {
       ] },
       { h: 'Supported file formats', items: [
         '<b>SEG-Y</b> (.segy / .sgy) - the standard exchange format; revisions 0, 1 and 2. Read and written.',
-        '<b>SEG-D</b> (.segd / .seg) - raw field-record format. Read: Rev 1 through Rev 3, validated on Rev 2.1 (January 2006) and Rev 3.0 files. Written: Rev 1.0 or Rev 3.0.',
+        '<b>SEG-D</b> (.segd / .sgd / .seg) - raw field-record format. Read: Rev 1 through Rev 3, validated on Rev 2.1 (January 2006) and Rev 3.0 files. On a Rev 3.0 file the trace header extension blocks are decoded too, adding sensor type, receiver position, depth and timing to what the Header values panel shows. A Rev 2.1 file gains only the sensor type, because that revision of the standard leaves the later extension blocks to the manufacturer with no defined layout, so they cannot be read without one from the recorder vendor. Written: Rev 1.0 or Rev 3.0, with Rev 3.0 output checked against the specification and conformant.',
         '<b>SEG-2</b> (.seg2 / .dat) - engineering / shallow-seismic format. Read and written.',
         '<b>SU</b> (.su) - Seismic Unix; trace stream with no reel/textual header. Read and written.',
         '<b>CSV</b> - samples as plain numbers, one trace per column. Export only (not re-readable as seismic).',
@@ -107,7 +107,7 @@ export const MANUAL: Record<string, HelpTopic> = {
     what: 'Read a seismic file - or a whole folder of them - and write it out in another format, off the UI thread so the app stays responsive on large files.',
     controls: [
       '<b>Convert single file</b> / <b>Convert a folder (batch)</b> - the two cards at the top choose the mode.',
-      '<b>Pick a seismic file…</b> (single) / <b>Pick folder…</b> (batch) - choose the source. Batch lists every .segy / .sgy / .segd / .seg / .seg2 / .dat / .bat / .su file in the folder.',
+      '<b>Pick a seismic file…</b> (single) / <b>Pick folder…</b> (batch) - choose the source. Batch lists every .segy / .sgy / .segd / .sgd / .seg / .seg2 / .dat / .bat / .su file in the folder.',
       '<b>Format chips</b> - the output format. Single offers SEG-Y Rev 0/1/2, SU, SEG-2, SEG-D Rev 1/3 and CSV; batch adds <b>Tape Image</b>.',
       '<b>Output name</b> card - build the result file name from a checklist (below); a live preview and the file extension are shown.',
       '<b>Convert &amp; Save…</b> (single) / <b>Convert files</b> (batch) - run it; a native Save dialog (single) or destination folder (batch) is asked for.',
@@ -210,6 +210,8 @@ export const MANUAL: Record<string, HelpTopic> = {
       '<b>+ Workbench</b> - toggle on, then click a trace on the canvas to send it to the Trace Workbench.',
       '<b>Trace paging</b> (huge / tape-image files) - a file too large to show at once is paged in fixed blocks; <b>◀</b>/<b>▶</b> step blocks and <b>Block</b> sets the block size.',
       '<b>Hover read-out</b> - trace · time · amplitude under the cursor, with the trace’s FFID / CDP / node and its station (receiver, and source when resolvable - matched to the loaded SPS survey, or the header source point) fetched as you hover.',
+      '<b>Headers…</b> - a panel below the section showing every header value the open file and the trace under the cursor actually carry. See <b>Header values</b> below.',
+      '<b>Reference lines…</b> - a panel for marking a fixed time or a fixed trace on the section. Type a time in milliseconds or a trace number and press Add, or arm <b>Click to place</b> and click straight onto the section to drop a line exactly where you click. See <b>Reference lines</b> below.',
     ],
     sections: [
       { h: 'Keyboard shortcuts (this tab)', items: [
@@ -245,6 +247,20 @@ export const MANUAL: Record<string, HelpTopic> = {
         '<b>Clipped / spiky</b> - runs of samples pinned at the rail, or isolated spikes well above the local spread.',
         '<b>Confidence vs severity</b> - <i>severity</i> is how bad the trace looks; <i>confidence</i> is how sure the test is (how many neighbours contributed, whether it could even run). A high-severity, low-confidence flag is worth a manual look.',
       ] },
+      { h: 'Header values - what the file and the trace really carry', items: [
+        '<b>What it is</b> - a panel below the section showing the header values of the open file and of the trace under the cursor. The values follow the cursor as you move it; click a trace on the section to hold it still while you read the numbers, and <b>Follow the cursor</b> hands the panel back to the hover.',
+        '<b>What it shows</b> - the file-level header, and every populated field of the current trace, curated field by field and finished with an <b>Other fields</b> group so nothing decoded stays hidden. For SEG-Y it also shows the text header as the 40 lines of 80 characters it really is, not reflowed.',
+        '<b>SEG-D</b> - the panel also lists one row per channel set, read from the channel set descriptors the file carries. Two trace fields, the <b>sample interval</b> and the <b>channel type</b>, come from that channel set rather than from the trace&rsquo;s own header bytes, and the panel says so on screen next to the value. On a Rev 3.0 file the trace fields also include sensor type, receiver position, depth and timing, read from the trace header extension blocks. A Rev 2.1 file shows only the sensor type from those blocks, since that revision defines no layout for the rest and leaves them to the manufacturer.',
+        '<b>Pinning is unavailable</b> while <b>First breaks</b> mode, <b>+ Workbench</b> (send to Workbench) or the <b>Magnifier</b> box-zoom is active, since a click there already does something else; the values still follow the cursor.',
+      ] },
+      { h: 'Reference lines - mark a fixed time or trace', items: [
+        '<b>What it is</b> - a line drawn across the section at a time or a trace you choose, so a moveout, a mute boundary or a channel of interest stays marked while you work the record. Many lines can be on screen at once, each one removable on its own, with a <b>Clear all</b>.',
+        '<b>Adding a line</b> - type a time in milliseconds or a trace number into the panel and press <b>Add</b>, or arm <b>Click to place</b> and then click straight onto the section; the line is dropped exactly where you clicked.',
+        '<b>Both kinds</b> - a <b>time line</b> is horizontal, at a fixed time; a <b>trace line</b> is vertical, at a fixed trace. Add as many of either kind as you need, and they are independent of each other.',
+        '<b>Where lines appear</b> - both kinds show in the File Viewer section and the box zoom popup. The Trace Inspector and the <b>Gather…</b> modal show <b>time lines only</b>: the Trace Inspector&rsquo;s own axis is amplitude, not trace, and the Gather modal&rsquo;s columns are records rather than traces, so neither has a trace axis for a vertical line to mark.',
+        '<b>Reduced time</b> - a time line stays at its true time even while <b>Reduced time</b> is flattening the display, since a reference line marks a fixed moment and should not bend with the display.',
+        '<b>Lines persist</b> - they survive a display reset, stepping to the previous or next file, and closing and reopening the app.',
+      ] },
       { h: 'First breaks - pick the first arrival (assisted)', items: [
         '<b>What a first break is</b> - the onset of the first seismic energy on each trace (the direct / refracted arrival), used for refraction statics and QC.',
         '<b>How it works</b> - you drop a few <b>seed</b> picks, SeisConv draws a moveout <b>guide</b> curve (with a shaded ±search-window band) through them, then <b>Assisted fill</b> picks every other trace inside that window. The auto-pick is a <i>first guess to edit</i>, not a final answer.',
@@ -252,7 +268,7 @@ export const MANUAL: Record<string, HelpTopic> = {
         '<b>Click</b> a trace at the onset to set a seed; <b>drag</b> to adjust (the guide re-fills live); <b>right-click</b> to delete a pick.',
         '<b>Assisted fill</b> - run the engine across the gather (needs 2+ seeds). <b>Accept all</b> confirms every pick; <b>Reject flagged</b> drops the low-confidence / off-trend ones; <b>Clear picks</b> removes them all.',
         '<b>Phase</b> (peak / trough / zero-cross) - which part of the wavelet a pick snaps onto. <b>±ms</b> sets the search half-window around the guide (smaller = stricter, less far-trace scatter); <b>Detector</b> selects the onset detector (STA/LTA).',
-        '<b>Read-out</b> - trace, FFID, channel, offset, pick (ms), source (seed / auto / edited / flagged) and confidence. <b>Export CSV…</b> saves the picks (absIdx, FFID, channel, offset, tMs, source, confidence). Writing picks into SEG-Y headers is not part of this step - CSV only.',
+        '<b>Read-out</b> - trace, FFID, channel, offset, pick (ms), source (seed / auto / edited / flagged) and confidence. <b>Export CSV…</b> saves the picks (traceNumber, FFID, channel, offset, tMs, source, confidence). Writing picks into SEG-Y headers is not part of this step - CSV only.',
       ] },
     ],
     steps: [
