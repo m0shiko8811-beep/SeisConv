@@ -661,15 +661,8 @@ jobs:
         with:
           version: v0.4.2
 
-      - name: CLI info
-        if: steps.preflight.outputs.ready == 'true'
-        shell: pwsh
-        run: |
-          $ErrorActionPreference = 'Stop'
-          msstore info
-          if ($LASTEXITCODE -ne 0) { throw "msstore info failed" }
-
       - name: Reconfigure CLI
+        id: reconfigure
         if: steps.preflight.outputs.ready == 'true'
         shell: pwsh
         env:
@@ -789,7 +782,7 @@ jobs:
           }
 
       - name: Delete dry run submission
-        if: always() && steps.preflight.outputs.ready == 'true' && (needs.check.outputs.mode == 'dry_run' || needs.check.outputs.mode == 'store_only_dry')
+        if: always() && steps.reconfigure.outcome == 'success' && (needs.check.outputs.mode == 'dry_run' || needs.check.outputs.mode == 'store_only_dry')
         shell: pwsh
         env:
           STORE_PRODUCT_ID: ${{ vars.STORE_PRODUCT_ID }}
