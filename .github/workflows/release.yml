@@ -706,8 +706,12 @@ jobs:
           STORE_PRODUCT_ID: ${{ vars.STORE_PRODUCT_ID }}
         run: |
           $ErrorActionPreference = 'Stop'
-          msstore publish "$env:RUNNER_TEMP\store\project" -i "$env:RUNNER_TEMP\store\pkg" -id $env:STORE_PRODUCT_ID --noCommit
-          if ($LASTEXITCODE -ne 0) { throw "msstore publish --noCommit failed" }
+          $out = msstore publish "$env:RUNNER_TEMP\store\project" -i "$env:RUNNER_TEMP\store\pkg" -id $env:STORE_PRODUCT_ID --noCommit 2>&1 | Out-String
+          $code = $LASTEXITCODE
+          $clean = $out -replace "\x1b\[[0-9;]*m", ''
+          $safe = ($clean -split "\r?\n" | Where-Object { $_ -and $_ -notmatch 'https?://' -and $_ -notmatch '^\s*[\{\}\[\]"]' }) -join "`n"
+          if ($safe) { Write-Host $safe }
+          if ($code -ne 0) { throw "msstore publish --noCommit failed" }
 
       - name: Update release notes on submission
         if: steps.preflight.outputs.ready == 'true'
@@ -731,8 +735,12 @@ jobs:
           Write-Host "Submission JSON length: $($json.Length) characters"
           $json | Set-Content -Encoding utf8 "$env:RUNNER_TEMP\store\submission.json"
 
-          msstore submission update $env:STORE_PRODUCT_ID "$env:RUNNER_TEMP\store\submission.json"
-          if ($LASTEXITCODE -ne 0) { throw "msstore submission update failed" }
+          $out = msstore submission update $env:STORE_PRODUCT_ID "$env:RUNNER_TEMP\store\submission.json" 2>&1 | Out-String
+          $code = $LASTEXITCODE
+          $clean = $out -replace "\x1b\[[0-9;]*m", ''
+          $safe = ($clean -split "\r?\n" | Where-Object { $_ -and $_ -notmatch 'https?://' -and $_ -notmatch '^\s*[\{\}\[\]"]' }) -join "`n"
+          if ($safe) { Write-Host $safe }
+          if ($code -ne 0) { throw "msstore submission update failed" }
 
           $verifyRaw = msstore submission get $env:STORE_PRODUCT_ID
           if ($LASTEXITCODE -ne 0) { throw "msstore submission get (verify) failed" }
@@ -753,8 +761,12 @@ jobs:
           STORE_PRODUCT_ID: ${{ vars.STORE_PRODUCT_ID }}
         run: |
           $ErrorActionPreference = 'Stop'
-          msstore submission publish $env:STORE_PRODUCT_ID
-          if ($LASTEXITCODE -ne 0) { throw "msstore submission publish failed" }
+          $out = msstore submission publish $env:STORE_PRODUCT_ID 2>&1 | Out-String
+          $code = $LASTEXITCODE
+          $clean = $out -replace "\x1b\[[0-9;]*m", ''
+          $safe = ($clean -split "\r?\n" | Where-Object { $_ -and $_ -notmatch 'https?://' -and $_ -notmatch '^\s*[\{\}\[\]"]' }) -join "`n"
+          if ($safe) { Write-Host $safe }
+          if ($code -ne 0) { throw "msstore submission publish failed" }
 
       - name: Poll submission status
         if: steps.preflight.outputs.ready == 'true' && (needs.check.outputs.mode == 'release' || needs.check.outputs.mode == 'store_only')
@@ -801,13 +813,14 @@ jobs:
           $out = msstore submission delete $env:STORE_PRODUCT_ID --no-confirm 2>&1 | Out-String
           $exitCode = $LASTEXITCODE
           $out = $out -replace "\x1b\[[0-9;]*m", ''
+          $safe = ($out -split "\r?\n" | Where-Object { $_ -and $_ -notmatch 'https?://' -and $_ -notmatch '^\s*[\{\}\[\]"]' }) -join "`n"
           if ($exitCode -eq 0) {
             Write-Host "Deleted the dry run draft submission"
           } elseif ($out -match 'No pending submission found') {
             Write-Host "No dry run draft to delete"
             exit 0
           } else {
-            Write-Host $out
+            if ($safe) { Write-Host $safe }
             Write-Host "::error::The dry run draft submission could not be deleted; delete it in Partner Center"
             exit 1
           }
