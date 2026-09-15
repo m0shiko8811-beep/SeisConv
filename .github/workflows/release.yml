@@ -682,13 +682,17 @@ jobs:
           STORE_PRODUCT_ID: ${{ vars.STORE_PRODUCT_ID }}
         run: |
           $ErrorActionPreference = 'Stop'
-          $raw = msstore submission status $env:STORE_PRODUCT_ID
-          if ($LASTEXITCODE -ne 0) { throw "msstore submission status failed" }
-          $text = $raw | Out-String
-          $start = $text.IndexOf('{')
-          $end = $text.LastIndexOf('}')
-          $json = $text.Substring($start, $end - $start + 1) | ConvertFrom-Json
-          $status = $json.Status
+          $raw = msstore submission status $env:STORE_PRODUCT_ID 2>&1
+          $exitCode = $LASTEXITCODE
+          $text = ($raw | Out-String) -replace "\x1b\[[0-9;]*m", ''
+          if ($exitCode -ne 0) { throw "msstore submission status failed" }
+          $statusMatch = [regex]::Match($text, 'Submission Status\s*=\s*(\w+)')
+          if (-not $statusMatch.Success) {
+            Write-Host "::warning::Could not read the submission status from msstore output"
+            $status = $null
+          } else {
+            $status = $statusMatch.Groups[1].Value
+          }
           Write-Host "Current submission status: $status"
           $inProgress = @('CommitStarted', 'PreProcessing', 'Certification', 'PendingPublication', 'Publishing', 'Release')
           if ($inProgress -contains $status) {
@@ -719,6 +723,7 @@ jobs:
           $text = $raw | Out-String
           $start = $text.IndexOf('{')
           $end = $text.LastIndexOf('}')
+          if ($start -eq -1 -or $end -eq -1) { throw "msstore submission get returned no JSON" }
           $sub = $text.Substring($start, $end - $start + 1) | ConvertFrom-Json
 
           $sub.Listings.'en-us'.BaseListing.ReleaseNotes = $notes
@@ -734,6 +739,7 @@ jobs:
           $verifyText = $verifyRaw | Out-String
           $vStart = $verifyText.IndexOf('{')
           $vEnd = $verifyText.LastIndexOf('}')
+          if ($vStart -eq -1 -or $vEnd -eq -1) { throw "msstore submission get returned no JSON" }
           $verify = $verifyText.Substring($vStart, $vEnd - $vStart + 1) | ConvertFrom-Json
 
           $persisted = ($verify.Listings.'en-us'.BaseListing.ReleaseNotes -replace "`r`n", "`n").Trim()
@@ -759,17 +765,18 @@ jobs:
           $ErrorActionPreference = 'Stop'
           $deadline = (Get-Date).AddMinutes(20)
           $finalStatus = $null
+          $lastStatus = $null
           while ((Get-Date) -lt $deadline) {
-            $raw = msstore submission status $env:STORE_PRODUCT_ID
-            if ($LASTEXITCODE -ne 0) { throw "msstore submission status failed" }
-            $text = $raw | Out-String
-            $start = $text.IndexOf('{')
-            $end = $text.LastIndexOf('}')
-            $json = $text.Substring($start, $end - $start + 1) | ConvertFrom-Json
-            $status = $json.Status
-            Write-Host "Submission status: $status"
+            $raw = msstore submission status $env:STORE_PRODUCT_ID 2>&1
+            $exitCode = $LASTEXITCODE
+            $text = ($raw | Out-String) -replace "\x1b\[[0-9;]*m", ''
+            if ($exitCode -ne 0) { throw "msstore submission status failed" }
+            $statusMatch = [regex]::Match($text, 'Submission Status\s*=\s*(\w+)')
+            $status = if ($statusMatch.Success) { $statusMatch.Groups[1].Value } else { $null }
+            $lastStatus = $status
+            if (-not $status) { Write-Host "Submission status: unknown (could not read it from msstore output)" } else { Write-Host "Submission status: $status" }
             if ($status -like '*Failed') { throw "Submission status is $status" }
-            if ($status -ne 'CommitStarted') {
+            if ($status -and $status -ne 'CommitStarted') {
               $finalStatus = $status
               Write-Host "::notice::Submission reached status $status. Check Partner Center: https://partner.microsoft.com/dashboard/products/$($env:STORE_PRODUCT_ID)/overview"
               break
@@ -777,6 +784,9 @@ jobs:
             Start-Sleep -Seconds 60
           }
           if (-not $finalStatus) {
+            if (-not $lastStatus) {
+              throw "Could not read the submission status from msstore output after 20 minutes of polling"
+            }
             Write-Host "::warning::Timed out after 20 minutes still CommitStarted. Check Partner Center: https://partner.microsoft.com/dashboard/products/$($env:STORE_PRODUCT_ID)/overview"
             "Store submission poll timed out while still CommitStarted after 20 minutes" | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
           }
@@ -788,7 +798,19 @@ jobs:
           STORE_PRODUCT_ID: ${{ vars.STORE_PRODUCT_ID }}
         run: |
           $ErrorActionPreference = 'Continue'
-          msstore submission delete $env:STORE_PRODUCT_ID --no-confirm
+          $out = msstore submission delete $env:STORE_PRODUCT_ID --no-confirm 2>&1 | Out-String
+          $exitCode = $LASTEXITCODE
+          $out = $out -replace "\x1b\[[0-9;]*m", ''
+          if ($exitCode -eq 0) {
+            Write-Host "Deleted the dry run draft submission"
+          } elseif ($out -match 'No pending submission found') {
+            Write-Host "No dry run draft to delete"
+            exit 0
+          } else {
+            Write-Host $out
+            Write-Host "::error::The dry run draft submission could not be deleted; delete it in Partner Center"
+            exit 1
+          }
 
       - name: Job summary
         if: always()
