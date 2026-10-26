@@ -515,7 +515,7 @@ The same reference is inside the application under **Help**, and in
 |   +-- field/      WiFiSync host process - engine · UDP discovery · TCP transport ·
 |                   fs watcher · file utils · Windows Mobile-Hotspot control
 +-- renderer/       esbuild-bundled TypeScript UI (12-tab shell) - one
-                    ~1.06 MB app.ts plus a separate manual.ts module
+                    ~1.05 MB app.ts plus a separate manual.ts module
 ```
 
 The `core/` package has no Electron or DOM imports - it can run in Node, a worker thread, or a browser. The WiFiSync protocol lives in `core/field` as pure, testable algorithms; the OS-facing sockets, file-watching, and hotspot control live in `electron/field`.
@@ -567,7 +567,7 @@ SeisConv ships the **EPSG Geodetic Parameter Dataset** offline: roughly 7,000 co
 
 > Ownership of the EPSG Dataset by **IOGP** (International Association of Oil and Gas Producers) is hereby acknowledged, as the [EPSG Dataset Terms of Use](https://epsg.org/terms-of-use.html) require. SeisConv ships a *subset* of the dataset: users are advised that coordinate reference system and coordinate transformation descriptions are incomplete unless every element listed as essential in IOGP Guidance Note 7-1 Annex A is included. IOGP does not warrant the accuracy of the data and excludes liability for its use; use is at your own risk. If you pass the EPSG data on, you are obliged to inform the recipient of those Terms of Use. The authoritative source is the EPSG Registry at <https://epsg.org>.
 
-What SeisConv can compute for itself: Transverse Mercator, UTM, geographic, Lambert Conformal Conic (1SP and 2SP), Mercator (variants A and B), Cassini-Soldner, Albers Equal Area, Lambert Azimuthal Equal Area, and Polar and Oblique Stereographic - about 97 % of the projected CRSs in the dataset - plus non-metre (feet) grids and non-Greenwich prime meridians. Every projection is checked against **PROJ** to sub-millimetre agreement by the test suite.
+What SeisConv can compute for itself: Transverse Mercator, UTM, geographic, Lambert Conformal Conic (1SP and 2SP), Mercator (variants A and B), Cassini-Soldner, Albers Equal Area, Lambert Azimuthal Equal Area, and Polar and Oblique Stereographic - about 91 % of the projected CRSs in the dataset - plus non-metre (feet) grids and non-Greenwich prime meridians. Every projection is checked against **PROJ** to sub-millimetre agreement by the test suite.
 
 CRSs it cannot compute are still **listed and searchable**, but they are marked and reprojection to them is refused with the reason. That covers CRSs whose datum tie needs an NTv2/NADCON grid file (OSGB36, NAD27 and similar), grids whose axes are westing/southing rather than easting/northing, and the remaining projection methods. Export in the survey's native CRS still works for all of them, and the written `.prj` names the CRS correctly so the receiving GIS can do the datum shift properly.
 
