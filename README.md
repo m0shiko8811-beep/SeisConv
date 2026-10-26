@@ -340,7 +340,7 @@ Every seismic viewer (File Viewer, Trace Inspector, Spectrum Analysis, Velocity,
 
 | Format | Read | Write | Notes |
 |---|:---:|:---:|---|
-| SPS 2.1 (S / R / X) | Yes | Yes | The native survey-geometry format and SeisConv's internal data model. A survey is the three files together: sources (`.s`), receivers (`.r`) and the cross-reference relation (`.x`) that ties each shot to the channels it was recorded on. Read as a triplet, written as a triplet, and the only export that also ships a matching `.prj` because it is already delivered as a zip. Generated surveys and re-numbered surveys are written in this format. |
+| SPS 2.1 (S / R / X) | Yes | Yes | The native survey-geometry format and SeisConv's internal data model. A survey is the three files together: sources (`.s`), receivers (`.r`) and the cross-reference relation (`.x`) that ties each shot to the channels it was recorded on. Read as a triplet, written as a triplet, and the only *positioning* export that also ships a matching `.prj`, because it is already delivered as a zip (the ESRI Shapefile export carries a `.prj` too, for the same reason). Generated surveys and re-numbered surveys are written in this format. |
 | SEG-P1 | Yes | Yes | Deprecated by IOGP (succeeded by P1/11), but still demanded by some legacy processing packages, so a writer is provided (grid easting/northing in decimetres). Fixed-column post-plot point file. Geographic records auto-projected lat/long → E/N; F-format metres vs integer-decimetres auto-detected. |
 | IOGP P1/11 | Yes | Yes | Modern comma-delimited relational positioning standard (IOGP Report 483-1; v1.0 2012, v1.1 2015, v2.0 August 2024, v2.01 March 2025 - replaces UKOOA P1/90 and P2/94, and IOGP states SEG-P1 is deprecated in its favour). SeisConv implements the v1.x record-coded structure. Source, receiver, and relation records map onto SeisConv's SPS data model; CRS round-trips. |
 | IOGP P6/11 | Yes | - | IOGP Report 483-6, first released 2012 (it replaces UKOOA P6/98). Bin-grid definition (origin, rotation, inline/crossline numbering, bin size, CRS). Rendered as a bin-grid overlay on the SPS survey-grid and Leaflet map; rotation and crossline-axis aware. No writer yet. |
@@ -489,10 +489,12 @@ The same reference is inside the application under **Help**, and in
 ```
 .                   # repo root - the `main` branch is the app itself
 +-- core/           Pure TypeScript engine - no Electron or DOM dependency
-|   +-- binary/     Typed buffer readers (big/little-endian, IBM float)
-|   +-- detect/     Format and byte-order auto-detection
+|   +-- binary.ts   Typed buffer readers (big/little-endian, IBM float, EBCDIC)
+|   +-- detect.ts   Format and byte-order auto-detection
 |   +-- formats/    segy · segd · seg2 · su · tapeimage parsers + writers
-|   +-- coords/     TM / UTM / ITM + Helmert 7-parameter transforms
+|   +-- coords.ts   TM / UTM / ITM + Helmert 7-parameter transforms
+|   +-- projections.ts  LCC · Mercator · Cassini · Albers · LAEA ·
+|   |               Polar and Oblique Stereographic
 |   +-- dsp/        AGC · interpolation · NMO semblance · Hann FFT ·
 |   |               avgspectrum · spectrogram · fk · correlate ·
 |   |               sweepgen (vibroseis) · hilbert · firstbreak/fbassist ·
@@ -501,6 +503,10 @@ The same reference is inside the application under **Help**, and in
 |   +-- export/     xlsx · ods hand-rolled writers (no runtime deps)
 |   +-- sps/        SPS 2.1 parse · QC · reproject ·
 |   |               formats/ (segp1 · p111 · p611 · coordcsv + bingrid)
+|   +-- gis/        GeoTIFF · ESRI Shapefile · WKT (.prj) writers ·
+|   |               fold/elevation rasterising · slippy-tile mosaic
+|   +-- obslog/     Observer's Log auto-numbering · trigger-system presets
+|   +-- trigger/    Trigger-message parsers for the Observer's Log feeds
 |   +-- field/      WiFiSync pure protocol - mtime diff · role negotiation ·
 |                   UDP discovery packet · manifest/tombstones · rate limiter ·
 |                   TCP transfer frames · path-containment guard
@@ -567,7 +573,7 @@ SeisConv ships the **EPSG Geodetic Parameter Dataset** offline: roughly 7,000 co
 
 > Ownership of the EPSG Dataset by **IOGP** (International Association of Oil and Gas Producers) is hereby acknowledged, as the [EPSG Dataset Terms of Use](https://epsg.org/terms-of-use.html) require. SeisConv ships a *subset* of the dataset: users are advised that coordinate reference system and coordinate transformation descriptions are incomplete unless every element listed as essential in IOGP Guidance Note 7-1 Annex A is included. IOGP does not warrant the accuracy of the data and excludes liability for its use; use is at your own risk. If you pass the EPSG data on, you are obliged to inform the recipient of those Terms of Use. The authoritative source is the EPSG Registry at <https://epsg.org>.
 
-What SeisConv can compute for itself: Transverse Mercator, UTM, geographic, Lambert Conformal Conic (1SP and 2SP), Mercator (variants A and B), Cassini-Soldner, Albers Equal Area, Lambert Azimuthal Equal Area, and Polar and Oblique Stereographic - about 97 % of the projected CRSs in the dataset - plus non-metre (feet) grids and non-Greenwich prime meridians. Every projection is checked against **PROJ** to sub-millimetre agreement by the test suite.
+What SeisConv can compute for itself: Transverse Mercator, UTM, geographic, Lambert Conformal Conic (1SP and 2SP), Mercator (variants A and B), Cassini-Soldner, Albers Equal Area, Lambert Azimuthal Equal Area, and Polar and Oblique Stereographic - about 96 % of the projected CRSs in the dataset - plus non-metre (feet) grids and non-Greenwich prime meridians. Every projection is checked against **PROJ** to sub-millimetre agreement by the test suite.
 
 CRSs it cannot compute are still **listed and searchable**, but they are marked and reprojection to them is refused with the reason. That covers CRSs whose datum tie needs an NTv2/NADCON grid file (OSGB36, NAD27 and similar), grids whose axes are westing/southing rather than easting/northing, and the remaining projection methods. Export in the survey's native CRS still works for all of them, and the written `.prj` names the CRS correctly so the receiving GIS can do the datum shift properly.
 
