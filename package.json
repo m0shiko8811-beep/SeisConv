@@ -59,7 +59,7 @@
     "leaflet-rotate": "^0.2.8"
   },
   "devDependencies": {
-    "@types/node": "^22.10.0",
+    "@types/node": "^26.6.5",
     "electron": "^44.9.3",
     "electron-builder": "^26.15.3",
     "epsg-index": "^2.0.0",
