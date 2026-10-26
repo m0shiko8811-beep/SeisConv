@@ -5,6 +5,32 @@ All notable changes to SeisConv are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.8.7] - 2026-10-26
+
+### Fixed
+
+- **Converting between formats keeps the trace headers.** Converting SEG-D, SEG-2 or SU to
+  SEG-Y wrote the trace number in place of the field record number (FFID); the output now
+  carries the record number the source file states (the SEG-D file number, the SEG-2 shot
+  sequence number, the SU field record), and leaves it blank when the source has none
+  instead of inventing one; the channel and CDP numbers are likewise left blank, not
+  filled with the trace number, when the source does not carry them. SU to SEG-Y no longer
+  drops the shot point or replaces the CDP and channel with the trace number, and SEG-Y
+  to SU now keeps the coordinates with their scalar, the channel, the elevations, the delay
+  time and every other standard header word, in both directions. SEG-2 channel, delay,
+  stack count and filters now reach SEG-Y as well, and the SEG-2 receiver and source
+  positions go into the coordinate words, with a scalar that keeps their decimals, instead
+  of the CDP and shot point. SEG-Y to SEG-D keeps the field record number, including
+  numbers above 9999. The low-cut and high-cut filter frequencies shown in the trace header
+  table were read from the wrong bytes of a SEG-Y header and are now correct.
+
+### Security
+
+- **Electron updated to 44.9.3, with its latest security fixes.** SeisConv now also refuses
+  every browser permission request it has no use for, such as location, camera, microphone
+  and notifications, and allows only writing to the clipboard, which copying text out of
+  the app needs. The build tooling was updated to its patched versions as well.
+
 ## [0.8.6] - 2026-10-26
 
 ### Fixed

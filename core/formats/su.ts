@@ -13,9 +13,10 @@
 // endian (hence the `suswapbytes` utility). The WRITER always emits big-endian,
 // keeping output bit-identical to the reference.
 
-import { dv, getF32, r16u, r32s, w16, w32 } from '../binary';
+import { dv, getF32, r16u, w16, w32 } from '../binary';
 import type { Bytes, ParsedFile, Trace, TraceHeader } from '../types';
 import { MAX_SAMPLE_TRACES, MAX_SAMPLES_PER_TRACE, MAX_TRACES } from '../types';
+import { readSuExtraWords, readTraceWords, STD_TRACE_WORDS, writeSuExtraWords, writeTraceWords } from './traceheader';
 
 /**
  * Detect SU byte order. SU is headerless and carries no magic, so we combine
@@ -104,12 +105,13 @@ export function parseSU(b: Bytes, sampleTraceCap: number = MAX_SAMPLE_TRACES): P
   const nSampClamped = Math.min(nSamp, MAX_SAMPLES_PER_TRACE);
   for (let i = 0; i < nTraces; i++) {
     const off = i * tSize;
-    const hdr: TraceHeader = {
-      traceSeq: r32s(b, off, le), lineSeq: r32s(b, off + 4, le), ffid: r32s(b, off + 8, le),
-      traceNum: r32s(b, off + 12, le), sp: r32s(b, off + 16, le), cdp: r32s(b, off + 20, le),
-      cdpTrace: r32s(b, off + 24, le), traceId: r16u(b, off + 28, le), offset: r32s(b, off + 36, le),
-      nSamples: r16u(b, off + 114, le), sampInt: r16u(b, off + 116, le),
-    };
+    // Bytes 1-180 of an SU header ARE the SEG-Y trace header, so they are read by
+    // the same table under the same keys SEG-Y uses (fieldRec = fldr, trcField =
+    // tracf, srcPt = ep, ensemble = cdp, coordScalar = scalco, ...). SU's own
+    // fields after byte 180 (d1, f1, d2, f2, ...) are kept under su* keys.
+    const hdr: TraceHeader = {};
+    readTraceWords(b, off, le, STD_TRACE_WORDS, hdr);
+    readSuExtraWords(b, off, le, hdr);
     let samples: Float32Array | null = null;
     if (i < sampleTraceCap) {
       samples = new Float32Array(nSampClamped);
@@ -137,33 +139,27 @@ export function writeSU(pd: ParsedFile): Bytes {
   const si = pd.bh?.sampleInt || 2000;
   const tsz = 240 + spt * 4;
   const out = new Uint8Array(trc.length * tsz);
-  // Pull a populated header word, accepting either the SU field name or the
-  // equivalent SEG-Y trace-header name (so SU→SU and SEG-Y→SU both preserve the
-  // geometry SU processing tools depend on). Returns 0 when neither is present.
-  const hw = (h: TraceHeader, ...keys: string[]): number => {
-    for (const k of keys) {
-      const v = h[k];
-      if (typeof v === 'number' && v !== 0) return v;
-    }
-    return 0;
-  };
   let off = 0;
   for (let t = 0; t < trc.length; t++) {
     const tr = trc[t];
     const h = tr.hdr || {};
-    w32(out, off, t + 1); // tracl (sequential)
-    // Preserve trace geometry/identity at the CWP segy.h byte offsets instead of
-    // zeroing it: fldr@8, ep@16 (shot/source point), cdp@20, cdpt@24, offset@36.
-    if (hw(h, 'ffid', 'fieldRec')) w32(out, off + 8, hw(h, 'ffid', 'fieldRec'));
-    if (hw(h, 'sp', 'srcPt')) w32(out, off + 16, hw(h, 'sp', 'srcPt'));
-    if (hw(h, 'cdp', 'ensemble')) w32(out, off + 20, hw(h, 'cdp', 'ensemble'));
-    if (hw(h, 'cdpTrace', 'trcEns')) w32(out, off + 24, hw(h, 'cdpTrace', 'trcEns'));
+    // Every standard word in bytes 1-180 through the table SEG-Y uses, so SEG-Y ->
+    // SU keeps fldr, tracf, ep, cdp, cdpt, offset, the elevations, scalco/scalel
+    // with the raw coordinates, delrt, the statics, the filters and the time, and
+    // SU -> SU keeps SU's own fields after byte 180.
+    writeTraceWords(out, off, h, STD_TRACE_WORDS);
+    writeSuExtraWords(out, off, h);
+    // tracl and tracr describe THIS file (sequential from 1, non-decreasing).
+    w32(out, off, t + 1);
+    w32(out, off + 4, t + 1);
     // trid (byte 28): carry through if present, else 1 = seismic data (segy.h).
-    w16(out, off + 28, hw(h, 'traceId') || 1);
-    if (hw(h, 'offset')) w32(out, off + 36, hw(h, 'offset'));
-    // ns (byte 114): the spt > 65535 guard above already refused anything that
-    // can't fit this 16-bit field, so the raw value is always representable here.
-    w16(out, off + 114, tr.nSamples);
+    const trid = h.traceId;
+    w16(out, off + 28, typeof trid === 'number' && trid !== 0 ? trid : 1);
+    // ns (byte 114): the PADDED slot size, as writeSEGY does - SU has no binary
+    // header, so a reader sizes every record from the first trace's ns, and a
+    // short first trace written with its own count desynchronised the whole walk.
+    // The spt > 65535 guard above already refused anything this field can't hold.
+    w16(out, off + 114, spt);
     w16(out, off + 116, si);
     if (tr.samples) {
       const sdv = dv(out);

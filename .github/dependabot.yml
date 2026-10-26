@@ -1,0 +1,18 @@
+# Dependabot version updates. Security alerts are raised regardless; this file
+# adds the weekly upgrade PRs so the lockfile never drifts far behind a patch.
+version: 2
+updates:
+  - package-ecosystem: "npm"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    groups:
+      npm-minor-and-patch:
+        update-types:
+          - "minor"
+          - "patch"
+
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"

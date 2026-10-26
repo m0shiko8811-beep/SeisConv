@@ -8,6 +8,7 @@
 import { asciiPrintable, asciiToEbcdic, dv, ebcdic, getF32, getI16, getI32, ibm2f, r16s, r16u, r32s, r32u, w16, w32 } from '../binary';
 import type { Bytes, ParsedFile, Trace, TraceHeader } from '../types';
 import { MAX_SAMPLE_TRACES, MAX_SAMPLES_PER_TRACE, MAX_TRACES } from '../types';
+import { readTraceWords, REV1_TRACE_WORDS, STD_TRACE_WORDS, writeTraceWords } from './traceheader';
 
 /** Product tag stamped into written SEG-Y textual headers. Neutral; change here if rebranding. */
 export const WRITER_TAG = 'SeisConv';
@@ -230,20 +231,16 @@ export function decodeSegyTrace(
   const fmt = meta.format;
   const addHdrBytes = meta.addHdrBytes;
   const bps = meta.bps;
-  // Read header fields directly from the main buffer - no slice/copy.
-  const hdr: TraceHeader = {
-    seqLine: r32s(b, off + 0, le), seqFile: r32s(b, off + 4, le), fieldRec: r32s(b, off + 8, le),
-    trcField: r32s(b, off + 12, le), srcPt: r32s(b, off + 16, le), ensemble: r32s(b, off + 20, le),
-    trcEns: r32s(b, off + 24, le), traceId: r16s(b, off + 28, le), dataUse: r16s(b, off + 34, le),
-    offset: r32s(b, off + 36, le), rcvElev: r32s(b, off + 40, le), surfElev: r32s(b, off + 44, le),
-    srcDepth: r32s(b, off + 48, le), elevScalar: r16s(b, off + 68, le), coordScalar: r16s(b, off + 70, le),
-    srcX: r32s(b, off + 72, le), srcY: r32s(b, off + 76, le), rcvX: r32s(b, off + 80, le), rcvY: r32s(b, off + 84, le),
-    coordUnit: r16s(b, off + 88, le), nSamples: r16u(b, off + 114, le), sampInt: r16u(b, off + 116, le),
-    gainType: r16s(b, off + 118, le), gainConst: r16s(b, off + 120, le), lowCut: r16s(b, off + 146, le),
-    highCut: r16s(b, off + 148, le), year: r16s(b, off + 156, le), day: r16s(b, off + 158, le),
-    hour: r16s(b, off + 160, le), minute: r16s(b, off + 162, le), second: r16s(b, off + 164, le),
-    muteStart: r16s(b, off + 110, le), muteEnd: r16s(b, off + 112, le), traceWeight: r16s(b, off + 168, le),
-  };
+  // Read header fields directly from the main buffer - no slice/copy. One table
+  // (core/formats/traceheader.ts) defines every standard word, shared with SU so
+  // the two formats carry the same words under the same keys. The rev 1 words
+  // after byte 180 are read only from a file that declares rev 1 or later: rev 0
+  // leaves those bytes unassigned, so naming them would be a guess.
+  // Low-cut / high-cut were read two bytes early before this table (bytes 147-150,
+  // which are the notch slope and the low-cut); they now come from 149-152.
+  const hdr: TraceHeader = {};
+  readTraceWords(b, off, le, STD_TRACE_WORDS, hdr);
+  if (meta.revision >= 1) readTraceWords(b, off, le, REV1_TRACE_WORDS, hdr);
   const ns = (hdr.nSamples as number) || meta.defaultNs;
   if (ns <= 0 || ns > MAX_SAMPLES_PER_TRACE) return null;
   const dEnd = off + 240 + addHdrBytes + ns * bps;
@@ -428,20 +425,25 @@ export function writeSEGY(pd: ParsedFile, rev: number): Bytes {
   for (let t = 0; t < trc.length; t++) {
     const tr = trc[t];
     const h = tr.hdr || {};
+    // Every standard word the source carried, under the shared keys every parser
+    // emits (core/formats/traceheader.ts). The rev 1 words after byte 180 only
+    // go into a rev 1+ file; rev 0 leaves those bytes unassigned.
+    writeTraceWords(out, off, h, STD_TRACE_WORDS);
+    if (rev >= 1) writeTraceWords(out, off, h, REV1_TRACE_WORDS);
+    // The words this writer owns, overwriting whatever the table wrote:
+    // the two sequence numbers describe THIS file ("Each file starts with trace
+    // sequence one", rev 1.0 Table 3 row 5-8), and the trace identification code
+    // is mandatory, so 1 (seismic data) stands in when the source has none.
+    // Field record (FFID), channel and ensemble are NOT synthesised: a source
+    // without them leaves them zero, the standard's "not recorded". Writing the
+    // trace index there, as this writer used to, told every reader that each
+    // trace was its own field record.
     w32(out, off, t + 1);
     w32(out, off + 4, t + 1);
-    w32(out, off + 8, hi(h, 'fieldRec') || t + 1);
-    w32(out, off + 12, hi(h, 'trcField') || t + 1);
-    // Preserve source-point, ensemble and offset when the input carried them -
-    // dropping them (while keeping raw coordinates) breaks geometry in standard
-    // readers. Ensemble keeps the source value; t+1 is only synthesized if absent.
-    if (hi(h, 'srcPt')) w32(out, off + 16, hi(h, 'srcPt'));
-    w32(out, off + 20, hi(h, 'ensemble') || t + 1);
     w16(out, off + 28, hi(h, 'traceId') || 1);
-    if (hi(h, 'offset')) w32(out, off + 36, hi(h, 'offset'));
-    // coordScalar (bytes 71-72) MUST accompany the raw coordinates below: with
-    // e.g. coordScalar=-100 data, omitting it makes readers see coords 100× too
-    // large. elevScalar is written alongside for the same reason.
+    // coordScalar (bytes 71-72) MUST accompany the raw coordinates the table
+    // wrote above: with e.g. coordScalar=-100 data, omitting it makes readers see
+    // coords 100× too large. elevScalar travels with the elevations the same way.
     // With no scalar on the input the field would stay 0, which rev 1 never
     // enumerates: Table 3 rows 69-70 and 71-72 (rev 1.0 printed page 14) list
     // "Scalar = 1, +/-10, +/-100, +/-1000, or +/-10,000" and say nothing about
@@ -458,16 +460,6 @@ export function writeSEGY(pd: ParsedFile, rev: number): Bytes {
     // permanently. The binary header already declares spt for the whole file.
     w16(out, off + 114, spt);
     w16(out, off + 116, si);
-    if (hi(h, 'srcX')) w32(out, off + 72, hi(h, 'srcX'));
-    if (hi(h, 'srcY')) w32(out, off + 76, hi(h, 'srcY'));
-    if (hi(h, 'rcvX')) w32(out, off + 80, hi(h, 'rcvX'));
-    if (hi(h, 'rcvY')) w32(out, off + 84, hi(h, 'rcvY'));
-    // Elevations: the parser reads these and elevScalar is already written above,
-    // so dropping them handed a processor a flat datum next to a scalar claiming
-    // to scale it. Mirrors the coordinate writes.
-    if (hi(h, 'rcvElev')) w32(out, off + 40, hi(h, 'rcvElev'));
-    if (hi(h, 'surfElev')) w32(out, off + 44, hi(h, 'surfElev'));
-    if (hi(h, 'srcDepth')) w32(out, off + 48, hi(h, 'srcDepth'));
     if (tr.samples) {
       const base = off + 240;
       // Clamp to the allocated slot (spt), never the raw per-trace nSamples - the

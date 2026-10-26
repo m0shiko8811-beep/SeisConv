@@ -599,9 +599,18 @@ function parseLegacySeisConvSEGD(b: Bytes, sampleTraceCap: number): ParsedFile {
   for (let cs = 0; cs < (numChanSets || 1) && off + 32 <= b.length; cs++) off += 32;
   off += extHdrLen * 32 + extlHdrLen * 32;
 
+  // The file number this record really carries: the old writer stamped it as
+  // BCD in bytes 1-2 of the general header AND of every trace header, exactly
+  // where the standard puts it, so it is the field record number (FFID). It is
+  // reported as the file states it. Files that writer produced from SEG-Y were
+  // measured carrying 1 here while the SEG-Y they came from had a different
+  // FFID; 1 is still what the file says, and a number is never taken from the
+  // file name instead.
+  const gFile = r.gh1?.fileNum ?? 0;
   let tc = 0;
   while (off + 20 < b.length && tc < MAX_TRACES) {
     const trcNum = r32u(b, off + 4);
+    const tFile = bcd4(b, off) || gFile;
     off += 20;
     const rem = b.length - off;
     if (rem <= 0) break;
@@ -655,7 +664,12 @@ function parseLegacySeisConvSEGD(b: Bytes, sampleTraceCap: number): ParsedFile {
       }
       off += nb;
     }
-    r.traces.push({ hdr: { trcNum }, samples, nSamples: ns, dataFmt: bpsBits });
+    // trcField / fieldRec: the shared SEG-Y keys the spec decoder above also
+    // sets, so a converted legacy file keeps its file number and trace number.
+    const hdr: TraceHeader = { trcNum };
+    if (trcNum > 0 && trcNum <= 2147483647) hdr.trcField = trcNum;
+    if (tFile > 0) hdr.fieldRec = tFile;
+    r.traces.push({ hdr, samples, nSamples: ns, dataFmt: bpsBits });
     tc++;
   }
   r.traceCount = tc;
@@ -705,8 +719,20 @@ export function writeSEGD(pd: ParsedFile, rev3: boolean): Bytes {
   // branch keeps the time of the last sample rather than invent a value.
   const recordLenUs = Math.max(0, Math.round((spt > 0 ? (rev3 ? spt : spt - 1) : 0) * siUs));
   const recordLenMs = Math.round(recordLenUs / 1000);
+  // File number = the field record number (FFID). A SEG-D source carries it in
+  // its general header; every other source carries it per trace as fieldRec (the
+  // shared key, core/formats/traceheader.ts), used when all traces agree on one.
+  // Up to 9999 it is the 4-digit BCD field; above that GH1 bytes 1-2 are FFFF
+  // and the three-byte binary Extended File Number carries it, in General Header
+  // Block #2 bytes 1-3 and in Demux Trace Header bytes 18-20 (SEG-D Rev 2.1, 8.2
+  // and 8.6; SEG-D Rev 3.1, 8.1 GH1 bytes 1-2 row and 8.2 GH2 bytes 1-3 row).
+  // 1 stands in only when the source names no file number at all.
+  const okFile = (v: unknown): v is number => typeof v === 'number' && Number.isInteger(v) && v >= 1 && v <= 0xffffff;
   const gFileNum = pd.gh1?.fileNum;
-  const fileNum = typeof gFileNum === 'number' && gFileNum >= 1 && gFileNum <= 9999 ? gFileNum : 1;
+  const trFile = trc[0].hdr?.fieldRec;
+  const fileNum = okFile(gFileNum) ? gFileNum
+    : okFile(trFile) && trc.every((tr) => tr.hdr?.fieldRec === trFile) ? trFile : 1;
+  const extFile = fileNum > 9999;
 
   const csdSize = rev3 ? 96 : 32;
   // Rev 3 needs THREE general header blocks, not two: "SEG-D, Rev 3.0 requires
@@ -732,7 +758,7 @@ export function writeSEGD(pd: ParsedFile, rev3: boolean): Bytes {
   const hnum = (h: TraceHeader, k: string): number => { const v = h[k]; return typeof v === 'number' && isFinite(v) ? v : 0; };
 
   // -- General Header Block 1 --
-  bcdW4(0, fileNum);
+  if (extFile) { out[0] = 0xff; out[1] = 0xff; } else bcdW4(0, fileNum);
   out[2] = 0x80; out[3] = 0x58; // format code 8058 (BCD) = 32-bit IEEE float demux
   const now = new Date();
   out[10] = bcdByte(now.getFullYear() % 100); // year (BCD, spec offset)
@@ -892,7 +918,7 @@ export function writeSEGD(pd: ParsedFile, rev3: boolean): Bytes {
   let to = off0;
   for (let t = 0; t < trc.length; t++) {
     const h = trc[t].hdr || {};
-    bcdW4(to, fileNum);
+    if (extFile) { out[to] = 0xff; out[to + 1] = 0xff; w24(to + 17, fileNum); } else bcdW4(to, fileNum);
     out[to + 2] = 0x01; // scan type (BCD)
     out[to + 3] = 0x01; // channel set number (BCD)
     bcdW4(to + 4, t + 1); // trace number (BCD)

@@ -5,7 +5,7 @@
 // sandboxed (contextIsolation, no nodeIntegration); it reaches privileged work
 // only through the typed `seisconvAPI` in preload.
 
-import { app, BrowserWindow, dialog, ipcMain, Menu, nativeImage, screen, shell } from 'electron';
+import { app, BrowserWindow, dialog, ipcMain, Menu, nativeImage, screen, session, shell } from 'electron';
 import { writeFile, readFile, readdir, rename, stat, unlink, open } from 'node:fs/promises';
 import { createWriteStream, watch, type FSWatcher } from 'node:fs';
 import { spawn, type ChildProcess } from 'node:child_process';
@@ -3522,6 +3522,16 @@ if (!gotTheLock) {
 
   app.whenReady().then(() => {
     Menu.setApplicationMenu(null);
+    // Hardening: Electron grants every Chromium permission by default, and the
+    // sandboxed renderer needs exactly ONE - sanitized clipboard writes, behind the
+    // two copy affordances (the feedback 'Copy to clipboard' fallback and Ctrl+C on
+    // an observer's-log cell; navigator.clipboard.writeText is refused without it).
+    // Camera, microphone, geolocation, notifications, fullscreen, clipboard READ and
+    // the rest are denied on both the request AND the check path, so a crafted
+    // input can never surface a permission prompt or quietly hold a capability.
+    const allowedPermissions = new Set<string>(['clipboard-sanitized-write']);
+    session.defaultSession.setPermissionRequestHandler((_wc, permission, callback) => callback(allowedPermissions.has(permission)));
+    session.defaultSession.setPermissionCheckHandler((_wc, permission) => allowedPermissions.has(permission));
     createWindow();
     app.on('activate', () => {
       if (BrowserWindow.getAllWindows().length === 0) createWindow();

@@ -132,9 +132,11 @@ export const MAX_GATHER_RECORDS = 1000;
 export const MAX_GATHER_SAMPLES = 4000;
 
 /** Trace-header keys that carry a CHANNEL NUMBER, best first.
- *  trcField: SEG-Y/SU bytes 13-16 (trace number within the field record) and the
- *  key SEG-D's demux walk sets; trcNum: SEG-D tape traces; channelNum: SEG-2. */
-const CHANNEL_KEYS = ['trcField', 'trcNum', 'channelNum', 'traceNum'] as const;
+ *  trcField: SEG-Y/SU bytes 13-16 (trace number within the field record), the
+ *  shared key every parser now sets for it (SEG-D trace number, SEG-2
+ *  CHANNEL_NUMBER, SU tracf - core/formats/traceheader.ts); trcNum: SEG-D tape
+ *  traces, whose headers may predate trcField. */
+const CHANNEL_KEYS = ['trcField', 'trcNum'] as const;
 /** Source-receiver distance. SEG-Y/SU only; SEG-D and SEG-2 have no such field. */
 const OFFSET_KEYS = ['offset'] as const;
 

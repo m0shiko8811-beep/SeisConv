@@ -28,6 +28,7 @@
 import { dv, getF32, getF64 } from '../binary';
 import type { Bytes, ParsedFile, Trace, TraceHeader } from '../types';
 import { MAX_SAMPLE_TRACES, MAX_SAMPLES_PER_TRACE } from '../types';
+import { chooseCoordScalar, encodeWithScalar } from './traceheader';
 
 /** Bytes-per-sample for a SEG-2 per-trace data-format code (Pullan 1990: 01h
  * 16-bit fixed, 02h 32-bit fixed, 03h "20-bit floating point (SEG-D)", 04h 32-bit
@@ -120,12 +121,6 @@ function seg2FreeFormObj(b: Bytes, start: number, end: number, st: number, lt: n
     i = le + 1;
   }
   return p;
-}
-
-function num(v: number | string | undefined): number {
-  if (v == null) return 0;
-  const n = typeof v === 'number' ? v : parseFloat(v);
-  return isNaN(n) ? 0 : n;
 }
 
 /** `sampleTraceCap` bounds how many traces decode their SAMPLES (headers are kept
@@ -302,20 +297,112 @@ export function parseSEG2(b: Bytes, sampleTraceCap: number = MAX_SAMPLE_TRACES):
     r.bh = { sampleInt: _si, samplesTrace: _ft.nSamples || 0, numTraces: r.traceCount, dataFmt: _ft.dataFmt };
   }
 
-  // Normalise common trace-header keys for downstream viewers.
-  r.traces.forEach((tr, i) => {
-    const h = tr.hdr;
-    if (!h) return;
-    if (h.CHANNEL_NUMBER) h.channelNum = parseInt(String(h.CHANNEL_NUMBER)) || i + 1;
-    if (h.RECEIVER_LOCATION) h.rcvSP = num(h.RECEIVER_LOCATION);
-    if (h.SOURCE_LOCATION) h.srcSP = num(h.SOURCE_LOCATION);
-    if (h.SHOT_SEQUENCE_NUMBER) h.shotSeq = parseInt(String(h.SHOT_SEQUENCE_NUMBER)) || 0;
-    if (h.DELAY || h.DELAY_TIME) h.delayMs = num(h.DELAY || h.DELAY_TIME);
-    if (h.RECEIVER_LOCATION) h.ensemble = num(h.RECEIVER_LOCATION);
-    if (h.SOURCE_LOCATION) h.srcPt = num(h.SOURCE_LOCATION);
-  });
+  // Map the keywords onto the shared SEG-Y trace-header keys
+  // (core/formats/traceheader.ts) wherever the meaning is the same, so a viewer
+  // and every writer read one vocabulary. The free-form strings stay on the
+  // header as well, exactly as the file spells them.
+  seg2MapStdKeys(r.traces);
 
   return r;
+}
+
+/** Leading numbers of a free-form value ("1666.66 0", "24 DB", "15.00"). */
+function seg2Nums(v: number | string | undefined): number[] {
+  if (v == null) return [];
+  const out: number[] = [];
+  for (const tok of String(v).trim().split(/\s+/)) {
+    const n = Number(tok);
+    if (!Number.isFinite(n) || tok === '') break;
+    out.push(n);
+  }
+  return out;
+}
+
+/** Set an integer header word from a SEG-2 value when it is present, finite,
+ *  non-zero and fits the SEG-Y field width. */
+function seg2PutInt(h: TraceHeader, key: string, v: number | undefined, w: 2 | 4): void {
+  if (v == null || !Number.isFinite(v)) return;
+  const n = Math.round(v);
+  if (n === 0) return;
+  if (w === 2 ? n < -32768 || n > 32767 : n < -2147483648 || n > 2147483647) return;
+  h[key] = n;
+}
+
+/**
+ * SEG-2 trace descriptor keywords -> SEG-Y trace-header keys, meaning for meaning
+ * (SEG-2, Pullan 1990, C2 Trace Descriptor Block strings, printed pages 8-11;
+ * SEG-Y rev 1.0 Table 3). Mapped only where the two standards describe the same
+ * quantity:
+ *   SHOT_SEQUENCE_NUMBER "a positive decimal integer that the user assigns to the
+ *     original field file" -> fieldRec (bytes 9-12, original field record number)
+ *   CHANNEL_NUMBER -> trcField (13-16, trace number within the field record)
+ *   SOURCE_STATION_NUMBER -> srcPt (17-20, energy source point number)
+ *   CDP_NUMBER -> ensemble (21-24); CDP_TRACE -> trcEns (25-28)
+ *   STACK "the number of shots which were summed" -> vertSumCount (31-32)
+ *   TRACE_TYPE SEISMIC_DATA / DEAD / UPHOLE -> traceId 1 / 2 / 5 (29-30)
+ *   DELAY "the time (in seconds) elapsed from the start pulse to recording the
+ *     first sample" -> delayTime (109-110, delay recording time in ms)
+ *   FIXED_GAIN "gain in dB ... applied by the recording instrument" -> gainConst
+ *     (121-122, instrument gain constant in dB)
+ *   ALIAS_FILTER / NOTCH_FREQUENCY / LOW_CUT_FILTER / HIGH_CUT_FILTER (Hz, dB per
+ *     octave) -> aliasFreq/aliasSlope, notchFreq, lowCut/lowCutSlope,
+ *     highCut/highCutSlope (141-156)
+ *   SOURCE_LOCATION / RECEIVER_LOCATION x [y z] -> srcX/srcY, rcvX/rcvY (73-88)
+ *     as raw integers with one coordinate scalar per file (71-72) chosen so the
+ *     decimals survive without overflowing int32.
+ * NOT mapped: the z of a location (SEG-2 gives it relative to the file's DATUM,
+ * SEG-Y's elevations are not), RECEIVER_STATION_NUMBER (SEG-Y rev 1 has no
+ * receiver station word), and no offset is derived from the two locations.
+ * The SEG-Y words are integers, so fractional hertz and sub-millisecond delays
+ * round to the nearest whole unit.
+ */
+function seg2MapStdKeys(traces: Trace[]): void {
+  // One coordinate scalar for the whole file, so every trace uses the same one.
+  const locs: { s: number[]; g: number[] }[] = traces.map((tr) => {
+    const h = tr.hdr || {};
+    return { s: seg2Nums(h.SOURCE_LOCATION).slice(0, 3), g: seg2Nums(h.RECEIVER_LOCATION).slice(0, 3) };
+  });
+  // A single value is "the dimension along the line (i.e., x)"; otherwise all
+  // three are given (x, y, z). Two values are ambiguous per the standard, so
+  // only their x is taken.
+  const xy = (v: number[]): number[] => (v.length >= 3 ? [v[0], v[1]] : v.length ? [v[0]] : []);
+  const all: number[] = [];
+  for (const l of locs) all.push(...xy(l.s), ...xy(l.g));
+  const coordScalar = chooseCoordScalar(all);
+
+  traces.forEach((tr, i) => {
+    const h = tr.hdr;
+    if (!h) return;
+    seg2PutInt(h, 'fieldRec', seg2Nums(h.SHOT_SEQUENCE_NUMBER)[0], 4);
+    seg2PutInt(h, 'trcField', seg2Nums(h.CHANNEL_NUMBER)[0], 4);
+    seg2PutInt(h, 'srcPt', seg2Nums(h.SOURCE_STATION_NUMBER)[0], 4);
+    seg2PutInt(h, 'ensemble', seg2Nums(h.CDP_NUMBER)[0], 4);
+    seg2PutInt(h, 'trcEns', seg2Nums(h.CDP_TRACE)[0], 4);
+    seg2PutInt(h, 'vertSumCount', seg2Nums(h.STACK)[0], 2);
+    const tt = String(h.TRACE_TYPE ?? '').trim().toUpperCase();
+    const tid = tt === 'SEISMIC_DATA' ? 1 : tt === 'DEAD' ? 2 : tt === 'UPHOLE' ? 5 : 0;
+    if (tid) h.traceId = tid;
+    const delayS = seg2Nums(h.DELAY)[0];
+    if (delayS != null) seg2PutInt(h, 'delayTime', delayS * 1000, 2);
+    seg2PutInt(h, 'gainConst', seg2Nums(h.FIXED_GAIN)[0], 2);
+    const alias = seg2Nums(h.ALIAS_FILTER);
+    seg2PutInt(h, 'aliasFreq', alias[0], 2);
+    if (alias[0]) seg2PutInt(h, 'aliasSlope', alias[1], 2);
+    seg2PutInt(h, 'notchFreq', seg2Nums(h.NOTCH_FREQUENCY)[0], 2);
+    const lc = seg2Nums(h.LOW_CUT_FILTER);
+    seg2PutInt(h, 'lowCut', lc[0], 2);
+    if (lc[0]) seg2PutInt(h, 'lowCutSlope', lc[1], 2);
+    const hc = seg2Nums(h.HIGH_CUT_FILTER);
+    seg2PutInt(h, 'highCut', hc[0], 2);
+    if (hc[0]) seg2PutInt(h, 'highCutSlope', hc[1], 2);
+    const s = xy(locs[i].s);
+    const g = xy(locs[i].g);
+    if (s.length || g.length) {
+      h.coordScalar = coordScalar;
+      if (s.length) { seg2PutInt(h, 'srcX', encodeWithScalar(s[0], coordScalar), 4); if (s.length > 1) seg2PutInt(h, 'srcY', encodeWithScalar(s[1], coordScalar), 4); }
+      if (g.length) { seg2PutInt(h, 'rcvX', encodeWithScalar(g[0], coordScalar), 4); if (g.length > 1) seg2PutInt(h, 'rcvY', encodeWithScalar(g[1], coordScalar), 4); }
+    }
+  });
 }
 
 // ------------------------------ SEG-2 writer ------------------------------
@@ -328,8 +415,10 @@ export function parseSEG2(b: Bytes, sampleTraceCap: number = MAX_SAMPLE_TRACES):
 // samples.
 //
 // CAVEAT: this is an approximate, lossless-for-samples SEG-2 export - it writes
-// the minimal free-form keys most readers need (SAMPLE_INTERVAL,
-// SAMPLES_PER_TRACE, CHANNEL_NUMBER, plus an FDB ACQUISITION_DATE) and always
+// the free-form keys most readers need (SAMPLE_INTERVAL, SAMPLES_PER_TRACE,
+// CHANNEL_NUMBER) plus whichever of SHOT_SEQUENCE_NUMBER, SOURCE_STATION_NUMBER,
+// CDP_NUMBER, CDP_TRACE, STACK, DELAY and the along-line locations the source
+// trace headers carry, and always
 // uses data-format code 4 (IEEE float32). It is not a byte-for-byte reproduction
 // of an arbitrary source SEG-2.
 export function writeSEG2(pd: ParsedFile): Bytes {
@@ -443,8 +532,44 @@ export function writeSEG2(pd: ParsedFile): Bytes {
   // offset COUNTS ITS OWN TWO BYTES, and a uint16 zero closes the list. This is
   // byte-for-byte the shape a real Geode recorder writes.
   function makeFreeFormBytes(tr: Trace, idx: number): Bytes {
-    const ch = Number(tr.hdr?.channelNum ?? tr.hdr?.CHANNEL_NUMBER ?? idx + 1);
+    const h = tr.hdr || {};
+    // The shared SEG-Y keys every parser emits (core/formats/traceheader.ts),
+    // written back under the SEG-2 keywords with the same meaning - the inverse
+    // of seg2MapStdKeys above. Only what the source carries is written; the
+    // channel number keeps its historical fallback to the trace position.
+    const int = (k: string): number | null => {
+      const v = h[k];
+      return typeof v === 'number' && Number.isFinite(v) && v !== 0 ? Math.round(v) : null;
+    };
+    const ch = int('trcField') ?? (Number(h.CHANNEL_NUMBER) || idx + 1);
     const texts = ['CHANNEL_NUMBER ' + ch, 'SAMPLES_PER_TRACE ' + spt, 'SAMPLE_INTERVAL ' + si_s];
+    const ffid = int('fieldRec');
+    if (ffid != null) texts.push('SHOT_SEQUENCE_NUMBER ' + ffid);
+    const sp = int('srcPt');
+    if (sp != null) texts.push('SOURCE_STATION_NUMBER ' + sp);
+    const cdp = int('ensemble');
+    if (cdp != null) texts.push('CDP_NUMBER ' + cdp);
+    const cdpt = int('trcEns');
+    if (cdpt != null) texts.push('CDP_TRACE ' + cdpt);
+    const stack = int('vertSumCount');
+    if (stack != null) texts.push('STACK ' + stack);
+    const delay = int('delayTime'); // ms in SEG-Y, seconds in SEG-2
+    if (delay != null) texts.push('DELAY ' + delay / 1000);
+    // Locations only along a line: a single SEG-2 value is "the dimension along
+    // the line (i.e., x)", and a second one needs a z this header does not have.
+    // Only for coordinates in length units (SEG-Y coordinate units 0 or 1), never
+    // arc seconds or degrees.
+    const unit = int('coordUnit') ?? 0;
+    if (unit <= 1) {
+      const sc = int('coordScalar') ?? 1;
+      const real = (raw: number): string => String(Number((sc < 0 ? raw / -sc : sc > 1 ? raw * sc : raw).toFixed(4)));
+      const sx = int('srcX'), gx = int('rcvX');
+      if (sx != null && int('srcY') == null) texts.push('SOURCE_LOCATION ' + real(sx));
+      if (gx != null && int('rcvY') == null) texts.push('RECEIVER_LOCATION ' + real(gx));
+    }
+    // Alphabetical in ASCII order, as the comment above sets out.
+    const kw = (s: string): string => s.slice(0, s.indexOf(' '));
+    texts.sort((a, b) => (kw(a) < kw(b) ? -1 : kw(a) > kw(b) ? 1 : 0));
     // offset = 2 (the offset field) + the text + 1 (the string terminator).
     const total = texts.reduce((a, t) => a + 3 + t.length, 0) + 2; // + the closing zero offset
     const buf = new Uint8Array(total);

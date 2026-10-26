@@ -176,6 +176,7 @@ import { epsgCount, findEpsgByParams, getEpsg, searchEpsgRegistry } from '../sps
 import { GEOTIFF_NODATA, writeGeoTIFF } from '../gis/geotiff';
 import { bandStats, rasterGrid, rasterizeCounts, rasterizeIDW, rasterizeLayout } from '../gis/rasterize';
 import { bytesToBase64, base64ToBytes } from '../base64';
+import { chooseCoordScalar, REV1_TRACE_WORDS, STD_TRACE_WORDS } from '../formats/traceheader';
 import JSZip from 'jszip';
 import type { ParsedFile, SPSData, SPSPoint, Trace, TraceGeom } from '../index';
 import type { RGB } from '../render/colormaps';
@@ -2618,12 +2619,222 @@ test('writeSU preserves trace geometry (fldr/sp/cdp/offset) and defaults trid=1'
   const pf: any = { format: 'SEG-Y', revision: 1, bh: { sampleInt: 2000, samplesTrace: 16 }, traceCount: 2, errors: [], traces };
   const re = parseSU(writeSU(pf));
   const h = re.traces[0].hdr;
-  assert.equal(h.ffid, 7, 'fldr preserved');
-  assert.equal(h.sp, 101, 'shot/source point preserved');
-  assert.equal(h.cdp, 555, 'cdp preserved');
-  assert.equal(h.cdpTrace, 3, 'cdp trace preserved');
+  // parseSU emits the shared SEG-Y keys, not SU-only names.
+  assert.equal(h.fieldRec, 7, 'fldr preserved');
+  assert.equal(h.srcPt, 101, 'shot/source point preserved');
+  assert.equal(h.ensemble, 555, 'cdp preserved');
+  assert.equal(h.trcEns, 3, 'cdp trace preserved');
   assert.equal(h.offset, -250, 'offset preserved');
   assert.equal(h.traceId, 1, 'trid defaults to 1 (seismic) when input is 0');
+  for (const old of ['ffid', 'sp', 'cdp', 'cdpTrace', 'traceSeq', 'lineSeq', 'traceNum'])
+    assert.ok(!(old in h), `SU-only key "${old}" is gone - one vocabulary`);
+});
+
+// -- One trace-header vocabulary across every format -------------------------
+// Every parser emits the SEG-Y key for the SEG-Y meaning; every writer reads it.
+// Measured live 26.10.2026: SEG-D/SEG-2/SU -> SEG-Y wrote the trace index as the
+// FFID, SU -> SEG-Y lost the shot point/CDP/channel, SEG-Y -> SU lost the
+// coordinates, scalars and channel.
+
+/** A header carrying every standard word of `words` with a distinct non-zero
+ *  value that fits its width (negative on every other word), minus the words a
+ *  writer owns (sequence numbers, sample count/interval). */
+function everyWordHdr(words: readonly { key: string; w: 2 | 4 }[]): Record<string, number> {
+  const owned = new Set(['seqLine', 'seqFile', 'nSamples', 'sampInt']);
+  const h: Record<string, number> = {};
+  words.forEach((wd, i) => {
+    if (owned.has(wd.key)) return;
+    const mag = wd.w === 4 ? 100000 + i * 1013 : 10 + i * 7;
+    h[wd.key] = i % 2 ? -mag : mag;
+  });
+  h.coordScalar = -100; // negative scalar: raw coordinates are hundredths
+  h.elevScalar = -10;
+  h.rcvElev = -12345; // below the datum
+  h.delayTime = -30;
+  h.traceId = 1;
+  return h;
+}
+
+test('SEG-Y -> SU -> SEG-Y keeps every standard word of bytes 1-180 (negative scalars, elevations, delay)', () => {
+  const pf = mkPF([16, 16, 16]);
+  const want = everyWordHdr(STD_TRACE_WORDS);
+  pf.traces.forEach((tr: any) => { tr.hdr = { ...want }; });
+  const segy1 = parseSEGY(writeSEGY(pf, 1));
+  const su = parseSU(writeSU(segy1));
+  const back = parseSEGY(writeSEGY(su, 1));
+  for (const stage of [segy1, su, back]) {
+    for (const [k, v] of Object.entries(want)) {
+      for (let t = 0; t < 3; t++)
+        assert.equal(stage.traces[t].hdr[k], v, `${stage.format} trace ${t} ${k}: got ${stage.traces[t].hdr[k]}, want ${v}`);
+    }
+  }
+  assert.equal(back.traces[2].hdr.seqLine, 3, 'trace sequence number within line still counts from 1');
+  assert.equal(back.traces[2].hdr.seqFile, 3, 'trace sequence number within file still counts from 1');
+});
+
+test('SEG-Y rev 1 words 181-232 round-trip through rev 1/2, are left out of rev 0, and never go into SU', () => {
+  const pf = mkPF([8, 8]);
+  const want = everyWordHdr(REV1_TRACE_WORDS);
+  pf.traces.forEach((tr: any) => { tr.hdr = { ...want }; });
+  for (const rev of [1, 2]) {
+    const h = parseSEGY(writeSEGY(pf, rev)).traces[1].hdr;
+    for (const wd of REV1_TRACE_WORDS) assert.equal(h[wd.key], want[wd.key], `rev ${rev} ${wd.key}`);
+  }
+  const r0 = writeSEGY(pf, 0);
+  for (let i = 180; i < 240; i++) assert.equal(r0[3600 + i], 0, `rev 0 byte ${i + 1} stays unassigned`);
+  const su = writeSU(pf);
+  for (let i = 180; i < 240; i++) assert.equal(su[i], 0, `SU byte ${i + 1} is not a SEG-Y word`);
+});
+
+test('SEG-Y low-cut / high-cut are read from bytes 149-152, not 147-150', () => {
+  const out = writeSEGY(mkPF([8]), 1);
+  const base = 3600;
+  out[base + 146] = 0; out[base + 147] = 99; // 147-148 notch filter slope
+  out[base + 148] = 0; out[base + 149] = 8; // 149-150 low-cut frequency
+  out[base + 150] = 0; out[base + 151] = 125; // 151-152 high-cut frequency
+  const h = parseSEGY(out).traces[0].hdr;
+  assert.equal(h.lowCut, 8, 'low-cut frequency');
+  assert.equal(h.highCut, 125, 'high-cut frequency');
+  assert.equal(h.notchSlope, 99, 'notch slope is its own word');
+});
+
+test('SU (little-endian, PC-written) -> SEG-Y keeps FFID, channel, shot point, CDP and scaled coordinates', () => {
+  const ns = 8;
+  const n = 3;
+  const b = new Uint8Array(n * (240 + ns * 4));
+  const v = new DataView(b.buffer);
+  for (let t = 0; t < n; t++) {
+    const o = t * (240 + ns * 4);
+    v.setInt32(o + 0, t + 1, true); // tracl
+    v.setInt32(o + 8, 1234, true); // fldr
+    v.setInt32(o + 12, 17 + t, true); // tracf
+    v.setInt32(o + 16, 1, true); // ep
+    v.setInt32(o + 20, 55 + t, true); // cdp
+    v.setInt16(o + 28, 1, true); // trid
+    v.setInt16(o + 70, -100, true); // scalco
+    v.setInt32(o + 72, 35012345, true); // sx (350123.45 m)
+    v.setInt16(o + 114, ns, true);
+    v.setInt16(o + 116, 1000, true);
+    for (let i = 0; i < ns; i++) v.setFloat32(o + 240 + i * 4, i + 0.5, true);
+  }
+  const su = parseSU(b);
+  assert.equal(su.bh.littleEndian, 1, 'detected little-endian');
+  const h = parseSEGY(writeSEGY(su, 1)).traces;
+  for (let t = 0; t < n; t++) {
+    assert.equal(h[t].hdr.fieldRec, 1234, `trace ${t} FFID is the SU fldr, not the trace index`);
+    assert.equal(h[t].hdr.trcField, 17 + t, `trace ${t} channel is the SU tracf`);
+    assert.equal(h[t].hdr.srcPt, 1, `trace ${t} shot point kept`);
+    assert.equal(h[t].hdr.ensemble, 55 + t, `trace ${t} CDP is the SU cdp, not the trace index`);
+    assert.equal(h[t].hdr.coordScalar, -100, `trace ${t} coordinate scalar kept`);
+    assert.equal(h[t].hdr.srcX, 35012345, `trace ${t} raw source X kept with its scalar`);
+  }
+});
+
+test('writeSEGY no longer invents FFID, channel or CDP from the trace index', () => {
+  const h = parseSEGY(writeSEGY(mkPF([8, 8, 8]), 1)).traces.map((tr) => tr.hdr);
+  for (let t = 0; t < 3; t++) {
+    assert.equal(h[t].fieldRec, 0, 'absent FFID stays 0 ("not recorded")');
+    assert.equal(h[t].trcField, 0, 'absent channel stays 0');
+    assert.equal(h[t].ensemble, 0, 'absent CDP stays 0');
+    assert.equal(h[t].seqLine, t + 1, 'sequence within line is still t+1');
+    assert.equal(h[t].seqFile, t + 1, 'sequence within file is still t+1');
+    assert.equal(h[t].traceId, 1, 'trace id still defaults to 1 (seismic)');
+    assert.equal(h[t].coordScalar, 1, 'rev 1 still writes scalar 1 for "none"');
+  }
+});
+
+test('SEG-D (spec) -> SEG-Y keeps the file number and the channel; SEG-Y -> SEG-D keeps the FFID', () => {
+  for (const rev3 of [false, true]) {
+    const pf = mkPF([16, 16, 16]);
+    pf.gh1 = { fileNum: 1234 };
+    const segd = parseSEGD(writeSEGD(pf, rev3));
+    const h = parseSEGY(writeSEGY(segd, 1)).traces.map((tr) => tr.hdr);
+    for (let t = 0; t < 3; t++) {
+      assert.equal(h[t].fieldRec, 1234, `rev${rev3 ? 3 : 1} trace ${t} FFID = SEG-D file number`);
+      assert.equal(h[t].trcField, t + 1, `rev${rev3 ? 3 : 1} trace ${t} channel = SEG-D trace number`);
+    }
+    // SEG-Y -> SEG-D: no general header on the source, so the file number comes
+    // from the traces' shared FFID - in BCD up to 9999, extended above it.
+    for (const ffid of [777, 123456]) {
+      const sy = mkPF([16, 16]);
+      sy.traces.forEach((tr: any) => { tr.hdr = { fieldRec: ffid }; });
+      const back = parseSEGD(writeSEGD(sy, rev3));
+      assert.equal(back.gh1!.fileNum, ffid, `rev${rev3 ? 3 : 1} file number ${ffid} from the SEG-Y FFID`);
+      assert.equal(back.traces[1].hdr.fieldRec, ffid, `rev${rev3 ? 3 : 1} trace file number ${ffid}`);
+    }
+  }
+});
+
+test('legacy SeisConv SEG-D (old writer layout) -> SEG-Y keeps the file number the header states', () => {
+  // The layout of the measured field .segd files the old writer produced: GH1 b[22]=0x11,
+  // b[27]=b[28]=0, file number 0001 BCD in GH1 AND in every 20-byte trace header.
+  const ns = 8;
+  const n = 4;
+  const b = new Uint8Array(64 + n * (20 + ns * 4));
+  b[0] = 0x00; b[1] = 0x01; // file number 1 (BCD)
+  b[2] = 0x00; b[3] = 0x32; // legacy IEEE code
+  b[20] = 0x32; // bytes per trace 32 (BCD) = 8 IEEE samples
+  b[21] = 0x20; // legacy base-scan code 2 = 2000 µs
+  b[22] = 0x11; // the old writer's signature
+  const v = new DataView(b.buffer);
+  for (let t = 0; t < n; t++) {
+    const o = 64 + t * (20 + ns * 4);
+    b[o] = 0x00; b[o + 1] = 0x01;
+    v.setUint32(o + 4, t + 1, false);
+    for (let i = 0; i < ns; i++) v.setFloat32(o + 20 + i * 4, t * 10 + i, false);
+  }
+  const segd = parseSEGD(b);
+  assert.equal(segd.traceCount, n, 'legacy decoder walks every trace');
+  const h = parseSEGY(writeSEGY(segd, 1)).traces.map((tr) => tr.hdr);
+  for (let t = 0; t < n; t++) {
+    assert.equal(h[t].fieldRec, 1, `trace ${t} FFID is the header's file number 1, not ${t + 1}`);
+    assert.equal(h[t].trcField, t + 1, `trace ${t} channel is the legacy trace number`);
+  }
+});
+
+test('SEG-2 -> SEG-Y keeps shot sequence number, channel, delay and decimal locations (scalar chosen to fit)', () => {
+  const pf = mkPF([16, 16, 16]);
+  pf.bh.sampleInt = 250;
+  pf.traces.forEach((tr: any, i: number) => {
+    // SEG-Y-side source: locations 1.00 m and 15.25 m * i, stored as hundredths.
+    tr.hdr = { fieldRec: 1006, trcField: i + 1, delayTime: -30, vertSumCount: 4, coordScalar: -100, srcX: 100, rcvX: 1525 * (i + 1) };
+  });
+  const seg2 = parseSEG2(writeSEG2(pf));
+  const s0 = seg2.traces[1].hdr;
+  assert.equal(s0.SHOT_SEQUENCE_NUMBER, '1006', 'SEG-2 writer emits SHOT_SEQUENCE_NUMBER from the FFID');
+  assert.equal(s0.DELAY, '-0.03', 'SEG-2 DELAY is in seconds');
+  assert.equal(s0.RECEIVER_LOCATION, '30.5', 'along-line receiver location in metres');
+  const h = parseSEGY(writeSEGY(seg2, 1)).traces.map((tr) => tr.hdr);
+  for (let t = 0; t < 3; t++) {
+    assert.equal(h[t].fieldRec, 1006, `trace ${t} FFID = SHOT_SEQUENCE_NUMBER, not ${t + 1}`);
+    assert.equal(h[t].trcField, t + 1, `trace ${t} channel = CHANNEL_NUMBER`);
+    assert.equal(h[t].delayTime, -30, `trace ${t} delay -0.03 s -> -30 ms`);
+    assert.equal(h[t].vertSumCount, 4, `trace ${t} STACK -> vertically summed traces`);
+    assert.equal(h[t].coordScalar, -100, `trace ${t} scalar chosen to keep the decimals`);
+    assert.equal(h[t].rcvX, 1525 * (t + 1), `trace ${t} receiver location kept exactly`);
+    assert.equal(h[t].srcX, 100, `trace ${t} source location kept exactly`);
+    assert.equal(h[t].srcPt, 0, 'a SOURCE_LOCATION is a distance, not a source point number');
+    assert.equal(h[t].ensemble, 0, 'a RECEIVER_LOCATION is a distance, not a CDP number');
+  }
+});
+
+test('chooseCoordScalar keeps decimals exactly and never overflows int32', () => {
+  assert.equal(chooseCoordScalar([0, 15, 345]), 1, 'whole metres need no scalar');
+  assert.equal(chooseCoordScalar([1.5, 2]), -10, 'one decimal');
+  assert.equal(chooseCoordScalar([15.25, 1]), -100, 'two decimals');
+  assert.equal(chooseCoordScalar([3500000.123]), -100, 'a northing with three decimals still fits at -100 only');
+  assert.equal(chooseCoordScalar([]), 1, 'nothing to scale');
+});
+
+test('tape image -> embedded SEG-Y keeps FFID and channel', () => {
+  const pf = mkPF([16, 16]);
+  pf.traces.forEach((tr: any, i: number) => { tr.hdr = { fieldRec: 4321, trcField: 7 + i, srcPt: 12 }; });
+  const files = parseTpimage(writeTapeImage(pf));
+  assert.equal(files.length, 1, 'one embedded file');
+  const h = parseSEGY(files[0].bytes).traces.map((tr) => tr.hdr);
+  assert.equal(h[1].fieldRec, 4321, 'FFID survives the tape image');
+  assert.equal(h[1].trcField, 8, 'channel survives the tape image');
+  assert.equal(h[1].srcPt, 12, 'shot point survives the tape image');
 });
 
 test('writeSEGY / writeSU refuse ns > 65535 with a clear error (no silent truncation)', () => {

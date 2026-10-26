@@ -1215,8 +1215,10 @@ port.on('message', (req: Req) => {
       const t0 = pf.traces[0];
       const ns = t0?.nSamples ?? (typeof pf.bh.samplesTrace === 'number' ? pf.bh.samplesTrace : null);
       const siUs = typeof pf.bh.sampleInt === 'number' && pf.bh.sampleInt > 0 ? pf.bh.sampleInt : null;
-      // FFID: SEG-Y/SU trace header 'fieldRec'; SEG-D general header 'fileNum'.
-      // SEG-2 has no FFID - the renderer falls back to the file-name digits.
+      // FFID: the shared trace-header key 'fieldRec' (SEG-Y/SU bytes 9-12, the
+      // SEG-D file number, SEG-2 SHOT_SEQUENCE_NUMBER); else the SEG-D general
+      // header 'fileNum'. A file carrying none leaves it null, and the renderer
+      // falls back to the file-name digits.
       const fr = t0?.hdr?.['fieldRec'];
       const fn = pf.gh1?.['fileNum'];
       const ffid = typeof fr === 'number' && fr > 0 ? fr

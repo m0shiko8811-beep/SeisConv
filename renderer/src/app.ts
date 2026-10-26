@@ -2772,8 +2772,9 @@ async function refreshTrace() {
 
 // -- Trace-header table -------------------------------------------------------
 // Live, grouped key/value view of the per-trace SEG-Y header the worker already
-// returns on `lastTrace.hdr`. Field keys below MUST match the names populated by
-// the SEG-Y parser (core/formats/segy.ts) - anything absent is simply skipped.
+// returns on `lastTrace.hdr`. Field keys below MUST match the shared trace-header
+// keys every parser emits (core/formats/traceheader.ts) - anything absent is
+// simply skipped.
 
 type HdrFmt = 'int' | 'raw' | 'scaled' | 'gain' | 'mute' | 'traceId' | 'chanType' | 'text';
 type HdrField = { key: string; label: string; fmt?: HdrFmt };
@@ -2798,6 +2799,8 @@ const HDR_GROUPS: HdrGroup[] = [
       { key: 'seqFile', label: 'Seq. no. in file' },
       { key: 'traceId', label: 'Trace ID', fmt: 'traceId' },
       { key: 'dataUse', label: 'Data use' },
+      { key: 'vertSumCount', label: 'Vertically summed traces' },
+      { key: 'horzStackCount', label: 'Horizontally stacked traces' },
     ],
   },
   {
@@ -2814,6 +2817,14 @@ const HDR_GROUPS: HdrGroup[] = [
       { key: 'elevScalar', label: 'Elevation scalar', fmt: 'raw' },
       { key: 'coordScalar', label: 'Coordinate scalar', fmt: 'raw' },
       { key: 'coordUnit', label: 'Coordinate units', fmt: 'raw' },
+      { key: 'rcvDatumElev', label: 'Datum elevation @ receiver' },
+      { key: 'srcDatumElev', label: 'Datum elevation @ source' },
+      { key: 'srcWaterDepth', label: 'Water depth @ source' },
+      { key: 'rcvWaterDepth', label: 'Water depth @ group' },
+      { key: 'cdpX', label: 'CDP X', fmt: 'scaled' },
+      { key: 'cdpY', label: 'CDP Y', fmt: 'scaled' },
+      { key: 'inline3d', label: 'Inline' },
+      { key: 'crossline3d', label: 'Crossline' },
     ],
   },
   {
@@ -2826,6 +2837,14 @@ const HDR_GROUPS: HdrGroup[] = [
       { key: 'year', label: 'Recording year', fmt: 'raw' },
       { key: 'day', label: 'Day of year', fmt: 'raw' },
       { key: '__time', label: 'Recording time' },
+      { key: 'delayTime', label: 'Delay recording time (ms)' },
+      { key: 'lagTimeA', label: 'Lag time A (ms)' },
+      { key: 'lagTimeB', label: 'Lag time B (ms)' },
+      { key: 'srcUpholeTime', label: 'Uphole time @ source (ms)' },
+      { key: 'rcvUpholeTime', label: 'Uphole time @ group (ms)' },
+      { key: 'srcStatic', label: 'Source static (ms)' },
+      { key: 'rcvStatic', label: 'Group static (ms)' },
+      { key: 'totalStatic', label: 'Total static applied (ms)' },
     ],
   },
   {
@@ -2835,6 +2854,13 @@ const HDR_GROUPS: HdrGroup[] = [
       { key: 'gainConst', label: 'Gain constant (dB)' },
       { key: 'lowCut', label: 'Low-cut (Hz)' },
       { key: 'highCut', label: 'High-cut (Hz)' },
+      { key: 'initialGain', label: 'Initial gain (dB)' },
+      { key: 'aliasFreq', label: 'Alias filter (Hz)' },
+      { key: 'aliasSlope', label: 'Alias slope (dB/octave)' },
+      { key: 'notchFreq', label: 'Notch filter (Hz)' },
+      { key: 'notchSlope', label: 'Notch slope (dB/octave)' },
+      { key: 'lowCutSlope', label: 'Low-cut slope (dB/octave)' },
+      { key: 'highCutSlope', label: 'High-cut slope (dB/octave)' },
       { key: 'traceWeight', label: 'Trace weighting' },
     ],
   },

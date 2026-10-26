@@ -36,7 +36,7 @@
       "image": "img/01b-converter-single-loaded.png",
       "caption": "Converter with a SEG-Y open: what was read, and the output format",
       "callouts": 3,
-      "bytes": 154846
+      "bytes": 154746
     },
     {
       "name": "01c-converter-output-name",
@@ -260,7 +260,7 @@
       "image": "img/20-help-modal.png",
       "caption": "The in-app Help: the same source this manual's reference chapter is generated from",
       "callouts": 3,
-      "bytes": 270488
+      "bytes": 270459
     }
   ]
 }
