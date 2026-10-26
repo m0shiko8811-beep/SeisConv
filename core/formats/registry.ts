@@ -16,7 +16,9 @@ import { writeTapeImage } from './tapeimage';
 
 export interface FormatModule {
   id: SeismicFormat;
-  parse: (b: Bytes, name?: string) => ParsedFile;
+  /** `sampleTraceCap` (optional) bounds how many traces decode their samples;
+   *  absent, each parser applies its own MAX_SAMPLE_TRACES default. */
+  parse: (b: Bytes, name?: string, sampleTraceCap?: number) => ParsedFile;
 }
 
 export interface WriterDef {
@@ -46,8 +48,9 @@ export function listWriters(): WriterDef[] {
   return [...writers.values()];
 }
 
-/** Detect the format and parse via the registered module. */
-export function parseWithRegistry(b: Bytes, name?: string): ParsedFile {
+/** Detect the format and parse via the registered module. `sampleTraceCap` is
+ *  passed through to the parser (absent = the parser's own default). */
+export function parseWithRegistry(b: Bytes, name?: string, sampleTraceCap?: number): ParsedFile {
   const { format: id, assumed } = detectEx(b, name);
   const mod = parsers.get(id);
   if (!mod) {
@@ -56,7 +59,7 @@ export function parseWithRegistry(b: Bytes, name?: string): ParsedFile {
       : [`No parser registered for ${id} (e.g. TPIMAGE extraction is not yet supported)`];
     return { format: id, revision: 0, bh: {}, traces: [], traceCount: 0, errors };
   }
-  const pf = mod.parse(b, name);
+  const pf = mod.parse(b, name, sampleTraceCap);
   if (assumed)
     pf.errors.unshift(`Unrecognized content - no format signature matched; attempting ${id} because the file is large enough to hold its headers. Results may be unreliable.`);
   return pf;
@@ -64,12 +67,13 @@ export function parseWithRegistry(b: Bytes, name?: string): ParsedFile {
 
 // -- Built-in registrations --
 // Add a format here (after writing its module). Add an output by registering a writer.
-// Wrapped (not bare parseSEGY) because parseSEGY's 2nd param is now a sample-trace
-// cap, not a filename - the registry's default parse uses the cap's default.
-registerFormat({ id: 'SEG-Y', parse: (b) => parseSEGY(b) });
-registerFormat({ id: 'SEG-D', parse: parseSEGD });
-registerFormat({ id: 'SEG-2', parse: parseSEG2 });
-registerFormat({ id: 'SU', parse: parseSU });
+// Wrapped (never the bare parser) because every parser's 2nd param is a sample-trace
+// cap, not a filename: passing the module straight through would hand it the name.
+// An undefined cap falls back to each parser's MAX_SAMPLE_TRACES default.
+registerFormat({ id: 'SEG-Y', parse: (b, _name, cap) => parseSEGY(b, cap) });
+registerFormat({ id: 'SEG-D', parse: (b, _name, cap) => parseSEGD(b, cap) });
+registerFormat({ id: 'SEG-2', parse: (b, _name, cap) => parseSEG2(b, cap) });
+registerFormat({ id: 'SU', parse: (b, _name, cap) => parseSU(b, cap) });
 
 registerWriter({ id: 'segy1', label: 'SEG-Y Rev 1', ext: 'sgy', write: (pf) => writeSEGY(pf, 1) });
 registerWriter({ id: 'segy0', label: 'SEG-Y Rev 0', ext: 'sgy', write: (pf) => writeSEGY(pf, 0) });

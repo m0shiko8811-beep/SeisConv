@@ -48,7 +48,7 @@ export function detectEx(b: Bytes, name?: string): DetectResult {
     return { format: 'TPIMAGE', assumed: false };
   }
   if (ext === 'su') return { format: 'SU', assumed: false }; // Seismic Unix - headerless, no magic bytes
-  if (ext === 'dat' || ext === 'seg2' || ext === 'bat') return { format: 'SEG-2', assumed: false }; // .dat = Geode, .bat = legacy
+  if (ext === 'dat' || ext === 'seg2' || ext === 'sg2' || ext === 'bat') return { format: 'SEG-2', assumed: false }; // .dat = Geode, .bat = legacy
 
   // Tpimage magic: first 4 bytes = BE block length 80, then "VOL1".
   if (b.length >= 88) {

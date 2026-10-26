@@ -182,13 +182,22 @@ export interface BatchOpts {
   time?: string;
 }
 
+// Mirrored by BatchSummary in renderer/src/app.ts - keep the two in sync.
 export interface BatchResult {
   ok: boolean;
   total: number;
   done: number;
   failed: number;
   canceled: boolean;
-  results: { name: string; ok: boolean; error?: string }[];
+  /** Per input file. `out` is the file name actually written; `renamed` is true
+   *  when it got a _2/_3/... suffix because the plain name already existed. */
+  results?: { name: string; ok: boolean; error?: string; out?: string; renamed?: boolean }[];
+  /** Tape-image combine only: the ONE output file's name (and whether renamed). */
+  out?: string;
+  renamed?: boolean;
+  /** Set when the whole run was refused before any file (e.g. an output folder
+   *  that was not picked through the dialog); `results` may then be absent. */
+  error?: string;
 }
 
 export interface ConvertProgress {
@@ -906,7 +915,8 @@ const api = {
   /** Near-trace (common-offset) gather: ONE chosen channel from every record in
    *  the open file's folder, assembled into a single panel. */
   getNearGather: (opts?: NearGatherOpts): Promise<NearGatherData> => ipcRenderer.invoke('seisconv:getNearGather', opts ?? {}),
-  /** Pick an input folder; returns its seismic files (sorted by name) or null. */
+  /** Pick an input folder; returns its seismic files (sorted by name), with an
+   *  empty `files` when none matched, or null when the user cancelled. */
   pickInputFolder: (): Promise<InputFolder | null> => ipcRenderer.invoke('seisconv:pickInputFolder'),
   /** Pick an output folder; returns the chosen path or null. */
   pickOutputFolder: (): Promise<string | null> => ipcRenderer.invoke('seisconv:pickOutputFolder'),

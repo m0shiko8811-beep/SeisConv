@@ -19,6 +19,9 @@ import assert from 'node:assert/strict';
 import { SyncEngine, FileServer, fetchManifest, fetchFile, sanitizeTrustedPeers, MAX_TRUSTED_PEERS } from '../../electron/field';
 import {
   parseAny,
+  parseInMemory,
+  countSamplelessTraces,
+  MAX_SAMPLE_TRACES,
   parseSEGY,
   parseSegyMeta,
   decodeSegyTrace,
@@ -2171,6 +2174,68 @@ test('parseSEGY sampleTraceCap bounds which traces get SAMPLES (header kept for 
   for (let t = 0; t < 6; t++) assert.ok(full.traces[t].samples, `trace ${t} decoded with a raised cap`);
   // Default (no cap arg) is unchanged: small files (< 2000 traces) decode fully.
   assert.ok(parseSEGY(out).traces[5].samples, 'default cap decodes a small file fully');
+});
+
+// Batch convert regression: SEG-D / SEG-2 / SU / tape-image inputs with more than
+// MAX_SAMPLE_TRACES traces were written with every trace from index 2000 on as
+// zeros, and the run reported success. Built from the core writers: 2100 short
+// traces, each with its own distinct non-zero values.
+const BIG_N = MAX_SAMPLE_TRACES + 100;
+const BIG_NS = 16;
+const bigVal = (t: number, i: number): number => (t + 1) * 32 + i + 1;
+function mkBigPF(): any {
+  const traces = Array.from({ length: BIG_N }, (_, t) => {
+    const s = new Float32Array(BIG_NS);
+    for (let i = 0; i < BIG_NS; i++) s[i] = bigVal(t, i);
+    return { hdr: {}, samples: s, nSamples: BIG_NS, dataFmt: 5 };
+  });
+  return { format: 'SEG-Y', revision: 0, bh: { sampleInt: 2000, samplesTrace: BIG_NS }, traceCount: BIG_N, errors: [], traces };
+}
+const BIG_INPUTS: [string, (pf: any) => Uint8Array][] = [
+  ['big.su', writeSU],
+  ['big.dat', writeSEG2],
+  ['big_rev1.segd', (pf) => writeSEGD(pf, false)],
+  ['big_rev3.segd', (pf) => writeSEGD(pf, true)],
+  ['big.tpimage', writeTapeImage],
+];
+
+test('convert-path parse keeps EVERY trace of a > 2000-trace SU / SEG-2 / SEG-D / tape image', () => {
+  const src = mkBigPF();
+  for (const [name, write] of BIG_INPUTS) {
+    const pf = parseInMemory(write(src), name);
+    assert.equal(pf.traceCount, BIG_N, `${name}: every trace walked`);
+    assert.equal(countSamplelessTraces(pf), 0, `${name}: no trace left without samples`);
+    for (let t = 0; t < BIG_N; t++) {
+      const s = pf.traces[t].samples!;
+      for (let i = 0; i < BIG_NS; i++) assert.equal(s[i], bigVal(t, i), `${name}: trace ${t} sample ${i}`);
+    }
+    // And through a writer, as the batch converter does: the deep traces arrive.
+    const back = parseSEGY(writeSEGY(pf, 1), BIG_N);
+    assert.equal(back.traceCount, BIG_N, `${name}: SEG-Y output carries every trace`);
+    assert.equal(back.traces[BIG_N - 1].samples![0], bigVal(BIG_N - 1, 0), `${name}: last trace is not zeros`);
+  }
+});
+
+test('parseAny default sample cap is unchanged (2000 traces decode, the rest header-only)', () => {
+  const src = mkBigPF();
+  for (const [name, write] of BIG_INPUTS) {
+    const pf = parseAny(write(src), name);
+    assert.equal(pf.traceCount, BIG_N, `${name}: headers kept for every trace`);
+    assert.ok(pf.traces[MAX_SAMPLE_TRACES - 1].samples, `${name}: trace 1999 decoded`);
+    assert.equal(pf.traces[MAX_SAMPLE_TRACES].samples, null, `${name}: trace 2000 header-only by default`);
+    assert.equal(countSamplelessTraces(pf), BIG_N - MAX_SAMPLE_TRACES, `${name}: 100 traces left without samples`);
+  }
+});
+
+test('parseInMemory honours its sample budget and countSamplelessTraces reports the shortfall', () => {
+  // A budget for 2050 traces of 16 samples: the cap lands at 2050, so 50 traces
+  // stay sample-less - exactly what the worker refuses to write as zeros.
+  const b = writeSU(mkBigPF());
+  const pf = parseInMemory(b, 'big.su', 2050 * BIG_NS);
+  assert.equal(pf.traceCount, BIG_N);
+  assert.equal(countSamplelessTraces(pf), BIG_N - 2050);
+  // Never below the parsers' own default, however small the budget.
+  assert.equal(countSamplelessTraces(parseInMemory(b, 'big.su', 1)), BIG_N - MAX_SAMPLE_TRACES);
 });
 
 test('writeSU does NOT overrun when a later trace is longer than the first', () => {

@@ -36,14 +36,14 @@
       "image": "img/01b-converter-single-loaded.png",
       "caption": "Converter with a SEG-Y open: what was read, and the output format",
       "callouts": 3,
-      "bytes": 154745
+      "bytes": 154846
     },
     {
       "name": "01c-converter-output-name",
       "image": "img/01c-converter-output-name.png",
       "caption": "The same panel scrolled to the output-name builder and Convert",
       "callouts": 4,
-      "bytes": 149865
+      "bytes": 136829
     },
     {
       "name": "02-converter-batch",
@@ -246,7 +246,7 @@
       "image": "img/18-sweeps.png",
       "caption": "Sweeps: an 8-96 Hz, 12 s linear sweep and its Klauder wavelet",
       "callouts": 6,
-      "bytes": 238622
+      "bytes": 238571
     },
     {
       "name": "19-wifisync",
@@ -260,7 +260,7 @@
       "image": "img/20-help-modal.png",
       "caption": "The in-app Help: the same source this manual's reference chapter is generated from",
       "callouts": 3,
-      "bytes": 270485
+      "bytes": 270488
     }
   ]
 }

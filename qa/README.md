@@ -64,6 +64,7 @@ under `SEISCONV_QA_DATA_ROOT`** (no default; set it to wherever your sample data
 | `SEISCONV_QA_SEGY` | `segy` | `<DATA_ROOT>/example.segy` | Converter / Trace / Section / Velocity |
 | `SEISCONV_QA_LE`   | `le`   | `<DATA_ROOT>/example-le.sgy` (a little-endian SEG-Y) | Workbench + LE re-open |
 | `SEISCONV_QA_SPS`  | `sps`  | `<DATA_ROOT>/example.{s01,r01,x01}` (`;`-separated) | SPS tab (multiSelections) |
+| `SEISCONV_QA_SEGD` | `segd` | the first `.segd`/`.sgd` in `fuzzData`; neither set = the step skips | Batch converter step (copied with the SEG-Y into a temp folder) |
 
 ### Where the test window opens
 

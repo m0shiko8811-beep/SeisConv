@@ -88,13 +88,15 @@ function isLegacySeisConvSEGD(b: Bytes): boolean {
   return b[22] === 0x11 && b[27] === 0 && b[28] === 0;
 }
 
-export function parseSEGD(b: Bytes): ParsedFile {
+/** `sampleTraceCap` bounds how many traces decode their SAMPLES (headers are kept
+ * for every trace); it defaults to MAX_SAMPLE_TRACES exactly like parseSEGY. */
+export function parseSEGD(b: Bytes, sampleTraceCap: number = MAX_SAMPLE_TRACES): ParsedFile {
   const r: ParsedFile = { format: 'SEG-D', revision: 1, gh1: {}, bh: {}, traces: [], traceCount: 0, errors: [] };
   if (b.length < 64) {
     r.errors.push('File too small');
     return r;
   }
-  if (isLegacySeisConvSEGD(b)) return parseLegacySeisConvSEGD(b);
+  if (isLegacySeisConvSEGD(b)) return parseLegacySeisConvSEGD(b, sampleTraceCap);
 
   const fmtCode = bcd4(b, 2);
   const bits = fmtBits(fmtCode);
@@ -512,7 +514,7 @@ export function parseSEGD(b: Bytes): ParsedFile {
     }
 
     let samples: Float32Array | null = null;
-    if (tc < MAX_SAMPLE_TRACES) {
+    if (tc < sampleTraceCap) {
       samples = new Float32Array(ns);
       if (bits === 32) {
         for (let i = 0; i < ns; i++) samples[i] = rIEEE(b, dataOff + i * 4);
@@ -557,7 +559,7 @@ export function parseSEGD(b: Bytes): ParsedFile {
  * Frozen decoder for .segd files written by SeisConv's pre-spec writer (wrong
  * GH1 offsets; see isLegacySeisConvSEGD). Kept verbatim so old exports open.
  */
-function parseLegacySeisConvSEGD(b: Bytes): ParsedFile {
+function parseLegacySeisConvSEGD(b: Bytes, sampleTraceCap: number): ParsedFile {
   const r: ParsedFile = { format: 'SEG-D', revision: 1, gh1: {}, bh: {}, traces: [], traceCount: 0, errors: [] };
   const fmtCode = bcd2(b[2]) * 100 + bcd2(b[3]);
   const addlBlocks = (b[10] >> 4) & 0xf;
@@ -609,7 +611,7 @@ function parseLegacySeisConvSEGD(b: Bytes): ParsedFile {
       ns = sptStored > 0 ? sptStored : Math.floor(rem / 4);
       ns = Math.min(ns, Math.floor(rem / 4), MAX_SAMPLES_PER_TRACE);
       if (ns <= 0) break;
-      if (tc < MAX_SAMPLE_TRACES) {
+      if (tc < sampleTraceCap) {
         samples = new Float32Array(ns);
         for (let i = 0; i < ns; i++) samples[i] = rIEEE(b, off + i * 4);
       }
@@ -618,7 +620,7 @@ function parseLegacySeisConvSEGD(b: Bytes): ParsedFile {
       ns = sptStored > 0 ? sptStored : Math.floor(rem / 3);
       ns = Math.min(ns, Math.floor(rem / 3), MAX_SAMPLES_PER_TRACE);
       if (ns <= 0) break;
-      if (tc < MAX_SAMPLE_TRACES) {
+      if (tc < sampleTraceCap) {
         samples = new Float32Array(ns);
         for (let i = 0; i < ns; i++) {
           let v = r24(b, off + i * 3);
@@ -632,7 +634,7 @@ function parseLegacySeisConvSEGD(b: Bytes): ParsedFile {
       ns = Math.min(ns, Math.floor((rem * 2) / 5), MAX_SAMPLES_PER_TRACE);
       const nb = Math.ceil((ns * 5) / 2);
       if (ns <= 0) break;
-      if (tc < MAX_SAMPLE_TRACES) {
+      if (tc < sampleTraceCap) {
         samples = new Float32Array(ns);
         const pairs = Math.floor(ns / 2);
         for (let i = 0; i < pairs; i++) {

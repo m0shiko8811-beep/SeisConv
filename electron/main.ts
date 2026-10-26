@@ -21,7 +21,7 @@ import { fitZoom, resampleMosaic, zoomForResolution, TILE_SIZE } from '../core/g
 import * as dns from 'node:dns';
 import * as path from 'node:path';
 import JSZip from 'jszip';
-import { writeTapeVolHeader, writeTapeEnd, parseUdpTrigger, parseTriggerLine, parseScsLogLine, scsLogKey, isScsTrigTouch, SCS_TRIG_WINDOW_MS, TRIGGER_TEXT_MAX } from '../core';
+import { SEISMIC_INPUT_EXTS, writeTapeVolHeader, writeTapeEnd, parseUdpTrigger, parseTriggerLine, parseScsLogLine, scsLogKey, isScsTrigTouch, SCS_TRIG_WINDOW_MS, TRIGGER_TEXT_MAX } from '../core';
 import { isNewerVersion, parseVersion, parseCriticalReason, releaseNotesText, updateBadgeVisible, MAX_VERSION_TAG, MAX_CRITICAL_REASON } from '../core/version';
 import { RateLimiter, TCP_FILE_PORT, complementRole, type Role as FieldRole } from '../core/field';
 import {
@@ -52,7 +52,7 @@ const FEEDBACK_PRIVACY =
   'Please keep survey, client and station names, line numbers, coordinates and machine paths out of this report - the issue is public.';
 
 const SEISMIC_FILTERS = [
-  { name: 'Seismic files', extensions: ['segy', 'sgy', 'segd', 'sgd', 'seg', 'su', 'seg2', 'dat', 'bat'] },
+  { name: 'Seismic files', extensions: [...SEISMIC_INPUT_EXTS] },
   { name: 'All files', extensions: ['*'] },
 ];
 
@@ -63,11 +63,13 @@ const SEISMIC_FILTERS = [
 // SEISMIC_FILTERS (a save should default to the writer's own extension).
 const OPEN_FILTERS = [
   { name: 'All files', extensions: ['*'] },
-  { name: 'Seismic files', extensions: ['segy', 'sgy', 'segd', 'sgd', 'seg', 'su', 'seg2', 'dat', 'bat'] },
+  { name: 'Seismic files', extensions: [...SEISMIC_INPUT_EXTS] },
 ];
 
-// Input-folder enumeration: extensions (lower-case, no dot) we treat as seismic.
-const INPUT_EXTS = new Set(['.segy', '.sgy', '.segd', '.sgd', '.seg', '.seg2', '.dat', '.bat', '.su']);
+// Input-folder enumeration: extensions (lower-case, WITH the dot, as path.extname
+// returns them) we treat as seismic. Built from core's SEISMIC_INPUT_EXTS, the same
+// list the renderer's "SeisConv looks for ..." hint is built from.
+const INPUT_EXTS = new Set<string>(SEISMIC_INPUT_EXTS.map((e) => '.' + e));
 
 // Largest file a non-tape batch convert will dispatch: the worker reads each input
 // WHOLE into memory (readFileSync) to convert it, so refuse anything above the
@@ -856,6 +858,8 @@ ipcMain.handle('seisconv:getNearGather', async (_e, opts: Record<string, unknown
 });
 
 // Pick a folder and enumerate its seismic files (by extension), sorted by name.
+// null means the user CANCELLED; a folder with no matching file comes back as
+// { dir, files: [] } so the renderer can say so instead of doing nothing.
 ipcMain.handle('seisconv:pickInputFolder', async () => {
   if (!win) return null;
   const res = await dialog.showOpenDialog(win, { properties: ['openDirectory'] });
@@ -866,7 +870,6 @@ ipcMain.handle('seisconv:pickInputFolder', async () => {
     .filter((e) => e.isFile() && INPUT_EXTS.has(path.extname(e.name).toLowerCase()))
     .map((e) => ({ name: e.name, path: path.join(dir, e.name) }))
     .sort((a, b) => a.name.localeCompare(b.name));
-  if (!files.length) return null;
   // Authorize each enumerated file so batchConvert/extractTrace can read them.
   for (const f of files) authorizePath(f.path);
   return { dir, files };
@@ -944,6 +947,48 @@ function applyNameTemplate(
   return sanitizeBaseName(out);
 }
 
+// A batch output must never replace anything: not a file already in the output
+// folder, not an INPUT (the output folder may be the input folder) and not an
+// earlier output of the same run (a.dat + a.segd both template to a.sgy). The
+// plain `<base>.<ext>` is tried first, then `<base>_2.<ext>`, `<base>_3.<ext>`, ...
+// `taken` holds this run's names lower-cased, because Windows file names are
+// case-insensitive. The suffix is fitted inside sanitizeBaseName's 120-char cap.
+const MAX_OUT_NAME_TRIES = 10000;
+function outNameCandidate(base: string, ext: string, k: number): string {
+  if (k <= 1) return `${base}.${ext}`;
+  const suffix = `_${k}`;
+  const head = base.slice(0, Math.max(1, 120 - suffix.length)).replace(/[. ]+$/, '') || 'output';
+  return `${head}${suffix}.${ext}`;
+}
+async function pathExists(p: string): Promise<boolean> {
+  try { await stat(p); return true; } catch { return false; }
+}
+/** Reserve the first candidate name that is neither on disk nor taken this run. */
+async function reserveOutName(dir: string, base: string, ext: string, taken: Set<string>): Promise<string> {
+  for (let k = 1; k <= MAX_OUT_NAME_TRIES; k++) {
+    const name = outNameCandidate(base, ext, k);
+    if (taken.has(name.toLowerCase())) continue;
+    if (await pathExists(path.join(dir, name))) continue;
+    taken.add(name.toLowerCase());
+    return name;
+  }
+  throw new Error('no free output file name');
+}
+/** Write `buf` under a free name and return the name used. Flag 'wx' fails
+ *  instead of replacing, so a file that appears between the check and the write
+ *  is never overwritten either: that name is skipped and the next one tried. */
+async function writeUniqueOut(dir: string, base: string, ext: string, taken: Set<string>, buf: Buffer): Promise<string> {
+  for (;;) {
+    const name = await reserveOutName(dir, base, ext, taken);
+    try {
+      await writeFile(path.join(dir, name), buf, { flag: 'wx' });
+      return name;
+    } catch (e) {
+      if ((e as NodeJS.ErrnoException).code !== 'EEXIST') throw e;
+    }
+  }
+}
+
 // Convert the CURRENTLY-OPEN file to `format` and save via a native dialog. The
 // renderer passes the templated `outBaseName` (no extension) as the default name.
 ipcMain.handle('seisconv:convertSingle', async (_e, format: string, outBaseName?: string) => {
@@ -1014,7 +1059,11 @@ ipcMain.handle(
     const outDir = path.resolve(opts.outDir);
     lastBatchOutDir = outDir; // remember for "Open output folder"
     const total = files.length;
-    const results: { name: string; ok: boolean; error?: string }[] = [];
+    // `out` is the file name actually written; `renamed` is set when it had to get a
+    // _2/_3/... suffix because the plain name was already taken (see reserveOutName).
+    const results: { name: string; ok: boolean; error?: string; out?: string; renamed?: boolean }[] = [];
+    // Output names produced this run, lower-cased (Windows names are case-insensitive).
+    const takenNames = new Set<string>();
     let done = 0;
     let failed = 0;
     let canceled = false;
@@ -1044,7 +1093,17 @@ ipcMain.handle(
       // ONE output file, named from the template with {name} = the source folder.
       const srcFolder = path.basename(path.dirname(files[0].path)) || 'tape_image';
       const base = applyNameTemplate(tpl, { name: srcFolder, fmt: 'tpimage', date: dateStr, custom, time, n: 1 });
-      const outName = `${base}.tpimage`;
+      // A free name, never an existing file's (see reserveOutName); 'wx' below
+      // refuses to open over one that appears in the meantime.
+      let outName: string;
+      try { outName = await reserveOutName(outDir, base, 'tpimage', takenNames); }
+      catch (e) {
+        const error = (e as Error).message;
+        emit({ index: total, total, file: '', state: 'error', error });
+        emit({ index: total, total, file: '', state: 'finished' });
+        return { ok: false, total, done: 0, failed: total, canceled: false, results: [{ name: `${base}.tpimage`, ok: false, error }] };
+      }
+      const renamed = outName !== outNameCandidate(base, 'tpimage', 1);
       const outPath = path.join(outDir, outName);
       // Tape-label date stamp (` YYJJJ`) resolved ONCE here (the worker has no clock)
       // so every streamed record shares it - keeping the assembled tape consistent.
@@ -1054,7 +1113,14 @@ ipcMain.handle(
       const jd = String(Math.floor((now.getTime() - Date.UTC(now.getUTCFullYear(), 0, 0)) / 86400000)).padStart(3, '0');
       const tapeDateStr = ` ${yy}${jd}`;
 
-      const ws = createWriteStream(outPath);
+      const ws = createWriteStream(outPath, { flags: 'wx' });
+      // A standing 'error' listener: an open or write failure is reported through the
+      // awaits below (and the catch), never as an uncaught exception in main.
+      ws.on('error', () => { /* surfaced by the open/append/finish awaits */ });
+      // Only a stream that really OPENED created the file, so only then may a failure
+      // remove it: an open that failed ('wx' on an existing name) must leave that
+      // existing file alone.
+      let opened = false;
       // Append a chunk and await its flush - backpressure keeps memory bounded even
       // when the worker out-runs the disk. Rejects on a write error so we abort.
       const append = (buf: Buffer): Promise<void> =>
@@ -1065,6 +1131,10 @@ ipcMain.handle(
       // Named distinctly from the outer (non-tape) `results` so it doesn't shadow it.
       const tapeResults: { name: string; ok: boolean; error?: string }[] = [];
       try {
+        await new Promise<void>((resolve, reject) => {
+          ws.once('open', () => { opened = true; resolve(); });
+          ws.once('error', reject);
+        });
         await append(Buffer.from(writeTapeVolHeader())); // VOL1 label group
         for (let i = 0; i < total; i++) {
           const f = files[i];
@@ -1087,10 +1157,15 @@ ipcMain.handle(
           emit({ index, total, file: f.name, state: 'done' });
         }
         await append(Buffer.from(writeTapeEnd())); // closing double tape mark
-        await new Promise<void>((resolve) => ws.end(resolve));
+        // Wait for the flush to finish; a failure at close rejects instead of hanging.
+        await new Promise<void>((resolve, reject) => {
+          ws.once('finish', () => resolve());
+          ws.once('error', reject);
+          ws.end();
+        });
       } catch (e) {
         try { ws.destroy(); } catch { /* already closed */ }
-        try { await unlink(outPath); } catch { /* nothing to remove */ } // drop the partial tape
+        if (opened) { try { await unlink(outPath); } catch { /* nothing to remove */ } } // drop the partial tape
         const error = (e as Error).message;
         emit({ index: total, total, file: '', state: 'error', error });
         emit({ index: total, total, file: '', state: 'finished' });
@@ -1099,12 +1174,13 @@ ipcMain.handle(
       // Every input failed → the file on disk is just the VOL1 header + closing tape
       // marks (a spurious ~96-byte empty tape). Remove it and don't claim success.
       if (combined === 0) {
-        try { await unlink(outPath); } catch { /* nothing to remove */ }
+        if (opened) { try { await unlink(outPath); } catch { /* nothing to remove */ } }
         emit({ index: total, total, file: '', state: 'finished' });
         return { ok: false, total, done: 0, failed, canceled, results: tapeResults };
       }
       emit({ index: total, total, file: '', state: 'finished' });
-      return { ok: failed === 0 && combined > 0 && !canceled, total, done: combined, failed, canceled, results: tapeResults };
+      // `out`/`renamed` name the ONE combined tape (results are per input file).
+      return { ok: failed === 0 && combined > 0 && !canceled, total, done: combined, failed, canceled, results: tapeResults, out: outName, renamed };
     }
 
     for (let i = 0; i < total; i++) {
@@ -1130,9 +1206,10 @@ ipcMain.handle(
         if (!r.ok || !r.bytes) throw new Error(r.error ?? 'conversion failed');
         const inputBase = f.name.replace(/\.[^.]+$/, '');
         const base = applyNameTemplate(tpl, { name: inputBase, fmt: opts.format, date: dateStr, custom, time, n: index });
-        await writeFile(path.join(outDir, `${base}.${r.ext}`), Buffer.from(r.bytes));
+        const ext = r.ext || 'out';
+        const outName = await writeUniqueOut(outDir, base, ext, takenNames, Buffer.from(r.bytes));
         done++;
-        results.push({ name: f.name, ok: true });
+        results.push({ name: f.name, ok: true, out: outName, renamed: outName !== outNameCandidate(base, ext, 1) });
         emit({ index, total, file: f.name, state: 'done' });
       } catch (e) {
         failed++;

@@ -15,19 +15,22 @@
 //   SEISCONV_QA_SEGY  big-endian SEG-Y           (Converter / Trace / Section / Velocity)
 //   SEISCONV_QA_LE    little-endian SEG-Y         (re-opened to prove LE reading; 251 traces)
 //   SEISCONV_QA_SPS   's','r','x' SPS files, ';'-separated  (SPS tab, multiSelections)
+//   SEISCONV_QA_SEGD  a real SEG-D for the batch step (else the first .segd in the
+//                     `fuzzData` folder; with neither, the batch step skips)
 //
 // The harness is self-contained: it requires only that `npm run build` has produced
 // dist/main.js + renderer/dist/app.js, and that `playwright` is installed.
 
 import { _electron as electron } from 'playwright';
-import { join } from 'node:path';
+import { basename, join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { existsSync, readFileSync, rmSync } from 'node:fs';
+import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync } from 'node:fs';
 import {
   sleep, mockDialogs, gotoTab, openFile,
   APP_DIR, SHOTS, SEGY, sample, qaPath, qaPaths,
   launchEnv,
 } from './harness.mjs';
+import { resolveValue } from './local-paths.mjs';
 
 // -- Test files (override via env) ------------------------------------------
 // SEGY comes from the shared harness. LE/SPS are exercised only by this full
@@ -39,6 +42,21 @@ const SPS  = qaPaths('sps', [
   sample('example.r01'),
   sample('example.x01'),
 ]);
+
+// A real SEG-D for the batch step: the `segd` key (SEISCONV_QA_SEGD) if set, else
+// the first .segd/.sgd directly in the `fuzzData` folder (SEISCONV_FUZZ_DATA). ''
+// when neither is configured; the batch step then SKIPs instead of failing.
+function findSegd() {
+  const direct = resolveValue('segd', 'SEISCONV_QA_SEGD', '');
+  if (direct) return direct;
+  const root = resolveValue('fuzzData', 'SEISCONV_FUZZ_DATA', '');
+  if (!root || !existsSync(root)) return '';
+  try {
+    const hit = readdirSync(root).filter((n) => /\.(segd|sgd)$/i.test(n)).sort()[0];
+    return hit ? join(root, hit) : '';
+  } catch { return ''; }
+}
+const SEGD = findSegd();
 
 // Dark scientific background painted under every plot canvas (see index.html .canvas).
 const CANVAS_BG = { r: 0x0d, g: 0x1f, b: 0x33 };
@@ -95,7 +113,7 @@ const globalPageErrors = [];
     }
   }
   console.log(`SeisConv QA harness - launching ${APP_DIR}`);
-  console.log(`  SEGY = ${SEGY}\n  LE   = ${LE}\n  SPS  = ${SPS.join(' , ')}\n`);
+  console.log(`  SEGY = ${SEGY}\n  LE   = ${LE}\n  SPS  = ${SPS.join(' , ')}\n  SEGD = ${SEGD || '(not configured: batch step skips)'}\n`);
 
   let app, win;
   try {
@@ -466,6 +484,98 @@ const globalPageErrors = [];
     notes.push(`format=${fmt} byteOrder=${order}`);
     if (count !== '251') return { assertFail: `LE trace count was "${count}", expected 251` };
   }, 'tab-conv-le');
+
+  // -- 8) BATCH CONVERTER - folder pick, convert, no-overwrite, empty folder --
+  // Real files are COPIED into a fresh temp dir (originals never touched): a SEG-Y
+  // and a SEG-D in one input folder, a separate output folder, and a folder holding
+  // only a subfolder. Runs after 4c, which signed the audit prompt the first
+  // successful batch would otherwise raise over the window.
+  await step('tab-conv', 'panel-conv', '8-batch.png', async (notes) => {
+    if (!existsSync(SEGY) || !SEGD || !existsSync(SEGD)) {
+      notes.push(`SKIP: needs a real SEG-Y and SEG-D (segy="${SEGY}", segd="${SEGD || 'not configured'}")`);
+      return;
+    }
+    const fails = [];
+    const root = mkdtempSync(join(tmpdir(), 'seisconv_qa_batch_'));
+    try {
+      const inDir = join(root, 'in');
+      const outDir = join(root, 'out');
+      const emptyDir = join(root, 'only_a_subfolder');
+      mkdirSync(inDir); mkdirSync(outDir); mkdirSync(join(emptyDir, 'sub'), { recursive: true });
+      const inputs = [SEGY, SEGD].map((p) => { const dst = join(inDir, basename(p)); copyFileSync(p, dst); return dst; });
+      copyFileSync(SEGY, join(emptyDir, 'sub', basename(SEGY))); // a seismic file, but one level down
+      const stem = (p) => basename(p).replace(/\.[^.]+$/, '');
+      // Each showOpenDialog answers the next folder in the queue (folder pick, then
+      // destination pick); the last answer repeats.
+      const answerDirs = (dirs) => app.evaluate(async ({ dialog }, q) => {
+        const queue = [...q];
+        dialog.showOpenDialog = async () => ({ canceled: false, filePaths: [queue.length > 1 ? queue.shift() : queue[0]] });
+      }, dirs);
+      const statusText = async () => ((await win.textContent('#batchStatus')) || '').trim();
+      const listOut = () => readdirSync(outDir).sort();
+
+      await win.click('#modeBatch'); await sleep(250);
+      // A known template ({name}) and SEG-Y Rev 1, so the expected names are fixed.
+      await win.evaluate(() => { const t = document.getElementById('outNameTpl'); if (t) { t.value = '{name}'; t.dispatchEvent(new Event('input')); } });
+      await win.click('#fmtChipsBatch [data-fmt="segy1"]'); await sleep(150);
+      await answerDirs([inDir, outDir]);
+      await win.click('#pickFolderBtn');
+      await win.waitForFunction(() => !document.getElementById('batchFound')?.classList.contains('hidden'), null, { timeout: 10000 }).catch(() => {});
+      const found = ((await win.textContent('#batchCount')) || '').trim();
+      notes.push(`folder pick found=${found}`);
+      if (found !== '2') fails.push(`expected 2 files found, got "${found}"`);
+      await win.click('#pickOutBtn');
+      await win.waitForFunction(() => !document.getElementById('runBatchBtn')?.disabled, null, { timeout: 10000 }).catch(() => {});
+
+      // Run 1: both convert, each output named after its input.
+      await win.click('#runBatchBtn');
+      await win.waitForFunction(() => /Converted \d+ file/.test(document.getElementById('batchStatus')?.textContent || ''), null, { timeout: 60000 })
+        .catch(() => fails.push('run 1 did not report success in 60s'));
+      const s1 = await statusText();
+      const want = inputs.map((p) => `${stem(p)}.sgy`).sort();
+      const after1 = listOut();
+      notes.push(`run 1 status="${s1.slice(0, 40)}" outputs=${after1.length}`);
+      if (!/Converted 2 files/.test(s1)) fails.push(`run 1 status: "${s1}"`);
+      for (const w of want) if (!after1.includes(w)) fails.push(`run 1 did not write ${w}`);
+      const before = Object.fromEntries(want.map((w) => { const s = statSync(join(outDir, w)); return [w, `${s.size}/${s.mtimeMs}`]; }));
+
+      // Run 2 into the same folder: nothing replaced, the new files get _2 names.
+      await sleep(1100); // a rewrite would move mtime past filesystem granularity
+      await win.click('#runBatchBtn');
+      await win.waitForFunction(() => /Converted \d+ file.*new name/.test(document.getElementById('batchStatus')?.textContent || ''), null, { timeout: 60000 })
+        .catch(() => fails.push('run 2 did not report its renamed outputs in 60s'));
+      const after2 = listOut();
+      const want2 = inputs.map((p) => `${stem(p)}_2.sgy`);
+      notes.push(`run 2 outputs=${after2.length}`);
+      for (const w of want2) if (!after2.includes(w)) fails.push(`run 2 did not write ${w}`);
+      for (const w of want) {
+        const s = statSync(join(outDir, w));
+        if (`${s.size}/${s.mtimeMs}` !== before[w]) fails.push(`run 2 changed the existing ${w}`);
+      }
+      const rowSaysSavedAs = await win.evaluate(() => /saved as/.test(document.getElementById('batchFileList')?.textContent || ''));
+      if (!rowSaysSavedAs) fails.push('the file rows do not show the "saved as" name');
+      await win.locator('#batchStatus').scrollIntoViewIfNeeded().catch(() => {});
+      await win.screenshot({ path: join(SHOTS, '8-batch-rerun.png') }).catch(() => {});
+
+      // A folder holding only a subfolder: say so, hide the found banner, keep Convert off.
+      await answerDirs([emptyDir]);
+      await win.click('#pickFolderBtn');
+      await win.waitForFunction(() => /No seismic files found directly in/.test(document.getElementById('batchStatus')?.textContent || ''), null, { timeout: 10000 })
+        .catch(() => fails.push('no "No seismic files" message for a folder with only a subfolder'));
+      const emptyState = await win.evaluate(() => ({
+        foundHidden: !!document.getElementById('batchFound')?.classList.contains('hidden'),
+        runDisabled: !!document.getElementById('runBatchBtn')?.disabled,
+      }));
+      notes.push(`empty folder: foundHidden=${emptyState.foundHidden} runDisabled=${emptyState.runDisabled}`);
+      if (!emptyState.foundHidden) fails.push('#batchFound still visible after an empty-folder pick');
+      if (!emptyState.runDisabled) fails.push('Convert still enabled after an empty-folder pick');
+      await sleep(200);
+    } finally {
+      // Remove the temp copies whatever happened above (step() screenshots after this).
+      try { rmSync(root, { recursive: true, force: true }); } catch { /* best effort */ }
+    }
+    return { assertFail: fails.length ? fails.join('; ') : null };
+  }, 'tab-conv-batch');
 
   // -- teardown + report --
   await app.close();

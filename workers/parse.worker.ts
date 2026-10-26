@@ -11,7 +11,7 @@ import { parentPort } from 'node:worker_threads';
 import { closeSync, openSync, readFileSync, readSync, statSync } from 'node:fs';
 import { basename } from 'node:path';
 import { findEpsgByParams } from '../core/sps/epsgdb';
-import { assembleNearGather, selectTrace, MAX_GATHER_RECORDS, type GatherRecord, type GatherSelector, type GatherTrace, applyAGC, assistFirstBreaks, averageSpectrum, buildPositioningExport, buildPositioningPrj, buildSPSRasters, buildSPSShapefiles, buildRenumberMaps, buildSPS, checkGeometry, compareSPS, computeSemblance, CREATE_DEFAULTS, crsFromSpec, decodeSegyTrace, detect, detectPositioningFormat, detectSPSType, EPSG_DB, fkSpectrum, generateProjHeaders, generatePreplotSPS, generateSPS, getWriter, groupByLine, hRecCode, isIX1SegdTape, loadGeometry, lonLatToProj, MAX_SAMPLE_TRACES, MAX_SAMPLES_PER_TRACE, MAX_TRACES, mergeSPSData, nextPow2, normFactorPercentile, AGC_DEFAULT_WINDOW_MS, AGC_DEFAULT_TYPE, parseAny, parsePositioning, parseSEGY, parseSegyMeta, parseSPSText, projToLatLon, PROJ_HEADER_CODES, r16u, renumberSPSText, reprojectSPS, resampleLinear, runSPSQC, scanTraceHealth, EVIDENCE_STRIDE, writeEvidence, spectrogram, spsHeaderDesc, writeTapeRecord, type AGCType, type BinGrid, type CRS, type CreateParams, type CRSSpec, type DetectorId, type FBPolarity, type FBSeed, type GeomLoadResult, type HealthThresholds, type ParsedFile, type PreplotLine, type PreplotStation, type QCParams, type RenumberSpec, type SegyMeta, type Sensitivity, type SPSData, type SPSDeltaResult, type SPSHeader, type SPSPoint, type SPSProjection, type SurveyLine, type Trace, type TraceGeom } from '../core';
+import { assembleNearGather, selectTrace, MAX_GATHER_RECORDS, type GatherRecord, type GatherSelector, type GatherTrace, applyAGC, assistFirstBreaks, averageSpectrum, buildPositioningExport, buildPositioningPrj, buildSPSRasters, buildSPSShapefiles, buildRenumberMaps, buildSPS, checkGeometry, compareSPS, computeSemblance, CREATE_DEFAULTS, countSamplelessTraces, crsFromSpec, decodeSegyTrace, detectPositioningFormat, detectSPSType, EPSG_DB, fkSpectrum, generateProjHeaders, generatePreplotSPS, generateSPS, getWriter, groupByLine, hRecCode, isIX1SegdTape, loadGeometry, lonLatToProj, MAX_SAMPLES_PER_TRACE, MAX_TRACES, mergeSPSData, nextPow2, normFactorPercentile, AGC_DEFAULT_WINDOW_MS, AGC_DEFAULT_TYPE, parseAny, parseInMemory, parsePositioning, parseSegyMeta, parseSPSText, projToLatLon, PROJ_HEADER_CODES, r16u, renumberSPSText, reprojectSPS, resampleLinear, runSPSQC, scanTraceHealth, EVIDENCE_STRIDE, writeEvidence, spectrogram, spsHeaderDesc, writeTapeRecord, type AGCType, type BinGrid, type CRS, type CreateParams, type CRSSpec, type DetectorId, type FBPolarity, type FBSeed, type GeomLoadResult, type HealthThresholds, type ParsedFile, type PreplotLine, type PreplotStation, type QCParams, type RenumberSpec, type SegyMeta, type Sensitivity, type SPSData, type SPSDeltaResult, type SPSHeader, type SPSPoint, type SPSProjection, type SurveyLine, type Trace, type TraceGeom } from '../core';
 
 if (!parentPort) throw new Error('parse.worker must run as a worker thread');
 const port = parentPort;
@@ -84,13 +84,8 @@ const MAX_STREAM_TRACES = 8_000_000; // 8M × 8B offsets = 64 MB (+ optional 32 
 // before still opens; only an un-streamable file ABOVE this is refused. SEG-Y above
 // STREAM_THRESHOLD takes the streamed path regardless of this cap.
 const IN_MEMORY_MAX = 1.5 * 1024 * 1024 * 1024; // 1.5 GiB
-// Total decoded-sample budget for an in-memory SEG-Y. The parser caps SAMPLE
-// decoding at MAX_SAMPLE_TRACES (2000) to bound arbitrary files, but a file on the
-// in-memory path is already size-bounded, so we decode EVERY trace's samples (else
-// panning/zooming past trace ~2000 renders blank and convert drops the deep
-// traces). This budget still bounds the rare case of a few very long traces / a big
-// SEG-Y that failed stream-sanity and fell back here. ~1.6 GB of Float32 samples.
-const IN_MEMORY_SAMPLE_BUDGET = 400_000_000;
+// The total decoded-sample budget for an in-memory file (IN_MEMORY_SAMPLE_BUDGET)
+// now lives in core/index.ts next to parseInMemory, which applies it to every format.
 // SEG-Y data sample format codes (binhdr offset 24) this build recognises - the
 // stride/decode width key set. Used as a sanity gate before streaming: a non-SEG-Y
 // giant (huge SEG-D / blob) won't carry a plausible code here. Mirrors SEGY_BPS keys.
@@ -1167,25 +1162,25 @@ function transferBuffer(out: Uint8Array): ArrayBuffer {
     : (out.buffer.slice(out.byteOffset, out.byteOffset + out.byteLength) as ArrayBuffer);
 }
 
-/**
- * Parse a file the worker has read WHOLE into memory (open / convertPath /
- * convertTapeRecord / extractTrace-fallback). A SEG-Y gets EVERY trace's samples
- * decoded - the parser caps in-memory sample decoding at MAX_SAMPLE_TRACES (2000)
- * to bound arbitrary files, but a file on this path is already size-bounded, and
- * leaving the deep traces sample-less renders BLANK when the viewer pans/zooms past
- * the cap, ZEROES them on convert (writeSEGY emits 0 for a null-sample trace) and
- * yields empty samples when extracting a high trace index. The decode is bounded by
- * a total-sample budget (so a few very long traces can't blow memory) and never
- * below the parser's own cap. Non-SEG-Y containers (SEG-D / SU / tape image) go
- * through parseAny unchanged. `bytes` is read-only here (a Node Buffer is fine).
- */
-function parseInMemory(bytes: Uint8Array, name: string): ParsedFile {
-  if (detect(bytes, name) === 'SEG-Y') {
-    const perTrace = Math.max(1, parseSegyMeta(bytes).defaultNs || 1);
-    const cap = Math.max(MAX_SAMPLE_TRACES, Math.min(MAX_TRACES, Math.floor(IN_MEMORY_SAMPLE_BUDGET / perTrace)));
-    return parseSEGY(bytes, cap);
+// parseInMemory (core/index.ts) parses a file the worker has read WHOLE into memory
+// (open / convertPath / convertTapeRecord / nearGather / extractTrace-fallback) with
+// EVERY trace's samples decoded, for every format, within IN_MEMORY_SAMPLE_BUDGET.
+// Leaving deep traces sample-less renders them BLANK in the viewer, ZEROES them on
+// convert (the writers emit 0 for a null-sample trace) and yields empty samples when
+// extracting a high trace index. `bytes` is read-only there (a Node Buffer is fine).
+
+/** The reason a parsed file must NOT be written, or null when it is complete: no
+ *  traces at all (the parser's own first error when it gave one), or traces whose
+ *  samples could not be held in memory (a writer would save those as zeros and the
+ *  convert would look successful). */
+function unwritableReason(pf: ParsedFile | null | undefined): string | null {
+  if (!pf || pf.traceCount <= 0 || !pf.traces.length) return pf?.errors?.[0] || 'no traces / unsupported';
+  const missing = countSamplelessTraces(pf);
+  if (missing > 0) {
+    const n = pf.traces.length;
+    return `only ${n - missing} of ${n} traces could be read into memory; split the file first`;
   }
-  return parseAny(bytes, name);
+  return null;
 }
 
 // Largest file the Trigger Watch quickMeta parse will read WHOLE. Shot files
@@ -1422,6 +1417,9 @@ port.on('message', (req: Req) => {
       // readFileSync returns a Buffer (read-only here) → no fresh-Uint8Array copy;
       // parseInMemory decodes every SEG-Y trace so a large file isn't zeroed on convert.
       const local = parseInMemory(readFileSync(req.path), basename(req.path));
+      // Never write a partial file as if it were whole (see unwritableReason).
+      const why = unwritableReason(local);
+      if (why) { port.postMessage({ id, ok: false, error: why }); return; }
       const out = writer.write(local);
       const ab = transferBuffer(out);
       port.postMessage({ id, ok: true, bytes: ab, ext: writer.ext }, [ab]);
@@ -1448,7 +1446,8 @@ port.on('message', (req: Req) => {
       // deep traces in the combined tape.
       try { pf = parseInMemory(readFileSync(req.path), basename(req.path)); }
       catch (e) { port.postMessage({ id, ok: false, error: (e as Error).message }); return; }
-      if (!pf || pf.traceCount <= 0) { port.postMessage({ id, ok: false, error: 'no traces / unsupported' }); return; }
+      const why = unwritableReason(pf);
+      if (why) { port.postMessage({ id, ok: false, error: why }); return; }
       // Tag with the source base name so the record's HDR1 file id carries it.
       (pf as ParsedFile & { _name?: string })._name = basename(req.path);
       const idx = Number.isFinite(req.index) ? (req.index as number) | 0 : 0;
@@ -2758,6 +2757,9 @@ port.on('message', (req: Req) => {
         port.postMessage({ id, ok: false, error: `unknown output format: ${req.format}` });
         return;
       }
+      // Same guard as convertPath: `current` came through parseInMemory at open.
+      const why = unwritableReason(current);
+      if (why) { port.postMessage({ id, ok: false, error: why }); return; }
       const out = writer.write(current);
       const ab = transferBuffer(out);
       port.postMessage({ id, ok: true, bytes: ab, ext: writer.ext }, [ab]);

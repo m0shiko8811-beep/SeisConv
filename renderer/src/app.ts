@@ -47,7 +47,7 @@ import {
 import { writeSEGY } from '../../core/formats/segy';
 import { writeSU } from '../../core/formats/su';
 import { writeCSV } from '../../core/formats/ascii';
-import { segdChanTypeIsSeismic, type ParsedFile, type SegdChanSet } from '../../core/types';
+import { segdChanTypeIsSeismic, SEISMIC_INPUT_EXTS, type ParsedFile, type SegdChanSet } from '../../core/types';
 import { buildXlsx, type SheetTable } from '../../core/export/xlsx';
 import { buildOds } from '../../core/export/ods';
 import JSZip from 'jszip';
@@ -219,13 +219,17 @@ type TrigEventMsg =
 type LogSrcField = 'lineName' | 'point' | 'easting' | 'northing' | 'elevation' | 'upholeMs' | 'staticMs' | 'srcType';
 // A column's behavioural ROLE in the grid (drives the per-cell input it renders).
 type LogColRole = 'plain' | 'counter' | 'time' | 'date' | 'pick' | 'sps';
+// Mirrors BatchResult in electron/preload.ts - keep the two in sync.
 type BatchSummary = {
   ok: boolean;
   total: number;
   done: number;
   failed: number;
   canceled: boolean;
-  results: { name: string; ok: boolean; error?: string }[];
+  results?: { name: string; ok: boolean; error?: string; out?: string; renamed?: boolean }[];
+  out?: string;      // tape-image combine: the one output file's name
+  renamed?: boolean; // ...and whether it got a _2/_3 suffix
+  error?: string;    // the whole run was refused (results may be absent)
 };
 type ConvProgress = {
   index: number;
@@ -2327,12 +2331,43 @@ function showSingleProgress(on: boolean) {
 }
 
 // -- Folder batch: wizard --
+// The extensions a folder scan picks up, from core's SEISMIC_INPUT_EXTS (the same
+// list main.ts builds INPUT_EXTS from), so this hint can never drift from the scan.
+const BATCH_EXTS = SEISMIC_INPUT_EXTS.map((e) => '.' + e);
+const WIZ_FOLDER_HINT = `Pick a folder; SeisConv lists every ${BATCH_EXTS.join('/')} file in it.`;
+
+/** Forget the previously picked input folder: its files, the "found" banner, the
+ *  per-file list, the progress block and the "Open folder" button. Run on every
+ *  pick that returns a folder, so a bad pick can never leave the old folder armed. */
+function resetBatchSelection() {
+  batchFiles = [];
+  batchDir = '';
+  $opt('batchFound')?.classList.toggle('hidden', true);
+  $opt('batchProg')?.classList.toggle('hidden', true);
+  $('batchFileList').innerHTML = '';
+  setText('batchProgSub', '');
+  const fill = $opt('batchProgFill');
+  if (fill) (fill as HTMLElement).style.width = '0%';
+  hideBatchOpenFolder();
+}
+
 async function pickBatchFolder() {
   if (batchRunning) return;
   setStatus('batchStatus', 'Choosing folder…');
   try {
     const res = await api.pickInputFolder();
-    if (!res) { setStatus('batchStatus', ''); return; }
+    if (!res) { setStatus('batchStatus', ''); return; } // cancelled: keep the current pick
+    resetBatchSelection();
+    if (!res.files.length) {
+      // main returns the folder with no files (not null) so this can be said plainly.
+      const folder = res.dir.replace(/[\\/]+$/, '').split(/[\\/]/).pop() || res.dir;
+      setText('wizFolderSub', 'No seismic files in that folder. Pick another one.');
+      setStatus('batchStatus', `No seismic files found directly in ${folder}. SeisConv looks for ${BATCH_EXTS.join(' ')} files in the folder itself, not in subfolders.`, 'err');
+      setState('idle', 'No seismic files'); // not the previous run's "N/N done"
+      updateNamePreview();
+      refreshWizard();
+      return;
+    }
     batchFiles = res.files;
     batchDir = res.dir;
     const found = $opt('batchFound');
@@ -2341,8 +2376,7 @@ async function pickBatchFolder() {
     setText('batchDir', res.dir);
     setText('wizFolderSub', `${res.files.length} seismic file${res.files.length === 1 ? '' : 's'} in this folder.`);
     updateNamePreview();
-    $('batchFileList').innerHTML = '';
-    setStatus('batchStatus', res.files.length ? '' : 'No seismic files in that folder.', res.files.length ? '' : 'err');
+    setStatus('batchStatus', '');
     refreshWizard();
   } catch (e) {
     setStatus('batchStatus', 'Folder scan failed: ' + errMsg(e), 'err');
@@ -2503,6 +2537,22 @@ function finishBatch(r: BatchSummary) {
   batchRunning = false;
   setBatchControlsRunning(false);
   refreshWizard();
+  // The whole run was refused before any file was touched: there are no per-file
+  // results, only the reason.
+  if (!Array.isArray(r.results)) {
+    hideBatchOpenFolder();
+    setText('batchProgTitle', 'Not started');
+    setText('batchProgSub', '');
+    setStatus('batchStatus', 'Batch failed: ' + (r.error || 'the conversion could not start.'), 'err');
+    setState('err', 'Batch failed');
+    return;
+  }
+  // Outputs that got a _2/_3/... name because the plain one was already taken: say
+  // so, so nobody wonders whether an existing file was replaced (none ever is).
+  const renamedCount = r.results.filter((x) => x.ok && x.renamed).length;
+  const renamedNote = renamedCount
+    ? ` · ${renamedCount} saved under a new name (a file with that name already existed; nothing was replaced)`
+    : '';
   // Reveal "Open output folder" once anything was written this run.
   if (r.done > 0) showBatchOpenFolder(); else hideBatchOpenFolder();
   if (r.done > 0) audit('convert', `batch ${fmtLabel(outFormat)} - ${r.done} converted, ${r.failed} failed → ${batchOutDir}`, 'conv');
@@ -2524,22 +2574,25 @@ function finishBatch(r: BatchSummary) {
   } else if (r.failed > 0) {
     setText('batchProgTitle', 'Finished with errors');
     setText('batchProgSub', `${r.done} converted · ${r.failed} failed`);
-    setStatus('batchStatus', `Done - ${r.done} converted, ${r.failed} failed → ${batchOutDir}`, r.done ? '' : 'err');
+    setStatus('batchStatus', `Done - ${r.done} converted, ${r.failed} failed → ${batchOutDir}${renamedNote}`, r.done ? '' : 'err');
     setState(r.done ? 'ok' : 'err', `${r.done}/${r.total} done`);
   } else if (outFormat === 'tpimage') {
+    // The ONE combined tape got a _2/_3 name when the plain one already existed.
+    const tapeNote = r.renamed && r.out ? ` · saved as ${r.out} (a file with the usual name already existed; nothing was replaced)` : '';
     setText('batchProgTitle', 'Finished');
     setText('batchProgSub', `Combined ${r.done} file${r.done === 1 ? '' : 's'} into one tape image → ${batchOutDir}`);
-    setStatus('batchStatus', `✓ Combined ${r.done} file${r.done === 1 ? '' : 's'} into one tape image → ${batchOutDir}`, 'ok');
+    setStatus('batchStatus', `✓ Combined ${r.done} file${r.done === 1 ? '' : 's'} into one tape image → ${batchOutDir}${tapeNote}`, 'ok');
     setState('ok', 'Combined');
   } else {
     setText('batchProgTitle', 'Finished');
     setText('batchProgSub', `${r.done} converted → ${batchOutDir}`);
-    setStatus('batchStatus', `✓ Converted ${r.done} file${r.done === 1 ? '' : 's'} → ${batchOutDir}`, 'ok');
+    setStatus('batchStatus', `✓ Converted ${r.done} file${r.done === 1 ? '' : 's'} → ${batchOutDir}${renamedNote}`, 'ok');
     setState('ok', `${r.done}/${r.total} done`);
   }
-  // Reconcile rows against the authoritative summary (covers any missed ticks).
+  // Reconcile rows against the authoritative summary (covers any missed ticks). A
+  // file saved under a suffixed name shows that name, so the row says where it went.
   r.results.forEach((res, i) => {
-    if (res.ok) markFileRow(i + 1, 'done', res.name);
+    if (res.ok) markFileRow(i + 1, 'done', res.renamed && res.out ? `${res.name} - saved as ${res.out}` : res.name);
     else markFileRow(i + 1, 'error', res.name, res.error);
   });
 }
@@ -2613,7 +2666,7 @@ async function clearConverter() {
   $('batchFileList').innerHTML = '';
   setStatus('batchStatus', '');
   setText('batchProgSub', '');
-  setText('wizFolderSub', 'Pick a folder; SeisConv lists every .segy/.sgy/.segd/.sgd/.seg/.seg2/.dat/.bat/.su file in it.');
+  setText('wizFolderSub', WIZ_FOLDER_HINT);
   setText('wizDestSub', 'Where the converted files are written.');
   const fill = $opt('batchProgFill');
   if (fill) (fill as HTMLElement).style.width = '0%';

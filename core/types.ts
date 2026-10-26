@@ -128,6 +128,13 @@ export interface ParsedFile {
  * for very large files (mirrors the reference behaviour). */
 export const MAX_SAMPLE_TRACES = 2000;
 
+/** File extensions (lower-case, no dot) treated as seismic when a folder is
+ * scanned: the batch converter's input folder, sibling navigation and the
+ * trigger watch (electron/main.ts INPUT_EXTS) and the open/save dialog filter.
+ * The renderer builds its "SeisConv looks for ..." hint from this same list, so
+ * the two can never drift apart. */
+export const SEISMIC_INPUT_EXTS = ['segy', 'sgy', 'segd', 'sgd', 'seg', 'seg2', 'sg2', 'dat', 'bat', 'su'] as const;
+
 /** Hard ceiling on trace count to avoid runaway loops on malformed input. */
 export const MAX_TRACES = 500000;
 

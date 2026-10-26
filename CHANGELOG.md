@@ -5,6 +5,21 @@ All notable changes to SeisConv are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.8.6] - 2026-10-26
+
+### Fixed
+
+- **The batch converter no longer loses data, overwrites files or fails silently.** A SEG-D,
+  SEG-2, SU or tape image file with more than 2000 traces was converted with every trace
+  from the 2001st on written as zeros, while the run reported success; every trace now
+  arrives, and a file too large to hold in memory is refused with a clear message instead
+  of being saved incomplete. Batch output never replaces an existing file any more: when
+  the name is already taken, whether by an earlier file, by one of the inputs or by
+  another output of the same run, the new file is saved as name_2, name_3 and so on, and
+  the file list says where it went. Picking a folder with no seismic files in it now says
+  so, explains that subfolders are not searched, and clears the previous folder so it
+  cannot be converted by mistake. Files with the .sg2 extension are now found too.
+
 ## [0.8.5] - 2026-10-26
 
 ### Changed

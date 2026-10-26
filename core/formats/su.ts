@@ -71,7 +71,9 @@ export function detectSU(b: Bytes): boolean {
   return leScore > beScore;
 }
 
-export function parseSU(b: Bytes): ParsedFile {
+/** `sampleTraceCap` bounds how many traces decode their SAMPLES (headers are kept
+ * for every trace); it defaults to MAX_SAMPLE_TRACES exactly like parseSEGY. */
+export function parseSU(b: Bytes, sampleTraceCap: number = MAX_SAMPLE_TRACES): ParsedFile {
   const r: ParsedFile = { format: 'SU', revision: 0, textHeader: '', bh: {}, traces: [], traceCount: 0, errors: [] };
   if (b.length < 240) {
     r.errors.push('File too small for SU');
@@ -109,7 +111,7 @@ export function parseSU(b: Bytes): ParsedFile {
       nSamples: r16u(b, off + 114, le), sampInt: r16u(b, off + 116, le),
     };
     let samples: Float32Array | null = null;
-    if (i < MAX_SAMPLE_TRACES) {
+    if (i < sampleTraceCap) {
       samples = new Float32Array(nSampClamped);
       for (let j = 0; j < nSampClamped; j++) samples[j] = getF32(b, off + 240 + j * 4, le);
     }

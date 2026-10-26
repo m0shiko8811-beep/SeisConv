@@ -27,7 +27,7 @@
 
 import { dv, getF32, getF64 } from '../binary';
 import type { Bytes, ParsedFile, Trace, TraceHeader } from '../types';
-import { MAX_SAMPLES_PER_TRACE } from '../types';
+import { MAX_SAMPLE_TRACES, MAX_SAMPLES_PER_TRACE } from '../types';
 
 /** Bytes-per-sample for a SEG-2 per-trace data-format code (Pullan 1990: 01h
  * 16-bit fixed, 02h 32-bit fixed, 03h "20-bit floating point (SEG-D)", 04h 32-bit
@@ -128,7 +128,9 @@ function num(v: number | string | undefined): number {
   return isNaN(n) ? 0 : n;
 }
 
-export function parseSEG2(b: Bytes): ParsedFile {
+/** `sampleTraceCap` bounds how many traces decode their SAMPLES (headers are kept
+ * for every trace); it defaults to MAX_SAMPLE_TRACES exactly like parseSEGY. */
+export function parseSEG2(b: Bytes, sampleTraceCap: number = MAX_SAMPLE_TRACES): ParsedFile {
   const r: ParsedFile = { format: 'SEG-2', revision: 1, fileHeader: {}, textHeader: '', bh: {}, traces: [], traceCount: 0, errors: [] };
   // Byte pair 55 3A is the CONFORMANT low-byte-first mark (3A55h stored low byte
   // first; SEG-2 / Pullan 1990, B1, printed page 4: "If the first byte of the
@@ -187,7 +189,7 @@ export function parseSEG2(b: Bytes): ParsedFile {
   // sum of all traces' sample bytes is ≤ filesize ≤ budget, so the budget never
   // clamps a legit trace and parsing stays bit-identical. Once exhausted we stop
   // allocating sample arrays (samples=null / nSamples=0), mirroring the
-  // MAX_SAMPLE_TRACES (t < 2000) cap below.
+  // sampleTraceCap (default MAX_SAMPLE_TRACES) cap below.
   let sampleByteBudget = Math.max(0, b.length - ptrBase);
   // Track the previous trace's data-block start to detect non-monotonic /
   // overlapping data pointers (a hallmark of the budget-bypass attack). We only
@@ -238,7 +240,7 @@ export function parseSEG2(b: Bytes): ParsedFile {
 
     const trHdr = getTrHdr(trcOff, tdbSize);
     let samples: Float32Array | null = null;
-    if (t < 2000) {
+    if (t < sampleTraceCap) {
       samples = new Float32Array(nSamples);
       // Charge the budget for the bytes this trace actually consumes.
       sampleByteBudget -= nSamples * bps;
