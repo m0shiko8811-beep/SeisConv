@@ -29,35 +29,35 @@
       "image": "img/01a-converter-mode-single.png",
       "caption": "Converter, single-file mode, before a file is open",
       "callouts": 2,
-      "bytes": 142963
+      "bytes": 142986
     },
     {
       "name": "01b-converter-single-loaded",
       "image": "img/01b-converter-single-loaded.png",
       "caption": "Converter with a SEG-Y open: what was read, and the output format",
       "callouts": 3,
-      "bytes": 154949
+      "bytes": 154745
     },
     {
       "name": "01c-converter-output-name",
       "image": "img/01c-converter-output-name.png",
       "caption": "The same panel scrolled to the output-name builder and Convert",
       "callouts": 4,
-      "bytes": 137061
+      "bytes": 149865
     },
     {
       "name": "02-converter-batch",
       "image": "img/02-converter-batch.png",
       "caption": "Converter, folder (batch) mode with a folder scanned and a destination chosen",
       "callouts": 2,
-      "bytes": 148844
+      "bytes": 148065
     },
     {
       "name": "02b-converter-batch-run",
       "image": "img/02b-converter-batch-run.png",
       "caption": "The batch panel scrolled to the destination and the run button",
       "callouts": 3,
-      "bytes": 143442
+      "bytes": 142987
     },
     {
       "name": "03-trace-inspector",
@@ -246,7 +246,7 @@
       "image": "img/18-sweeps.png",
       "caption": "Sweeps: an 8-96 Hz, 12 s linear sweep and its Klauder wavelet",
       "callouts": 6,
-      "bytes": 238571
+      "bytes": 238622
     },
     {
       "name": "19-wifisync",
@@ -260,7 +260,7 @@
       "image": "img/20-help-modal.png",
       "caption": "The in-app Help: the same source this manual's reference chapter is generated from",
       "callouts": 3,
-      "bytes": 270434
+      "bytes": 270485
     }
   ]
 }

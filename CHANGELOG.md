@@ -5,6 +5,16 @@ All notable changes to SeisConv are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.8.5] - 2026-10-26
+
+### Changed
+
+- **The 0.8.4 changes now reach the Microsoft Store.** This release is the same app as 0.8.4,
+  with no changes to the program itself. It is the first release delivered to the Microsoft
+  Store through the automatic release pipeline, so a Store install gets everything listed
+  under 0.8.4 below with this update. Installing it over 0.8.4 from GitHub changes nothing
+  but the version number.
+
 ## [0.8.4] - 2026-09-14
 
 ### Added

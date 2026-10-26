@@ -1,7 +1,7 @@
 {
   "schema": 1,
-  "version": "0.8.4",
-  "preparedAt": "2026-09-14T15:02:56.106Z",
+  "version": "0.8.5",
+  "preparedAt": "2026-10-26T11:45:23.367Z",
   "typecheck": "clean",
   "coreTests": {
     "passed": 493,
@@ -23,7 +23,7 @@
     "build": "26558a03e0ed6a8f6265d129d5c62717c77b6d8e",
     "qa": "1ed252a34e9b728ae0524e321e2c4d9ebfa20dcc",
     "scripts": "a2b9c66ab4aaaafca9ea4e188508d63095abddfd",
-    "docs": "b532e1d8d6e6e9a5536865b26da530864dcdd890",
+    "docs": "510260fd9a9a7bbda85a1302c415976e4d69c224",
     "dependencies": "d481719b996268329961c974e70ac714a1e9194c1529b3d40f2b9a19e4b3dd3b"
   }
 }
