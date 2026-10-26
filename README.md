@@ -138,7 +138,7 @@ Per-trace canvas wiggle with prev/next navigation buttons and a slider. Includes
 <p align="center">
   <img src="design/screenshots/trace-spectrum.png" width="85%" alt="SeisConv - Trace Inspector with FFT spectrum"/>
 </p>
-<p align="center"><sub>Trace Inspector - wiggle + FFT amplitude spectrum (Hann window)</sub></p>
+<p align="center"><sub>Trace Inspector - the FFT amplitude spectrum view (Hann window), with the waveform/spectrum toggle above it</sub></p>
 
 ---
 
@@ -340,7 +340,7 @@ Every seismic viewer (File Viewer, Trace Inspector, Spectrum Analysis, Velocity,
 
 | Format | Read | Write | Notes |
 |---|:---:|:---:|---|
-| SPS 2.1 (S / R / X) | Yes | Yes | The native survey-geometry format and SeisConv's internal data model. A survey is the three files together: sources (`.s`), receivers (`.r`) and the cross-reference relation (`.x`) that ties each shot to the channels it was recorded on. Read as a triplet, written as a triplet, and the only export that also ships a matching `.prj` because it is already delivered as a zip. Generated surveys and re-numbered surveys are written in this format. |
+| SPS 2.1 (S / R / X) | Yes | Yes | The native survey-geometry format and SeisConv's internal data model. A survey is the three files together: sources (`.s`), receivers (`.r`) and the cross-reference relation (`.x`) that ties each shot to the channels it was recorded on. Read as a triplet, written as a triplet, and the only one of the four *Export as* positioning formats that also ships a matching `.prj`, because it is already delivered as a zip. (The ESRI Shapefile export carries a `.prj` too, for the same reason.) Generated surveys and re-numbered surveys are written in this format. |
 | SEG-P1 | Yes | Yes | Deprecated by IOGP (succeeded by P1/11), but still demanded by some legacy processing packages, so a writer is provided (grid easting/northing in decimetres). Fixed-column post-plot point file. Geographic records auto-projected lat/long → E/N; F-format metres vs integer-decimetres auto-detected. |
 | IOGP P1/11 | Yes | Yes | Modern comma-delimited relational positioning standard (IOGP Report 483-1; v1.0 2012, v1.1 2015, v2.0 August 2024, v2.01 March 2025 - replaces UKOOA P1/90 and P2/94, and IOGP states SEG-P1 is deprecated in its favour). SeisConv implements the v1.x record-coded structure. Source, receiver, and relation records map onto SeisConv's SPS data model; CRS round-trips. |
 | IOGP P6/11 | Yes | - | IOGP Report 483-6, first released 2012 (it replaces UKOOA P6/98). Bin-grid definition (origin, rotation, inline/crossline numbering, bin size, CRS). Rendered as a bin-grid overlay on the SPS survey-grid and Leaflet map; rotation and crossline-axis aware. No writer yet. |
@@ -468,7 +468,7 @@ but are **not built or distributed** - on those platforms, build from source
 
 ### The manual
 
-A **100 page user manual** is attached to every release, in
+A **101 page user manual** is attached to every release, in
 [A4](https://github.com/m0shiko8811-beep/SeisConv/releases/latest/download/SeisConv-Manual-A4.pdf)
 and
 [US Letter](https://github.com/m0shiko8811-beep/SeisConv/releases/latest/download/SeisConv-Manual-Letter.pdf).
@@ -557,7 +557,7 @@ npx tsx scripts/realdata-qc.ts
 
 ## SEG standards note
 
-The SEG standards are the yardstick throughout. The **SEG-D reader** (rev 2.1 / 3.0) is written to the field map of SEG-D Rev 2.1 (January 2006) and Rev 3.1 (October 2015) and validated on real recorder field data - decoded samples are **bit-identical** to the same shots' vendor-written SEG-Y. **SEG-Y writers** preserve the standard trace-header fields (coordinate scalar, offset, source point), emit EBCDIC textual headers for rev ≤ 1, are byte-verified at the standard binary-header offsets, and refuse (rather than silently truncate) traces beyond 65,535 samples, the limit of the 16-bit samples-per-trace header field the writer uses. SEG-D write mirrors the verified vendor layout and round-trips through the reader, but interchange with acquisition vendor software has **not** been independently verified - verify before feeding SeisConv-written SEG-D to an acquisition system.
+The SEG standards are the yardstick throughout. The **SEG-D reader** (rev 2.1 / 3.0) is written to the field map of SEG-D Rev 2.1 (January 2006) and Rev 3.1 (October 2015) and validated on real recorder field data - decoded samples are **bit-identical** to the same shots' vendor-written SEG-Y. **SEG-Y writers** preserve the standard trace-header fields (coordinate scalar, offset, source point), emit EBCDIC textual headers for rev ≤ 1, are byte-verified at the standard binary-header offsets, and refuse (rather than silently truncate) a trace longer than the revision's own 16-bit header limit: 32,767 samples for Rev 0 and Rev 1, 65,535 for Rev 2. The same limits apply to the sample interval in microseconds. SEG-D write mirrors the verified vendor layout and round-trips through the reader, but interchange with acquisition vendor software has **not** been independently verified - verify before feeding SeisConv-written SEG-D to an acquisition system.
 
 ---
 
@@ -567,7 +567,7 @@ SeisConv ships the **EPSG Geodetic Parameter Dataset** offline: roughly 7,000 co
 
 > Ownership of the EPSG Dataset by **IOGP** (International Association of Oil and Gas Producers) is hereby acknowledged, as the [EPSG Dataset Terms of Use](https://epsg.org/terms-of-use.html) require. SeisConv ships a *subset* of the dataset: users are advised that coordinate reference system and coordinate transformation descriptions are incomplete unless every element listed as essential in IOGP Guidance Note 7-1 Annex A is included. IOGP does not warrant the accuracy of the data and excludes liability for its use; use is at your own risk. If you pass the EPSG data on, you are obliged to inform the recipient of those Terms of Use. The authoritative source is the EPSG Registry at <https://epsg.org>.
 
-What SeisConv can compute for itself: Transverse Mercator, UTM, geographic, Lambert Conformal Conic (1SP and 2SP), Mercator (variants A and B), Cassini-Soldner, Albers Equal Area, Lambert Azimuthal Equal Area, and Polar and Oblique Stereographic - about 97 % of the projected CRSs in the dataset - plus non-metre (feet) grids and non-Greenwich prime meridians. Every projection is checked against **PROJ** to sub-millimetre agreement by the test suite.
+What SeisConv can compute for itself: Transverse Mercator, UTM, geographic, Lambert Conformal Conic (1SP and 2SP), Mercator (variants A and B), Cassini-Soldner, Albers Equal Area, Lambert Azimuthal Equal Area, and Polar and Oblique Stereographic - about 91 % of the projected CRSs in the dataset - plus non-metre (feet) grids and non-Greenwich prime meridians. Every projection is checked against **PROJ** to sub-millimetre agreement by the test suite.
 
 CRSs it cannot compute are still **listed and searchable**, but they are marked and reprojection to them is refused with the reason. That covers CRSs whose datum tie needs an NTv2/NADCON grid file (OSGB36, NAD27 and similar), grids whose axes are westing/southing rather than easting/northing, and the remaining projection methods. Export in the survey's native CRS still works for all of them, and the written `.prj` names the CRS correctly so the receiving GIS can do the datum shift properly.
 
