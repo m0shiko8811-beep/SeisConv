@@ -34,7 +34,7 @@ jobs:
       sha: ${{ steps.decide.outputs.sha }}
       mode: ${{ steps.decide.outputs.mode }}
     steps:
-      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 1
 
@@ -114,7 +114,7 @@ jobs:
         shell: pwsh
         run: git config --global core.autocrlf false
 
-      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ (needs.check.outputs.mode == 'store_only' || needs.check.outputs.mode == 'store_only_dry') && format('v{0}', needs.check.outputs.version) || needs.check.outputs.sha }}
           fetch-depth: 1
