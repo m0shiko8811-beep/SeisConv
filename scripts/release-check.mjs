@@ -4,7 +4,7 @@
 //   agreement                                         every version fact agrees with package.json
 //   attestation [--warn-only]                         .github/release-attestation.json matches HEAD
 //   appx-identity <file.appx> --version X             the Microsoft Store package identity
-//   update-check-presence <dist/main.js> --expect present|absent
+//   update-check-presence <file>... --expect present|absent   (dist/main.js, dist/preload.js)
 //   sidecars <dir>                                    manual shot sidecars vs a fresh shots run
 //
 // Internal flags for testing: --root <dir> reads package.json and the version files from another
@@ -227,19 +227,28 @@ async function cmdAppxIdentity(file, version) {
 
 // ---------------------------------------------------------------- update-check-presence
 
-function cmdUpdateCheckPresence(file, expect) {
-  if (!file || (expect !== 'present' && expect !== 'absent')) {
-    error('update-check-presence: usage update-check-presence <dist/main.js> --expect present|absent');
+// What marks the update code in a bundle: the release API path (main) and the
+// update IPC channel names (main and preload). Any one of them counts as present.
+const UPDATE_MARKERS = ['releases/latest', 'seisconv:checkForUpdates', 'seisconv:updateDownload', 'seisconv:updateInstall'];
+
+function cmdUpdateCheckPresence(files, expect) {
+  if (!files.length || (expect !== 'present' && expect !== 'absent')) {
+    error('update-check-presence: usage update-check-presence <file>... --expect present|absent');
     return 1;
   }
-  const present = readFileSync(resolve(file), 'utf8').includes('releases/latest');
-  const state = present ? 'present' : 'absent';
-  if (state !== expect) {
-    error(`update-check-presence: releases/latest is ${state} in ${basename(file)}, expected ${expect}`);
-    return 1;
+  let bad = 0;
+  for (const file of files) {
+    const text = readFileSync(resolve(file), 'utf8');
+    const found = UPDATE_MARKERS.filter((m) => text.includes(m));
+    const state = found.length ? 'present' : 'absent';
+    if (state !== expect) {
+      error(`update-check-presence: update code is ${state} in ${basename(file)} (${found.join(', ') || 'no marker'}), expected ${expect}`);
+      bad++;
+      continue;
+    }
+    console.log(`update-check-presence: update code is ${state} in ${basename(file)}, as expected`);
   }
-  console.log(`update-check-presence: releases/latest is ${state} in ${basename(file)}, as expected`);
-  return 0;
+  return bad ? 1 : 0;
 }
 
 // ---------------------------------------------------------------- sidecars
@@ -292,12 +301,12 @@ async function main(argv) {
     case 'agreement': return cmdAgreement(root);
     case 'attestation': return cmdAttestation(root, opts.file, Boolean(opts['warn-only']));
     case 'appx-identity': return cmdAppxIdentity(pos[0], opts.version);
-    case 'update-check-presence': return cmdUpdateCheckPresence(pos[0], opts.expect);
+    case 'update-check-presence': return cmdUpdateCheckPresence(pos, opts.expect);
     case 'sidecars':
       try { return cmdSidecars(root, pos[0]); } catch (e) { warning(`sidecars: ${safeText(e)}`); return 0; }
     default:
       console.log('usage: release-check.mjs decide | agreement | attestation [--warn-only] | '
-        + 'appx-identity <file.appx> --version X | update-check-presence <main.js> --expect present|absent | sidecars <dir>');
+        + 'appx-identity <file.appx> --version X | update-check-presence <file>... --expect present|absent | sidecars <dir>');
       return 2;
   }
 }

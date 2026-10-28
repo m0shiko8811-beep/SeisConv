@@ -29,35 +29,35 @@
       "image": "img/01a-converter-mode-single.png",
       "caption": "Converter, single-file mode, before a file is open",
       "callouts": 2,
-      "bytes": 142986
+      "bytes": 143091
     },
     {
       "name": "01b-converter-single-loaded",
       "image": "img/01b-converter-single-loaded.png",
       "caption": "Converter with a SEG-Y open: what was read, and the output format",
       "callouts": 3,
-      "bytes": 154746
+      "bytes": 154712
     },
     {
       "name": "01c-converter-output-name",
       "image": "img/01c-converter-output-name.png",
       "caption": "The same panel scrolled to the output-name builder and Convert",
       "callouts": 4,
-      "bytes": 136829
+      "bytes": 136810
     },
     {
       "name": "02-converter-batch",
       "image": "img/02-converter-batch.png",
       "caption": "Converter, folder (batch) mode with a folder scanned and a destination chosen",
       "callouts": 2,
-      "bytes": 148065
+      "bytes": 148063
     },
     {
       "name": "02b-converter-batch-run",
       "image": "img/02b-converter-batch-run.png",
       "caption": "The batch panel scrolled to the destination and the run button",
       "callouts": 3,
-      "bytes": 142987
+      "bytes": 142968
     },
     {
       "name": "03-trace-inspector",
@@ -260,7 +260,7 @@
       "image": "img/20-help-modal.png",
       "caption": "The in-app Help: the same source this manual's reference chapter is generated from",
       "callouts": 3,
-      "bytes": 270459
+      "bytes": 276990
     }
   ]
 }

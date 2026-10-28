@@ -6,11 +6,11 @@
 // only through the typed `seisconvAPI` in preload.
 
 import { app, BrowserWindow, dialog, ipcMain, Menu, nativeImage, screen, session, shell } from 'electron';
-import { writeFile, readFile, readdir, rename, stat, unlink, open } from 'node:fs/promises';
-import { createWriteStream, watch, type FSWatcher } from 'node:fs';
+import { writeFile, readFile, readdir, rename, stat, lstat, unlink, open, mkdir } from 'node:fs/promises';
+import { createReadStream, createWriteStream, unlinkSync, watch, type FSWatcher, type WriteStream } from 'node:fs';
 import { spawn, type ChildProcess } from 'node:child_process';
 import { Worker } from 'node:worker_threads';
-import { randomBytes } from 'node:crypto';
+import { randomBytes, createHash } from 'node:crypto';
 import * as net from 'node:net';
 import * as dgram from 'node:dgram';
 import { epsgCount, getEpsg, searchEpsgRegistry } from '../core/sps/epsgdb';
@@ -22,7 +22,11 @@ import * as dns from 'node:dns';
 import * as path from 'node:path';
 import JSZip from 'jszip';
 import { SEISMIC_INPUT_EXTS, writeTapeVolHeader, writeTapeEnd, parseUdpTrigger, parseTriggerLine, parseScsLogLine, scsLogKey, isScsTrigTouch, SCS_TRIG_WINDOW_MS, TRIGGER_TEXT_MAX } from '../core';
-import { isNewerVersion, parseVersion, parseCriticalReason, releaseNotesText, updateBadgeVisible, MAX_VERSION_TAG, MAX_CRITICAL_REASON } from '../core/version';
+import {
+  isNewerVersion, parseVersion, parseCriticalReason, releaseNotesText, updateBadgeVisible, MAX_VERSION_TAG, MAX_CRITICAL_REASON,
+  selectInstallerAsset, installerAssetName, parseSha256Digest, sha256Equal, isReleaseDownloadUrl, isAllowedDownloadUrl,
+  UPDATE_INSTALLER_MAX_BYTES, UPDATE_REPO,
+} from '../core/version';
 import { RateLimiter, TCP_FILE_PORT, complementRole, type Role as FieldRole } from '../core/field';
 import {
   SyncEngine, FileServer, DiscoveryService, HistoryLog,
@@ -515,9 +519,16 @@ ipcMain.handle('seisconv:sendFeedback', async (
 // SeisConv is a field tool whose promise is that it runs offline, so NOTHING in
 // here ever runs by itself: no startup check, no timer, no polling, no telemetry.
 // The single request below happens only when the user clicks "Check for updates"
-// in Help. It downloads and installs NOTHING - it reads the newest release's tag
-// and notes and, if the user asks, hands the release PAGE to the OS browser. A
-// crew on a metered link never sees the app reach the network unasked.
+// in Help. The check itself downloads and installs NOTHING - it reads the newest
+// release's tag, notes and installer facts and, if the user asks, hands the
+// release PAGE to the OS browser. A crew on a metered link never sees the app
+// reach the network unasked.
+//
+// "Update now" is a second, separate click (plus an in-app confirmation): only
+// then is the installer of THAT release downloaded from the GitHub release,
+// checked against the SHA-256 digest GitHub publishes for it, and started
+// silently; the installer closes the app when it installs. An installer that
+// cannot be verified is deleted, never run.
 //
 // __UPDATE_CHECK__ is an esbuild compile-time define. The default build sets it
 // true; `npm run build:store` sets it false and adds --minify-syntax, which folds
@@ -527,7 +538,8 @@ ipcMain.handle('seisconv:sendFeedback', async (
 declare const __UPDATE_CHECK__: boolean;
 
 if (__UPDATE_CHECK__) {
-  const UPDATE_REPO = 'm0shiko8811-beep/SeisConv';
+  // UPDATE_REPO comes from core/version.ts, the same constant its download
+  // allow-list is built on, so the two can never disagree.
   const UPDATE_API_URL = `https://api.github.com/repos/${UPDATE_REPO}/releases/latest`;
   const UPDATE_RELEASES_URL = `https://github.com/${UPDATE_REPO}/releases`;
   /** Only a URL under this prefix may be handed to the browser: html_url comes off
@@ -554,14 +566,33 @@ if (__UPDATE_CHECK__) {
     criticalReason: string;
     dismissed: string;      // the tag the user dismissed ('' = none)
     checkedAt: string;      // when that check ran (local ISO)
+    // The Windows installer of `latest`, as that check found it, so "Update now"
+    // installs exactly the version the modal named. Every field is re-validated
+    // before use ('' / 0 = the release had no usable installer).
+    assetName: string;
+    assetUrl: string;
+    assetSize: number;
+    assetSha256: string;    // lower-case hex, '' when GitHub published no digest
   }
   const EMPTY_UPDATE: StoredUpdate = {
     latest: '', publishedAt: '', url: '', notes: '',
     critical: false, criticalReason: '', dismissed: '', checkedAt: '',
+    assetName: '', assetUrl: '', assetSize: 0, assetSha256: '',
   };
   const capStr = (v: unknown, max: number): string =>
     (typeof v === 'string' ? v.slice(0, max) : '');
   const updateStatePath = (): string => path.join(app.getPath('userData'), 'update_state.json');
+
+  /** The version the update logic compares against. Normally app.getVersion().
+   *  Test hook, OFF by default: SEISCONV_UPDATE_FAKE_VERSION=<x.y.z> pretends the
+   *  running build is <x.y.z> so a dev build can see the real latest release as
+   *  newer and exercise "Update now" end to end. Honoured ONLY in an unpackaged
+   *  (development) run, so the shipped app ignores it entirely. */
+  function runningVersion(): string {
+    const fake = (process.env.SEISCONV_UPDATE_FAKE_VERSION || '').trim();
+    if (fake && !app.isPackaged && parseVersion(fake)) return fake;
+    return app.getVersion();
+  }
 
   /** Read the remembered answer. Bounded, validated field by field, and never
    *  throwing: a missing or corrupt file simply means "nothing remembered". */
@@ -581,6 +612,11 @@ if (__UPDATE_CHECK__) {
         criticalReason: capStr(raw.criticalReason, MAX_CRITICAL_REASON + 1),
         dismissed: capStr(raw.dismissed, MAX_VERSION_TAG),
         checkedAt: capStr(raw.checkedAt, 40),
+        assetName: capStr(raw.assetName, 120),
+        assetUrl: capStr(raw.assetUrl, 600),
+        assetSize: typeof raw.assetSize === 'number' && Number.isSafeInteger(raw.assetSize)
+          && raw.assetSize > 0 && raw.assetSize <= UPDATE_INSTALLER_MAX_BYTES ? raw.assetSize : 0,
+        assetSha256: parseSha256Digest(`sha256:${capStr(raw.assetSha256, 64)}`) ?? '',
       };
     } catch {
       return { ...EMPTY_UPDATE };
@@ -601,7 +637,7 @@ if (__UPDATE_CHECK__) {
    *  the running build AND the user has not dismissed that exact tag. So it
    *  clears itself after an update, and a later, greater release brings it back. */
   function badgeFor(s: StoredUpdate) {
-    const current = app.getVersion();
+    const current = runningVersion();
     const newer = isNewerVersion(s.latest, current);
     return {
       show: updateBadgeVisible(s.latest, current, s.dismissed),
@@ -637,7 +673,7 @@ if (__UPDATE_CHECK__) {
   // The check itself. Never throws: every failure resolves { ok:false, error },
   // because offline is the NORMAL case in the field, not an error condition.
   ipcMain.handle('seisconv:checkForUpdates', async () => {
-    const current = app.getVersion();
+    const current = runningVersion();
     const stored = await readUpdateState();
     const fail = (error: string) => ({
       ok: false, error, current, url: UPDATE_RELEASES_URL, badge: badgeFor(stored),
@@ -656,7 +692,7 @@ if (__UPDATE_CHECK__) {
         headers: {
           'Accept': 'application/vnd.github+json',
           'X-GitHub-Api-Version': '2022-11-28',
-          'User-Agent': `SeisConv/${current} (desktop seismic toolkit)`,
+          'User-Agent': `SeisConv/${app.getVersion()} (desktop seismic toolkit)`,
         },
       });
       if (res.status === 404) return fail('GitHub has no published release for SeisConv yet.');
@@ -689,9 +725,16 @@ if (__UPDATE_CHECK__) {
     const publishedAt = capStr(rel.published_at, 40);
     const notes = releaseNotesText(capStr(rel.body, UPDATE_NOTES_MAX * 4), UPDATE_NOTES_MAX);
     const newer = isNewerVersion(tag, current);
-    const criticalReason = parseCriticalReason(notes);
+    // The marker is read off the RAW body (the same first UPDATE_NOTES_MAX
+    // characters scripts/release-lib.mjs checks), not off the plain-text notes,
+    // whose Markdown clean-up joins wrapped lines and re-draws bullets.
+    const criticalReason = parseCriticalReason(capStr(rel.body, UPDATE_NOTES_MAX));
     // Critical only counts when the release is ALSO newer than what is running.
     const critical = newer && criticalReason !== null;
+    // The Windows installer of this release, for "Update now". Picked by exact
+    // name, repo-only download URL and a capped size (core/version.ts); null when
+    // the release has none, which simply leaves the button off.
+    const asset = selectInstallerAsset(rel.assets, tag);
 
     // Remember what we learned. `dismissed` is deliberately carried over: a later,
     // greater release therefore shows its badge again without the user doing
@@ -705,6 +748,10 @@ if (__UPDATE_CHECK__) {
       criticalReason: criticalReason ?? '',
       dismissed: stored.dismissed,
       checkedAt: new Date().toISOString(),
+      assetName: asset?.name ?? '',
+      assetUrl: asset?.url ?? '',
+      assetSize: asset?.size ?? 0,
+      assetSha256: asset?.sha256 ?? '',
     };
     await writeUpdateState(next);
 
@@ -719,6 +766,10 @@ if (__UPDATE_CHECK__) {
       notes,
       url,
       badge: badgeFor(next),
+      // What "Update now" would fetch. `fingerprint` false = GitHub published no
+      // digest, so the renderer explains why the button is not offered.
+      installer: asset ? { name: asset.name, size: asset.size, fingerprint: asset.sha256 !== null } : null,
+      selfUpdate: updateSelfInstallSupported(),
     };
   });
 
@@ -745,6 +796,437 @@ if (__UPDATE_CHECK__) {
     } catch (e) {
       return { ok: false, url: UPDATE_RELEASES_URL, error: (e as Error).message };
     }
+  });
+
+  // -- "Update now" (a SECOND click, after an in-app confirmation) ----------
+  // Downloads the installer the last manual check stored, verifies its SHA-256
+  // against the digest GitHub publishes for that asset, and only then starts it.
+  // The renderer passes NOTHING in: main takes the URL from what it stored,
+  // re-validates it here, and checks every redirect hop against the allow-list in
+  // core/version.ts. Never throws: every failure resolves { ok:false, error } in
+  // plain words, and a file that was not verified is deleted, never run.
+  //
+  // SeisConv does NOT quit itself after starting the installer. The
+  // electron-builder 26.18 NSIS script closes it once it really installs:
+  //   - per-user install: the installer's own install section runs
+  //     CHECK_APP_RUNNING (installSection.nsh, allowOnlyOneInstallerInstance.nsh
+  //     _CHECK_APP_RUNNING), which with --updated waits about 1.3 s and then
+  //     stops SeisConv.exe (Stop-Process, or taskkill, then a forced kill);
+  //   - per-machine install: the silent run first asks Windows for elevation
+  //     (installer.nsi, UAC_RunElevated). If that is accepted, the elevated
+  //     instance runs the old uninstaller with /S --updated (installUtil.nsh
+  //     uninstallOldVersion), whose un.onInit runs the same CHECK_APP_RUNNING. If
+  //     it is refused, the installer quits without touching anything.
+  // So a refused UAC prompt leaves SeisConv open and working, and the installer
+  // exiting while this process is still alive is reported back as "ended
+  // without updating". Because that close is a hard stop, the observer log and
+  // DOM storage are flushed to disk BEFORE the installer is started.
+
+  /** Redirect hops followed at most (github.com -> asset storage is one). */
+  const UPDATE_DL_MAX_HOPS = 5;
+  /** No byte for this long means the link is dead: the download is abandoned. */
+  const UPDATE_DL_STALL_MS = 60_000;
+  /** Absolute ceiling over the whole download: generous for a slow field link
+   *  (114 MB at 256 kbit/s is about an hour), but never for ever. */
+  const UPDATE_DL_DEADLINE_MS = 2 * 60 * 60_000;
+  /** Progress pushes to the renderer, at most this often. */
+  const UPDATE_DL_PROGRESS_MS = 250;
+  /** The silent-update switches the electron-builder NSIS script reads (the same
+   *  ones electron-updater passes): /S runs silently, --updated skips the pages
+   *  and gives this app a moment before it is closed, --force-run starts the new
+   *  version when the install is done. */
+  const UPDATE_INSTALL_ARGS = ['/S', '--updated', '--force-run'];
+  /** Installer file names this code writes, finished or partial. Nothing else in
+   *  the update folder is ever touched. */
+  const UPDATE_FILE_RE = /^SeisConv-Setup-[0-9A-Za-z.+-]{1,64}\.exe(\.part)?$/;
+
+  /** A SeisConv-private folder (not the shared temp folder): userData/updates. */
+  const updateDlDir = (): string => path.join(app.getPath('userData'), 'updates');
+
+  /** Test hook, OFF by default: SEISCONV_UPDATE_NO_LAUNCH=1 runs "Update now" up
+   *  to and including the fingerprint check, then stops: the installer is NOT
+   *  started and the verified file's path is reported. It can only take a
+   *  capability away, so it is honoured in every build. */
+  const updateNoLaunch = (): boolean => process.env.SEISCONV_UPDATE_NO_LAUNCH === '1';
+  /** Test hook, OFF by default and ignored by the shipped app: in an UNPACKAGED
+   *  run, SEISCONV_UPDATE_FAKE_LAUNCH=<seconds> starts a harmless stand-in (this
+   *  Electron binary as plain Node, sleeping that long, then exiting 0) where the
+   *  installer would start, so the "waiting for the installer" and "ended
+   *  without updating" states can be driven without installing anything. */
+  function updateFakeLaunchSeconds(): number {
+    if (app.isPackaged) return 0;
+    const n = Number(process.env.SEISCONV_UPDATE_FAKE_LAUNCH);
+    return Number.isFinite(n) && n > 0 && n <= 3600 ? n : 0;
+  }
+
+  /** "Update now" runs the NSIS installer, so it is a Windows-only offer; other
+   *  platforms keep the release-page link. */
+  function updateSelfInstallSupported(): boolean { return process.platform === 'win32'; }
+
+  /** The update handlers answer ONLY the app's own window: its top-level frame,
+   *  showing the bundled renderer/index.html over file://. Anything else (a
+   *  subframe, another window, a navigated-away page) is refused. */
+  const UPDATE_PAGE_PATH = path.join(__dirname, '..', 'renderer', 'index.html');
+  function updateSenderOk(e: Electron.IpcMainInvokeEvent): boolean {
+    try {
+      if (!win || win.isDestroyed() || e.sender !== win.webContents) return false;
+      const f = e.senderFrame;
+      if (!f || f.parent !== null || f.frameTreeNodeId !== e.sender.mainFrame.frameTreeNodeId) return false;
+      const u = new URL(f.url);
+      if (u.protocol !== 'file:') return false;
+      const want = new URL(`file:///${UPDATE_PAGE_PATH.replace(/\\/g, '/').replace(/^\/+/, '')}`).pathname;
+      const norm = (p: string) => decodeURIComponent(p).toLowerCase();
+      return norm(u.pathname) === norm(want);
+    } catch {
+      return false;
+    }
+  }
+  const UPDATE_SENDER_REFUSED = 'This request did not come from the SeisConv window, so it was refused.';
+
+  /** A refusal whose message is already written for the user. */
+  class UpdateRefusal extends Error {}
+
+  /** The download in flight (one at a time), so Cancel and quit can stop it and
+   *  quit can remove its partial file. */
+  interface UpdateDl {
+    ctrl: AbortController;
+    reason: '' | 'cancel' | 'stall' | 'deadline' | 'quit';
+    part: string;
+    out: WriteStream | null;
+  }
+  let updateDl: UpdateDl | null = null;
+  /** The installer main itself verified: the ONLY file updateInstall may run. */
+  let updateVerified: { file: string; sha256: string; version: string } | null = null;
+  /** True while an installer this session started is still running. */
+  let updateInstallerRunning = false;
+
+  async function sha256OfFile(p: string): Promise<string> {
+    const h = createHash('sha256');
+    await new Promise<void>((resolve, reject) => {
+      const rs = createReadStream(p);
+      rs.on('data', (d) => h.update(d));
+      rs.on('end', () => resolve());
+      rs.on('error', reject);
+    });
+    return h.digest('hex');
+  }
+
+  /** One chunk to disk, waiting for it so a slow disk applies back-pressure. */
+  const writeChunk = (ws: WriteStream, chunk: Uint8Array): Promise<void> =>
+    new Promise((resolve, reject) => { ws.write(chunk, (err) => (err ? reject(err) : resolve())); });
+  /** End the stream and wait until its handle is CLOSED (Windows will not rename
+   *  or delete a file that is still open). */
+  const closeStream = (ws: WriteStream): Promise<void> =>
+    new Promise((resolve, reject) => { ws.once('close', () => resolve()); ws.once('error', reject); ws.end(); });
+  async function discardStream(ws: WriteStream | null): Promise<void> {
+    if (!ws || ws.closed) return;
+    await new Promise<void>((resolve) => { ws.once('close', () => resolve()); ws.destroy(); });
+  }
+
+  /** The update folder, created if needed, and refused when it is a symbolic
+   *  link or junction (Node reports both as links) or not a folder at all: an
+   *  installer is never written, or deleted, through a redirected path. */
+  async function updateDirChecked(create: boolean): Promise<string | null> {
+    const dir = updateDlDir();
+    try {
+      if (create) await mkdir(dir, { recursive: true });
+      const st = await lstat(dir);
+      if (st.isSymbolicLink() || !st.isDirectory()) return null;
+      return dir;
+    } catch {
+      return null;
+    }
+  }
+
+  /** Remove earlier SeisConv installer downloads, finished or partial, from the
+   *  update folder. Only names this code writes are ever touched. */
+  async function clearUpdateDownloads(dir: string): Promise<void> {
+    let names: string[] = [];
+    try { names = await readdir(dir); } catch { return; }
+    for (const n of names) {
+      if (UPDATE_FILE_RE.test(n)) {
+        await unlink(path.join(dir, n)).catch(() => { /* in use or already gone */ });
+      }
+    }
+  }
+
+  // After an update: on a start where the running build has caught up with the
+  // newest release the last check found (or nothing is remembered), the
+  // installer copy that did the update is no longer needed, so its 114 MB are
+  // given back. Reads one small file in userData and lists one folder; touches
+  // no network.
+  void app.whenReady().then(async () => {
+    try {
+      const s = await readUpdateState();
+      if (isNewerVersion(s.latest, runningVersion())) return;
+      const dir = await updateDirChecked(false);
+      if (dir) await clearUpdateDownloads(dir);
+    } catch { /* housekeeping only */ }
+  });
+
+  async function downloadUpdate(e: Electron.IpcMainInvokeEvent, dl: UpdateDl) {
+    if (!updateSelfInstallSupported()) {
+      return { ok: false, error: 'Update now is only offered in the Windows build. Use the release page instead.' };
+    }
+    const s = await readUpdateState();
+    const current = runningVersion();
+    if (!isNewerVersion(s.latest, current)) {
+      return { ok: false, error: `SeisConv ${current} is already the newest release the last check found.` };
+    }
+    // The stored facts are re-validated, not trusted: the file in userData is
+    // just a file, and this is about to decide what gets downloaded and run.
+    const name = installerAssetName(s.latest);
+    if (!name || s.assetName !== name || !isReleaseDownloadUrl(s.assetUrl)
+        || !new URL(s.assetUrl).pathname.endsWith(`/${name}`) || s.assetSize <= 0) {
+      return { ok: false, error: 'This release has no Windows installer SeisConv can download. Use the release page instead.' };
+    }
+    if (!s.assetSha256) {
+      return {
+        ok: false,
+        error: 'GitHub publishes no digital fingerprint for this installer, so SeisConv cannot check it and will not install it. Use the release page instead.',
+      };
+    }
+
+    const version = s.latest.replace(/^[vV]/, '');
+    const total = s.assetSize;
+    const ctrl = dl.ctrl;
+    updateVerified = null;
+    // Two clocks: a stall timer re-armed by every chunk, and one absolute deadline.
+    const deadline = setTimeout(() => { dl.reason = 'deadline'; ctrl.abort(); }, UPDATE_DL_DEADLINE_MS);
+    let stall: ReturnType<typeof setTimeout> | null = null;
+    const armStall = () => {
+      if (stall) clearTimeout(stall);
+      stall = setTimeout(() => { dl.reason = 'stall'; ctrl.abort(); }, UPDATE_DL_STALL_MS);
+    };
+    const send = (phase: 'download' | 'verify', received: number) => {
+      try {
+        if (!e.sender.isDestroyed()) e.sender.send('seisconv:updateProgress', { phase, received, total });
+      } catch { /* the window is going away; nobody is watching */ }
+    };
+    let reader: ReadableStreamDefaultReader<Uint8Array> | null = null;
+    let part = '';
+    try {
+      const dir = await updateDirChecked(true);
+      if (!dir) {
+        throw new UpdateRefusal('The SeisConv update folder could not be created, or it is a link to somewhere else, so nothing was downloaded. Nothing was installed.');
+      }
+      const file = path.join(dir, name);
+      part = `${file}.part`;
+      dl.part = part;
+      await clearUpdateDownloads(dir);
+      armStall();
+
+      // Redirects are followed BY HAND so every hop is checked before it is
+      // fetched: github.com first, then only GitHub's asset-storage hosts.
+      let url = s.assetUrl;
+      let res: Response | null = null;
+      for (let hop = 0; ; hop++) {
+        if (!isAllowedDownloadUrl(url)) {
+          throw new UpdateRefusal('The download was redirected to an address SeisConv does not trust, so it was stopped. Nothing was installed.');
+        }
+        const r = await fetch(url, {
+          signal: ctrl.signal,
+          redirect: 'manual',
+          headers: {
+            'Accept': 'application/octet-stream',
+            'User-Agent': `SeisConv/${app.getVersion()} (desktop seismic toolkit)`,
+          },
+        });
+        if (r.status >= 300 && r.status < 400) {
+          const loc = r.headers.get('location');
+          await r.body?.cancel().catch(() => { /* ignore */ });
+          if (!loc || hop >= UPDATE_DL_MAX_HOPS) {
+            throw new UpdateRefusal('GitHub did not hand over the installer (too many redirects). Nothing was installed.');
+          }
+          url = new URL(loc, url).toString();
+          continue;
+        }
+        res = r;
+        break;
+      }
+      if (!res.ok) throw new UpdateRefusal(`GitHub answered ${res.status} for the installer. Nothing was installed.`);
+      const len = Number(res.headers.get('content-length'));
+      if (Number.isFinite(len) && len > UPDATE_INSTALLER_MAX_BYTES) {
+        throw new UpdateRefusal('The installer is far larger than any SeisConv release, so it was not downloaded.');
+      }
+      if (!res.body) throw new UpdateRefusal('GitHub sent an empty reply instead of the installer. Nothing was installed.');
+
+      // 'wx': created fresh, never opened through something already sitting there.
+      const out = createWriteStream(part, { flags: 'wx' });
+      dl.out = out;
+      out.on('error', () => { /* surfaced through the write and close callbacks */ });
+      const hash = createHash('sha256');
+      reader = res.body.getReader();
+      let got = 0;
+      let lastSent = 0;
+      send('download', 0);
+      for (;;) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        if (!value || !value.byteLength) continue;
+        armStall();
+        got += value.byteLength;
+        // Never more than the release says the installer is (and never past the cap).
+        if (got > total || got > UPDATE_INSTALLER_MAX_BYTES) {
+          throw new UpdateRefusal('The download grew past the installer size the release lists, so it was stopped. Nothing was installed.');
+        }
+        hash.update(value);
+        await writeChunk(out, value);
+        const now = Date.now();
+        if (now - lastSent >= UPDATE_DL_PROGRESS_MS) { lastSent = now; send('download', got); }
+      }
+      reader = null;
+      if (stall) { clearTimeout(stall); stall = null; }
+      await closeStream(out);
+      dl.out = null;
+      if (got !== total) {
+        throw new UpdateRefusal(`The download ended early (${got} of ${total} bytes). Nothing was installed.`);
+      }
+
+      // The fingerprint check. Only a file whose SHA-256 equals GitHub's digest
+      // for this asset is kept; anything else is deleted below and never run.
+      send('verify', got);
+      const actual = hash.digest('hex');
+      if (!sha256Equal(actual, s.assetSha256)) {
+        throw new UpdateRefusal('The downloaded installer does not match the digital fingerprint GitHub publishes for it, so it was deleted and NOT installed. Try again later, or use the release page.');
+      }
+      await unlink(file).catch(() => { /* not there */ });
+      await rename(part, file);
+      updateVerified = { file, sha256: actual, version };
+      return { ok: true, version, file, size: got, sha256: actual };
+    } catch (err) {
+      // Read the reason BEFORE stopping the transfer below, which aborts too.
+      const aborted = ctrl.signal.aborted;
+      // Whatever went wrong (a full disk, a refusal), stop the network side as
+      // well, so no socket keeps pulling bytes nobody will write.
+      if (!aborted) ctrl.abort();
+      if (reader) await reader.cancel().catch(() => { /* already errored */ });
+      await discardStream(dl.out);
+      dl.out = null;
+      if (part) await unlink(part).catch(() => { /* never written, or already gone */ });
+      if (aborted) {
+        if (dl.reason === 'cancel' || dl.reason === 'quit') {
+          return { ok: false, cancelled: true, error: 'Download cancelled. Nothing was installed.' };
+        }
+        if (dl.reason === 'stall') {
+          return { ok: false, error: `The download stalled: no data for ${Math.round(UPDATE_DL_STALL_MS / 1000)} seconds. Nothing was installed. You may be offline.` };
+        }
+        return { ok: false, error: `The download did not finish within ${Math.round(UPDATE_DL_DEADLINE_MS / 3600000)} hours, so it was stopped. Nothing was installed.` };
+      }
+      if (err instanceof UpdateRefusal) return { ok: false, error: err.message };
+      return { ok: false, error: 'The download failed. You may be offline, or the disk may be full. Nothing was installed.' };
+    } finally {
+      clearTimeout(deadline);
+      if (stall) clearTimeout(stall);
+    }
+  }
+
+  ipcMain.handle('seisconv:updateDownload', async (e) => {
+    if (!updateSenderOk(e)) return { ok: false, error: UPDATE_SENDER_REFUSED };
+    if (updateDl) return { ok: false, error: 'An update download is already running.' };
+    if (updateInstallerRunning) return { ok: false, error: 'The installer is already running.' };
+    // Claimed synchronously, before the first await, so two quick clicks can
+    // never start two downloads; released whatever happens.
+    const dl: UpdateDl = { ctrl: new AbortController(), reason: '', part: '', out: null };
+    updateDl = dl;
+    try {
+      return await downloadUpdate(e, dl);
+    } catch {
+      return { ok: false, error: 'The download could not be started. Nothing was installed.' };
+    } finally {
+      updateDl = null;
+    }
+  });
+
+  // Stop the download in flight; downloadUpdate removes the partial file.
+  ipcMain.handle('seisconv:updateCancel', async (e) => {
+    if (!updateSenderOk(e)) return { ok: false };
+    const dl = updateDl;
+    if (!dl) return { ok: false };
+    dl.reason = 'cancel';
+    dl.ctrl.abort();
+    return { ok: true };
+  });
+
+  // Quitting mid-download aborts it and removes the partial file right here, in
+  // sync: the async clean-up in downloadUpdate may not get to run before exit.
+  // (Windows deletes a file Node still has open, since libuv opens files with
+  // FILE_SHARE_DELETE; anything left is cleared by the next Update now.)
+  app.on('will-quit', () => {
+    const dl = updateDl;
+    if (!dl) return;
+    dl.reason = 'quit';
+    dl.ctrl.abort();
+    try { dl.out?.destroy(); } catch { /* ignore */ }
+    if (dl.part) { try { unlinkSync(dl.part); } catch { /* best effort */ } }
+  });
+
+  // Start the verified installer. Takes no argument: the only file it will start
+  // is the one downloadUpdate verified in this session, and that file is
+  // fingerprinted AGAIN right here, so what runs is exactly what was checked.
+  // SeisConv stays open; the installer closes it once it really installs (see
+  // the note at the top of this section).
+  ipcMain.handle('seisconv:updateInstall', async (e) => {
+    if (!updateSenderOk(e)) return { ok: false, error: UPDATE_SENDER_REFUSED };
+    if (updateInstallerRunning) return { ok: false, error: 'The installer is already running.' };
+    // Taken and cleared at once, so a second click cannot start it twice.
+    const v = updateVerified;
+    updateVerified = null;
+    if (!v) return { ok: false, error: 'There is no verified installer waiting. Press Update now again.' };
+    let sha = '';
+    try { sha = await sha256OfFile(v.file); } catch { /* unreadable: refused below */ }
+    if (!sha256Equal(sha, v.sha256)) {
+      await unlink(v.file).catch(() => { /* already gone */ });
+      return { ok: false, error: 'The downloaded installer changed after it was checked, so it was deleted and NOT run. Press Update now to try again.' };
+    }
+    const fake = updateFakeLaunchSeconds();
+    // Test hook, and the development guard: a dev run never installs a release
+    // over whatever SeisConv is installed on the machine.
+    if (updateNoLaunch()) return { ok: true, launched: false, why: 'test', file: v.file, version: v.version };
+    if (!app.isPackaged && !fake) return { ok: true, launched: false, why: 'dev', file: v.file, version: v.version };
+    if (!updateSelfInstallSupported()) {
+      updateVerified = v;
+      return { ok: false, error: 'Update now is only offered in the Windows build. Use the release page instead.' };
+    }
+    // The installer stops this process hard, so everything the renderer keeps in
+    // DOM storage (the observer log was just saved there) goes to disk first.
+    try { session.defaultSession.flushStorageData(); } catch { /* best effort */ }
+    let child: ChildProcess;
+    try {
+      child = fake
+        ? spawn(process.execPath, ['-e', `setTimeout(() => {}, ${Math.round(fake * 1000)})`], {
+          detached: true, stdio: 'ignore', env: { ...process.env, ELECTRON_RUN_AS_NODE: '1' },
+        })
+        : spawn(v.file, UPDATE_INSTALL_ARGS, { detached: true, stdio: 'ignore' });
+      child.on('error', () => { /* a late error after start is not ours to report */ });
+      await new Promise<void>((resolve, reject) => {
+        child.once('spawn', () => resolve());
+        child.once('error', reject);
+      });
+    } catch (err) {
+      updateVerified = v;
+      return {
+        ok: false,
+        error: `Windows could not start the installer (${(err as Error)?.message || 'unknown error'}). It is verified and saved at ${v.file}; you can run it yourself.`,
+      };
+    }
+    updateInstallerRunning = true;
+    // If the installer exits while SeisConv is still running, it did not install
+    // (a refused permission prompt, or it could not close the app). Say so, and
+    // keep the verified file so "Try again" needs no second download.
+    child.once('exit', (code) => {
+      updateInstallerRunning = false;
+      updateVerified = v;
+      try {
+        if (!e.sender.isDestroyed()) {
+          e.sender.send('seisconv:updateProgress', {
+            phase: 'ended', received: 0, total: 0, code: typeof code === 'number' && Number.isFinite(code) ? code : -1,
+          });
+        }
+      } catch { /* the window is going away */ }
+    });
+    child.unref();
+    return { ok: true, launched: true, version: v.version };
   });
 }
 

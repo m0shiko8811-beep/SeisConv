@@ -751,7 +751,8 @@ export interface UpdateBadge {
  *  ok && !newer (up to date), ok && newer (a release exists), !ok (the check did
  *  not complete - offline is the normal case, so `error` reads as ordinary).
  *  `url` is always safe to show as text; `notes` is PLAIN TEXT and must be
- *  rendered with textContent, never as HTML. Nothing is ever downloaded. */
+ *  rendered with textContent, never as HTML. The check itself downloads nothing;
+ *  `installer` only describes what a later "Update now" click would fetch. */
 export interface UpdateCheckResult {
   ok: boolean;
   current: string;
@@ -764,6 +765,45 @@ export interface UpdateCheckResult {
   publishedAt?: string;
   notes?: string;
   error?: string;
+  /** The release's Windows installer (null when it has none). `fingerprint` is
+   *  false when GitHub published no SHA-256 digest, so it could not be verified. */
+  installer?: { name: string; size: number; fingerprint: boolean } | null;
+  /** True where "Update now" can run the installer (the Windows build). */
+  selfUpdate?: boolean;
+}
+
+/** "Update now", step 1: download + fingerprint check. `cancelled` marks a
+ *  user cancel; every other failure carries a plain-words `error`. */
+export interface UpdateDownloadResult {
+  ok: boolean;
+  cancelled?: boolean;
+  error?: string;
+  version?: string;
+  file?: string;
+  size?: number;
+  sha256?: string;
+}
+
+/** "Update now", step 2: start the verified installer and quit. `launched`
+ *  false means it was verified but deliberately not run: `why` 'test' for the
+ *  SEISCONV_UPDATE_NO_LAUNCH hook, 'dev' for an unpackaged development run. */
+export interface UpdateInstallResult {
+  ok: boolean;
+  launched?: boolean;
+  why?: 'test' | 'dev';
+  file?: string;
+  version?: string;
+  error?: string;
+}
+
+/** Progress pushed by main while "Update now" runs. 'ended' = the installer
+ *  this session started exited while SeisConv is still running, so it did not
+ *  install (for example a refused Windows permission prompt). */
+export interface UpdateProgress {
+  phase: 'download' | 'verify' | 'ended';
+  received: number;
+  total: number;
+  code?: number;
 }
 
 /** One SPS source record exposed to the Observer Log for column-linking. The
@@ -894,6 +934,52 @@ export type FieldEventMsg =
   | { type: 'status'; running: boolean; mode: FieldRole; serverOn: boolean; discoveryOn: boolean; manual: boolean; folder: string; peers: FieldPeerInfo[]; pending?: FieldPeerInfo[]; allowRemoteDelete?: boolean }
   | { type: 'negotiated'; role: FieldRole; peerRole: FieldRole }
   | { type: 'renegotiable' };
+
+// -- Check for updates + "Update now" (only ever when the user clicks) --------
+// __UPDATE_CHECK__ is the same esbuild compile-time define electron/main.ts and
+// the renderer use. `npm run build:store` sets it false with --minify-syntax, so
+// this object, and with it every update channel name, is folded out of the
+// Microsoft Store preload: a Store app must not carry its own update path. In the
+// Store build the spread below adds nothing, and the renderer never calls these
+// (its update UI is compiled out of that build too).
+declare const __UPDATE_CHECK__: boolean;
+const updateApi = __UPDATE_CHECK__
+  ? {
+    // These are channel names and nothing else: the request, the release-note
+    // parsing, the browser hand-off and the installer download all live in main,
+    // which registers the handlers only in the same non-Store build.
+    /** Ask GitHub for the newest release ONCE, now. Downloads and installs nothing;
+     *  never rejects on a network failure - offline resolves { ok:false, error }.
+     *  (Installing is the separate updateDownload/updateInstall pair below.) */
+    checkForUpdates: (): Promise<UpdateCheckResult> => ipcRenderer.invoke('seisconv:checkForUpdates'),
+    /** The remembered result of the last manual check, for the quiet badge. Reads a
+     *  file in userData; contacts nothing. */
+    updateBadge: (): Promise<UpdateBadge> => ipcRenderer.invoke('seisconv:updateBadge'),
+    /** Hide the badge for the version currently remembered (that version only - a
+     *  newer one found by a later check brings it back). Returns the new state. */
+    updateDismiss: (): Promise<UpdateBadge> => ipcRenderer.invoke('seisconv:updateDismiss'),
+    /** Open the remembered release page in the user's own browser. Main re-reads the
+     *  allow-listed URL it stored; the renderer cannot pass one in. */
+    openReleasePage: (): Promise<{ ok: boolean; url: string; error?: string }> =>
+      ipcRenderer.invoke('seisconv:openReleasePage'),
+    /** "Update now" (only after the user confirms in the app): main downloads the
+     *  installer the last check stored and verifies its SHA-256 against GitHub's
+     *  digest. Takes no argument - main decides the URL. Never rejects. */
+    updateDownload: (): Promise<UpdateDownloadResult> => ipcRenderer.invoke('seisconv:updateDownload'),
+    /** Stop the download in flight; main removes the partial file. */
+    updateCancel: (): Promise<{ ok: boolean }> => ipcRenderer.invoke('seisconv:updateCancel'),
+    /** Start the installer main verified (fingerprinted again first). SeisConv
+     *  stays open; the installer closes it once it really installs. */
+    updateInstall: (): Promise<UpdateInstallResult> => ipcRenderer.invoke('seisconv:updateInstall'),
+    /** Subscribe to download progress and the installer-ended push; returns an
+     *  unsubscribe fn. */
+    onUpdateProgress: (cb: (p: UpdateProgress) => void): (() => void) => {
+      const listener = (_e: unknown, p: UpdateProgress) => cb(p);
+      ipcRenderer.on('seisconv:updateProgress', listener);
+      return () => ipcRenderer.removeListener('seisconv:updateProgress', listener);
+    },
+  }
+  : null;
 
 const api = {
   /** Host OS, for OS-aware key hints (set to process.platform at preload load). */
@@ -1132,24 +1218,8 @@ const api = {
     ipcRenderer.invoke('seisconv:sendFeedback', args),
 
   // -- Check for updates (only ever when the user clicks) --
-  // These four are channel names and nothing else: the request, the release-note
-  // parsing and the browser hand-off all live in main, which registers the
-  // handlers ONLY in a non-Store build (see __UPDATE_CHECK__ in electron/main.ts).
-  // The renderer's own button is compiled out of that build too, so it never calls
-  // a handler that is not there.
-  /** Ask GitHub for the newest release ONCE, now. Downloads and installs nothing;
-   *  never rejects on a network failure - offline resolves { ok:false, error }. */
-  checkForUpdates: (): Promise<UpdateCheckResult> => ipcRenderer.invoke('seisconv:checkForUpdates'),
-  /** The remembered result of the last manual check, for the quiet badge. Reads a
-   *  file in userData; contacts nothing. */
-  updateBadge: (): Promise<UpdateBadge> => ipcRenderer.invoke('seisconv:updateBadge'),
-  /** Hide the badge for the version currently remembered (that version only - a
-   *  newer one found by a later check brings it back). Returns the new state. */
-  updateDismiss: (): Promise<UpdateBadge> => ipcRenderer.invoke('seisconv:updateDismiss'),
-  /** Open the remembered release page in the user's own browser. Main re-reads the
-   *  allow-listed URL it stored; the renderer cannot pass one in. */
-  openReleasePage: (): Promise<{ ok: boolean; url: string; error?: string }> =>
-    ipcRenderer.invoke('seisconv:openReleasePage'),
+  // Spread in from updateApi above: null, so nothing, in the Microsoft Store build.
+  ...(updateApi as NonNullable<typeof updateApi>),
 
   // -- Observer Log "Trigger Watch" (live row on shot trigger) --
   /** Configure + (re)start the trigger sources; `null` stops everything. Main

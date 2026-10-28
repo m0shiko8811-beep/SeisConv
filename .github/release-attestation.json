@@ -1,10 +1,10 @@
 {
   "schema": 1,
-  "version": "0.8.7",
-  "preparedAt": "2026-10-26T16:25:59.454Z",
+  "version": "0.8.8",
+  "preparedAt": "2026-10-28T09:08:31.019Z",
   "typecheck": "clean",
   "coreTests": {
-    "passed": 506,
+    "passed": 513,
     "failed": 0,
     "skipped": 4
   },
@@ -16,14 +16,14 @@
     "consoleErrors": 0
   },
   "bound": {
-    "core": "90ac3053c3885fe03b656e756b1510e383ebff3a",
-    "electron": "f003d048b84209cc257504ca32e9754f1e095154",
-    "renderer": "dd7f8eae3e2e0d588c10b2bdf30999484fd6159d",
+    "core": "2f3bf255f4eb2eb65c944b30d4fc00248766f800",
+    "electron": "9c2f85eaca45539df8d60881eb7ac0e3694e35a5",
+    "renderer": "f3f4000c699873dc62968fbde7ff8af5ce943a09",
     "workers": "a8ac364c54f3c59c0c0c4722564e7ac946991676",
     "build": "26558a03e0ed6a8f6265d129d5c62717c77b6d8e",
     "qa": "c706e24e461a0808f059fde5f4e30862c72eeb66",
-    "scripts": "a2b9c66ab4aaaafca9ea4e188508d63095abddfd",
-    "docs": "270fd0160be7a30fbe6db1c016efcf95c30e11af",
+    "scripts": "702f5d42d67728c5d41a13ebe294cc3a3b563458",
+    "docs": "b6c80bdd2602d0120fc6c4ddbc89ea4f0d0a9975",
     "dependencies": "8e151201cc67d82070a363cb887f547aa5b3585dea1951b3b010f6b72041fa51"
   }
 }

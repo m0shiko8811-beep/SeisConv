@@ -285,7 +285,26 @@ type UpdateCheckInfo = {
   publishedAt?: string;
   notes?: string;
   error?: string;
+  // What "Update now" would fetch (null: the release has no Windows installer).
+  // `fingerprint` false = GitHub published no SHA-256 digest for it, so it could
+  // not be verified and the button is not offered.
+  installer?: { name: string; size: number; fingerprint: boolean } | null;
+  // True where "Update now" can run the installer (the Windows build).
+  selfUpdate?: boolean;
 };
+// "Update now", step 1 (download + fingerprint check) and step 2 (start the
+// verified installer and quit). `launched` false = verified but deliberately not
+// run: why 'test' (SEISCONV_UPDATE_NO_LAUNCH) or 'dev' (unpackaged run).
+type UpdateDownloadInfo = {
+  ok: boolean; cancelled?: boolean; error?: string;
+  version?: string; file?: string; size?: number; sha256?: string;
+};
+type UpdateInstallInfo = {
+  ok: boolean; launched?: boolean; why?: 'test' | 'dev'; file?: string; version?: string; error?: string;
+};
+// 'ended' = the installer this session started has exited while SeisConv is
+// still running, i.e. it did not install (a refused permission prompt).
+type UpdateProgressInfo = { phase: 'download' | 'verify' | 'ended'; received: number; total: number; code?: number };
 
 // The renderer is the sole owner of the `window.seisconvAPI` type. The preload
 // backend implements the SAME contract (channel names + signatures) in parallel;
@@ -512,13 +531,19 @@ declare global {
       // the plain issues page instead.
       sendFeedback(args: { subject: string; body: string; mode?: 'github' | 'mail' }):
         Promise<{ ok: boolean; fallback?: boolean; error?: string }>;
-      // -- Check for updates (ONLY when the user clicks; nothing is downloaded) --
+      // -- Check for updates (ONLY when the user clicks; the check downloads nothing) --
       // Registered by main only in a non-Store build; the UI below is compiled out
       // of that build too, so these are never called when they are absent.
       checkForUpdates(): Promise<UpdateCheckInfo>;
       updateBadge(): Promise<UpdateBadgeInfo>;
       updateDismiss(): Promise<UpdateBadgeInfo>;
       openReleasePage(): Promise<{ ok: boolean; url: string; error?: string }>;
+      // "Update now": a second click plus an in-app confirmation. Main decides
+      // the URL from what the check stored; the renderer passes nothing in.
+      updateDownload(): Promise<UpdateDownloadInfo>;
+      updateCancel(): Promise<{ ok: boolean }>;
+      updateInstall(): Promise<UpdateInstallInfo>;
+      onUpdateProgress(cb: (p: UpdateProgressInfo) => void): () => void;
       // -- Observer Log "Trigger Watch" (live row on shot trigger) --
       triggerWatch(cfg: TrigWatchIpcCfg | null): Promise<TrigWatchStartResult>;
       triggerPickFolder(): Promise<string | null>;
@@ -801,9 +826,14 @@ async function copyFeedback() {
 // SeisConv runs offline, and nothing here changes that: there is no check at
 // startup, no timer, no polling and no telemetry. The one request happens when
 // the user presses "Check for updates" in Help, it is made by the MAIN process
-// (this renderer is sandboxed with default-src 'none' and stays that way), and it
-// downloads and installs NOTHING - it reports what the newest release says and,
-// if asked, hands the release PAGE to the default browser.
+// (this renderer is sandboxed with default-src 'none' and stays that way), and the
+// check downloads and installs NOTHING - it reports what the newest release says
+// and, if asked, hands the release PAGE to the default browser.
+//
+// "Update now" is a separate, explicit step on top of that: a click, then an
+// in-app confirmation naming the version and size, and only then does main
+// download that release's installer, verify its SHA-256 against GitHub's digest,
+// and run it. The renderer passes no URL or path; it only shows progress.
 //
 // The result of a check is remembered by main (userData) so a user who checked
 // once still sees a quiet dot on the Help button next session. Remembering an
@@ -819,9 +849,36 @@ declare const __UPDATE_CHECK__: boolean;
  *  "Hide this reminder" button always speak about the same version. */
 let updateBadgeState: UpdateBadgeInfo | null = null;
 let updateChecking = false;
+/** Where the update modal is. 'result' is the plain check outcome; 'confirm',
+ *  'download', 'install' (the verified file is being started) and 'waiting'
+ *  (started; Windows and the installer have the next move) exist only after the
+ *  user pressed Update now. 'ended' = the installer quit without updating, and
+ *  'done' is any other closable end state (failed, cancelled, verified-not-run). */
+let updatePhase: 'result' | 'confirm' | 'download' | 'install' | 'waiting' | 'ended' | 'done' = 'result';
+/** While the installer is being started or awaited, the dialog cannot be closed
+ *  at first (the app may be closed under it any moment); after this long a Close
+ *  button appears, so the user is never left with no way out. */
+const UPDATE_WAIT_CLOSE_MS = 15000;
+let updateWaitTimer = 0;
+let updateWaitCloseOk = false;
+/** Unsubscribe for the "installer ended" push while waiting. */
+let updateEndedOff: (() => void) | null = null;
+/** The check result the modal is about, so Update now speaks of THAT version. */
+let updateLast: UpdateCheckInfo | null = null;
+/** Set by Cancel / closing the dialog mid-download: a download that still
+ *  finishes after that is NOT installed. */
+let updateCancelRequested = false;
 
 function updateModalOpen(): boolean { return !!$opt('updateBack')?.classList.contains('open'); }
-function closeUpdateModal() { $opt('updateBack')?.classList.remove('open'); }
+function closeUpdateModal() {
+  // The installer is being started, or Windows / the installer may close the app
+  // any moment: the dialog stays until the Close button appears.
+  if ((updatePhase === 'install' || updatePhase === 'waiting') && !updateWaitCloseOk) return;
+  // Closing mid-download cancels it, so nothing keeps running where the user
+  // cannot see it. Main removes the partial file.
+  if (updatePhase === 'download') cancelUpdateDownload();
+  $opt('updateBack')?.classList.remove('open');
+}
 
 /** A release tag as a plain version for display ("v0.9.0" → "0.9.0"), so it can be
  *  read against the running build without a stray "v" between them. Only the
@@ -880,22 +937,25 @@ function updRow(host: HTMLElement, label: string, value: string) {
 /**
  * Show one of the three outcomes. EVERYTHING that came off the network is written
  * with textContent, never innerHTML: the release body is untrusted text.
- * Every outcome is dismissible and none of them installs anything.
+ * Every outcome is dismissible and none of them installs anything; installing
+ * needs the separate Update now button plus its confirmation.
  */
 function renderUpdateResult(r: UpdateCheckInfo) {
   const body = $opt('updateBody');
-  const openBtn = $opt('updateOpenBtn') as HTMLButtonElement | null;
-  const hideBtn = $opt('updateHideBtn') as HTMLButtonElement | null;
   if (!body) return;
   body.innerHTML = '';
+  updatePhase = 'result';
+  updateLast = r;
   const newer = r.ok && r.newer === true;
   const crit = newer && r.critical === true;
+  // Update now is offered only where it can run (Windows) and only for an
+  // installer GitHub published a fingerprint for: never an unverifiable file.
+  const canUpdate = newer && r.selfUpdate === true && !!r.installer && r.installer.fingerprint;
 
   setText('updateTitle', !r.ok ? 'Update check' : crit ? 'Critical update available' : newer ? 'Update available' : 'Up to date');
   // "Open release page" and "Hide this reminder" only mean anything when there IS
   // a newer release; up to date and could-not-check just close.
-  openBtn?.classList.toggle('hidden', !newer);
-  hideBtn?.classList.toggle('hidden', !newer);
+  setUpdateFooter({ hide: newer, close: true, open: newer, now: canUpdate });
 
   const lead = document.createElement('p'); lead.className = 'upd-lead';
   if (!r.ok) {
@@ -923,12 +983,25 @@ function renderUpdateResult(r: UpdateCheckInfo) {
       body.appendChild(c);
     }
     lead.textContent = crit
-      ? 'This one is worth taking. SeisConv will not install it for you, and you can keep working.'
-      : 'A newer release exists. SeisConv downloads and installs nothing - the release page opens in your browser.';
+      ? (canUpdate
+        ? 'This one is worth taking. Nothing is installed unless you press Update now, and you can keep working.'
+        : 'This one is worth taking. SeisConv will not install it for you, and you can keep working.')
+      : (canUpdate
+        ? 'A newer release exists. Update now downloads and installs it after you confirm; Open release page shows it in your browser instead.'
+        : 'A newer release exists. SeisConv downloads and installs nothing - the release page opens in your browser.');
     body.appendChild(lead);
     updRow(body, 'This build', r.current);
     updRow(body, 'Newest release', verLabel(r.latest || '-'));
     updRow(body, 'Published', fmtReleaseDate(r.publishedAt || ''));
+    if (r.selfUpdate && r.installer) {
+      updRow(body, 'Installer', `${r.installer.name}${fmtBytes(r.installer.size) ? ` (${fmtBytes(r.installer.size)})` : ''}`);
+      if (!r.installer.fingerprint) {
+        const p = document.createElement('p');
+        p.style.margin = '8px 0 0';
+        p.textContent = 'Update now is not offered: GitHub publishes no digital fingerprint for this installer, so SeisConv could not verify it.';
+        body.appendChild(p);
+      }
+    }
     if (r.notes) {
       const n = document.createElement('div'); n.className = 'upd-notes';
       n.textContent = r.notes;            // plain text, capped in main
@@ -986,6 +1059,268 @@ async function openReleasePage() {
   }
 }
 
+// -- "Update now" ------------------------------------------------------------
+// Click -> in-app confirmation (version, size, what happens) -> main downloads
+// and verifies -> main starts the installer and quits. Everything the user reads
+// here is built with textContent; the renderer passes no URL or path to main.
+
+/** Show exactly the footer buttons that mean something in this phase. */
+function setUpdateFooter(show: { hide?: boolean; close?: boolean; open?: boolean; now?: boolean; go?: boolean; cancel?: boolean }) {
+  const btns: [string, boolean][] = [
+    ['updateHideBtn', !!show.hide], ['updateCloseBtn', !!show.close], ['updateOpenBtn', !!show.open],
+    ['updateNowBtn', !!show.now], ['updateGoBtn', !!show.go], ['updateCancelBtn', !!show.cancel],
+  ];
+  for (const [id, on] of btns) $opt(id)?.classList.toggle('hidden', !on);
+  // No buttons, no footer: an empty bordered strip reads as something missing.
+  $opt('updateFoot')?.classList.toggle('hidden', !btns.some(([, on]) => on));
+  // While the dialog cannot be closed (installer starting or awaited, before the
+  // Close button turns up), the header X is hidden rather than dead.
+  $opt('updateClose')?.classList.toggle('hidden',
+    (updatePhase === 'install' || updatePhase === 'waiting') && !updateWaitCloseOk);
+  // One primary button at a time: with Update now on offer, the page link steps back.
+  $opt('updateOpenBtn')?.classList.toggle('btn-primary', !show.now && !show.go);
+  const go = $opt('updateGoBtn') as HTMLButtonElement | null;
+  if (go) { go.disabled = false; go.textContent = updatePhase === 'ended' ? 'Try again' : 'Download and install'; }
+}
+
+/** A plain titled message in the update modal (lead line + paragraphs). */
+function renderUpdateMessage(title: string, lead: string, paras: string[] = []) {
+  const body = $opt('updateBody');
+  if (!body) return;
+  body.innerHTML = '';
+  setText('updateTitle', title);
+  const l = document.createElement('p'); l.className = 'upd-lead'; l.textContent = lead;
+  body.appendChild(l);
+  for (const t of paras) {
+    const p = document.createElement('p'); p.style.margin = '6px 0 0'; p.textContent = t;
+    body.appendChild(p);
+  }
+  body.scrollTop = 0;
+}
+
+/** Any refusal or failure: say what happened in plain words, nothing installed. */
+function renderUpdateFailure(msg: string) {
+  updatePhase = 'done';
+  renderUpdateMessage('Update not installed', msg, [
+    'SeisConv is unchanged and you can keep working. The release page has the installer if you would rather fetch it yourself.',
+  ]);
+  setUpdateFooter({ close: true, open: true });
+}
+
+/** Step 1: the confirmation. Names the version and size and says what will
+ *  happen, so nothing is downloaded on a stray click. */
+function showUpdateConfirm() {
+  const r = updateLast;
+  if (!r || !r.ok || !r.newer || !r.installer || !r.installer.fingerprint) return;
+  updatePhase = 'confirm';
+  const ver = verLabel(r.latest || '');
+  const size = fmtBytes(r.installer.size);
+  renderUpdateMessage('Update SeisConv',
+    `SeisConv will download version ${ver}${size ? ` (${size})` : ''} from the GitHub release, check its digital fingerprint against the one GitHub publishes, then install it and restart.`,
+    [
+      'The observer log is saved first. Files open in the viewers need opening again after the restart.',
+      'If the fingerprint does not match, the download is deleted and nothing is installed.',
+      'If SeisConv was installed for all users of this computer, Windows asks for permission before the update is installed. If you refuse, nothing changes and SeisConv stays open.',
+    ]);
+  const body = $opt('updateBody');
+  const warn = (t: string) => {
+    const c = document.createElement('div'); c.className = 'upd-crit'; c.style.margin = '10px 0 0'; c.textContent = t;
+    body?.appendChild(c);
+  };
+  // A running batch would be cut off mid-file: that blocks the update outright.
+  if (batchRunning) warn('A batch conversion is running. Let it finish, or stop it, then press Update now again.');
+  // These are only interrupted, so they are said, not blocked.
+  if (Object.values(trigActive).some(Boolean)) warn('Trigger Watch is live: shots fired while SeisConv restarts are not logged.');
+  if (fieldRunning) warn('WiFiSync stops when SeisConv closes.');
+  setUpdateFooter({ cancel: true, go: true });
+  const cancel = $opt('updateCancelBtn') as HTMLButtonElement | null;
+  if (cancel) { cancel.disabled = false; cancel.textContent = 'Cancel'; }
+  const go = $opt('updateGoBtn') as HTMLButtonElement | null;
+  if (go) { go.disabled = batchRunning; go.focus(); }
+}
+
+/** The progress bar's parts, built once per download. */
+let updateProgEls: { title: HTMLElement; pct: HTMLElement; fill: HTMLElement; sub: HTMLElement } | null = null;
+
+/** Step 2a: the download view (reuses the converter's .prog-* bar). */
+function renderUpdateDownloading(ver: string) {
+  renderUpdateMessage('Updating SeisConv', `Downloading SeisConv ${ver} from GitHub.`);
+  const body = $opt('updateBody');
+  if (!body) return;
+  const wrap = document.createElement('div'); wrap.className = 'prog-wrap';
+  const head = document.createElement('div'); head.className = 'prog-head';
+  const title = document.createElement('span'); title.className = 'pt'; title.textContent = 'Downloading';
+  const pct = document.createElement('span'); pct.className = 'pc'; pct.textContent = '';
+  head.appendChild(title); head.appendChild(pct);
+  const bar = document.createElement('div'); bar.className = 'prog-bar';
+  const fill = document.createElement('div'); fill.className = 'prog-fill indet';
+  bar.appendChild(fill);
+  const sub = document.createElement('div'); sub.className = 'prog-sub'; sub.textContent = 'Connecting…';
+  wrap.appendChild(head); wrap.appendChild(bar); wrap.appendChild(sub);
+  body.appendChild(wrap);
+  updateProgEls = { title, pct, fill, sub };
+}
+
+/** Paint one progress push. Every number is checked: a missing or odd total
+ *  shows a moving bar, never NaN %. */
+function paintUpdateProgress(p: UpdateProgressInfo) {
+  const els = updateProgEls;
+  if (!els || updatePhase !== 'download') return;
+  const total = Number.isFinite(p?.total) && p.total > 0 ? p.total : 0;
+  const got = Number.isFinite(p?.received) && p.received > 0 ? p.received : 0;
+  const pct = total ? Math.max(0, Math.min(100, Math.floor((got / total) * 100))) : 0;
+  if (p?.phase === 'verify') {
+    els.title.textContent = 'Checking the fingerprint';
+    els.fill.classList.remove('indet');
+    els.fill.style.width = '100%';
+    els.pct.textContent = '100 %';
+    els.sub.textContent = `${fmtBytes(got)} downloaded, comparing its digital fingerprint with GitHub's…`;
+    return;
+  }
+  els.fill.classList.toggle('indet', !total);
+  els.fill.style.width = total ? `${pct}%` : '';
+  els.pct.textContent = total ? `${pct} %` : '';
+  els.sub.textContent = total ? `${fmtBytes(got)} of ${fmtBytes(total)}` : fmtBytes(got);
+}
+
+/** Cancel / close during the download. Main aborts and deletes the partial file;
+ *  the pending download call then resolves as cancelled. */
+function cancelUpdateDownload() {
+  if (updatePhase !== 'download') return;
+  updateCancelRequested = true;
+  const cancel = $opt('updateCancelBtn') as HTMLButtonElement | null;
+  if (cancel) { cancel.disabled = true; cancel.textContent = 'Cancelling…'; }
+  api.updateCancel().catch(() => { /* the download call reports the outcome */ });
+}
+
+/** Step 2: download + verify (main), then save the log and hand over to the
+ *  installer (main). */
+async function runUpdateNow() {
+  const r = updateLast;
+  if (updatePhase !== 'confirm' || batchRunning || !r || !r.installer) return;
+  const ver = verLabel(r.latest || '');
+  // A "cancelled" toast left over from an earlier attempt must not sit over a
+  // new download.
+  hideUndoToast();
+  updatePhase = 'download';
+  updateCancelRequested = false;
+  renderUpdateDownloading(ver);
+  setUpdateFooter({ cancel: true });
+  const cancel = $opt('updateCancelBtn') as HTMLButtonElement | null;
+  if (cancel) { cancel.disabled = false; cancel.textContent = 'Cancel download'; cancel.focus(); }
+
+  let off: (() => void) | null = null;
+  let d: UpdateDownloadInfo;
+  try {
+    off = api.onUpdateProgress(paintUpdateProgress);
+    d = await api.updateDownload();
+  } catch (e) {
+    d = { ok: false, error: (e as Error)?.message || 'The download could not be started.' };
+  } finally {
+    off?.();
+    updateProgEls = null;
+  }
+
+  // A cancel wins even when the download beat it to the finish: a file that was
+  // verified after the user said stop is still not installed.
+  if (d.cancelled || updateCancelRequested) {
+    updatePhase = 'done';
+    // Only repaint when the dialog still speaks about THIS release: a newer
+    // check may have replaced it meanwhile.
+    if (updateModalOpen() && updateLast === r) renderUpdateResult(r);
+    infoToast('Update cancelled. Nothing was installed.');
+    return;
+  }
+  if (!d.ok) { renderUpdateFailure(d.error || 'The download did not complete. Nothing was installed.'); return; }
+  await runUpdateInstall(d.version || ver);
+}
+
+/** Clear the "waiting for the installer" timer and its subscription. */
+function stopUpdateWait() {
+  if (updateWaitTimer) { window.clearTimeout(updateWaitTimer); updateWaitTimer = 0; }
+  updateWaitCloseOk = false;
+  updateEndedOff?.();
+  updateEndedOff = null;
+}
+
+/** Step 3: save the log, let main start the verified installer, then wait for
+ *  Windows. SeisConv is NOT closed from here: the installer closes it when it
+ *  really installs, so a refused permission prompt leaves everything as it was. */
+async function runUpdateInstall(ver: string) {
+  stopUpdateWait();
+  updatePhase = 'install';
+  renderUpdateMessage('Fingerprint verified',
+    `SeisConv ${ver} was downloaded and its digital fingerprint matches the one GitHub publishes.`,
+    ['Starting the installer…']);
+  setUpdateFooter({});
+  // Never stranded: whatever main or Windows do, a Close button turns up.
+  updateWaitTimer = window.setTimeout(() => {
+    updateWaitTimer = 0;
+    if (updatePhase !== 'install' && updatePhase !== 'waiting') return;
+    updateWaitCloseOk = true;
+    setUpdateFooter({ close: true });
+  }, UPDATE_WAIT_CLOSE_MS);
+  // The installer quitting while SeisConv still runs means it did not install.
+  // Subscribed BEFORE the start, so even an instant exit is heard.
+  updateEndedOff = api.onUpdateProgress((p) => {
+    if (p?.phase !== 'ended' || (updatePhase !== 'install' && updatePhase !== 'waiting')) return;
+    stopUpdateWait();
+    updatePhase = 'ended';
+    renderUpdateMessage('Update not installed', 'The installer ended without updating SeisConv.', [
+      'If Windows asked for permission and it was refused, nothing was changed. You can keep working, or try again; the verified download is kept, so trying again does not download it a second time.',
+    ]);
+    setUpdateFooter({ close: true, go: true });
+    $opt('updateBack')?.classList.add('open');
+  });
+  saveLogFlush();
+  let ir: UpdateInstallInfo;
+  try {
+    ir = await api.updateInstall();
+  } catch (e) {
+    ir = { ok: false, error: (e as Error)?.message || 'The installer could not be started.' };
+  }
+  if (!ir.ok) { stopUpdateWait(); renderUpdateFailure(ir.error || 'The installer could not be started.'); return; }
+  if (!ir.launched) {
+    // The test hook or a development run: verified, deliberately not run.
+    stopUpdateWait();
+    updatePhase = 'done';
+    renderUpdateMessage('Verified, not installed',
+      ir.why === 'test'
+        ? 'Test mode (SEISCONV_UPDATE_NO_LAUNCH): the installer was downloaded and its fingerprint verified, but it was not started.'
+        : 'Development build: the installer was downloaded and its fingerprint verified, but a development run never installs over SeisConv.',
+      []);
+    const u = document.createElement('div'); u.className = 'upd-path'; u.id = 'updateVerifiedPath';
+    // One unbreakable span per folder or file name, with a break opportunity
+    // after each separator: the path wraps between names, never inside one,
+    // unless a single name is wider than the dialog on its own.
+    for (const part of (ir.file || '').split(/(?<=[\\/])/)) {
+      if (!part) continue;
+      const seg = document.createElement('span'); seg.className = 'upd-seg'; seg.textContent = part;
+      u.appendChild(seg);
+      u.appendChild(document.createElement('wbr'));
+    }
+    $opt('updateBody')?.appendChild(u);
+    // Only a name that really is wider than the box may wrap inside itself.
+    for (const seg of Array.from(u.querySelectorAll<HTMLElement>('.upd-seg'))) {
+      if (seg.scrollWidth > seg.clientWidth + 1) seg.classList.add('wide');
+    }
+    setUpdateFooter({ close: true });
+    return;
+  }
+  // Started. If Windows asks for permission the user answers it; once the
+  // installer installs, it closes SeisConv and starts the new version.
+  if (updatePhase === 'install') {
+    updatePhase = 'waiting';
+    renderUpdateMessage('Waiting for Windows to start the installer',
+      `The installer for SeisConv ${ir.version || ver} has been started.`,
+      [
+        'If Windows asks for permission, answer it. SeisConv closes by itself when the installer starts installing, and opens again when the update is done.',
+        'If the permission is refused, nothing changes and you can keep working.',
+      ]);
+    setUpdateFooter(updateWaitCloseOk ? { close: true } : {});
+  }
+}
+
 /** Wire the Help footer. The version read-out is painted in EVERY build; only the
  *  check itself is compiled out of the Store build. */
 function initUpdates() {
@@ -995,9 +1330,23 @@ function initUpdates() {
     if (btn) { btn.classList.remove('hidden'); btn.addEventListener('click', () => { void runUpdateCheck(); }); }
     $opt('updateClose')?.addEventListener('click', closeUpdateModal);
     $opt('updateCloseBtn')?.addEventListener('click', closeUpdateModal);
-    $opt('updateBack')?.addEventListener('click', (e) => { if (e.target === $opt('updateBack')) closeUpdateModal(); });
+    // A stray click on the backdrop never cancels a running download; Cancel,
+    // the close buttons and Esc still do.
+    $opt('updateBack')?.addEventListener('click', (e) => {
+      if (e.target === $opt('updateBack') && updatePhase !== 'download' && updatePhase !== 'install' && updatePhase !== 'waiting') closeUpdateModal();
+    });
     $opt('updateHideBtn')?.addEventListener('click', () => { void hideUpdateReminder(); });
     $opt('updateOpenBtn')?.addEventListener('click', () => { void openReleasePage(); });
+    $opt('updateNowBtn')?.addEventListener('click', showUpdateConfirm);
+    $opt('updateGoBtn')?.addEventListener('click', () => {
+      // "Try again" after the installer ended: main kept the verified file.
+      if (updatePhase === 'ended') { void runUpdateInstall(verLabel(updateLast?.latest || '')); return; }
+      void runUpdateNow();
+    });
+    $opt('updateCancelBtn')?.addEventListener('click', () => {
+      if (updatePhase === 'download') cancelUpdateDownload();
+      else if (updatePhase === 'confirm' && updateLast) renderUpdateResult(updateLast);
+    });
     void loadUpdateBadge();
   }
 }

@@ -1,6 +1,6 @@
 # SeisConv Privacy Policy
 
-Effective date: 2026-09-09. Describes SeisConv version 0.8.7.
+Effective date: 2026-09-09. Describes SeisConv version 0.8.8.
 
 SeisConv is a free, open source desktop application for converting and
 viewing seismic data (SEG-Y, SEG-D, SEG-2, SU) and working with SPS survey
@@ -28,7 +28,12 @@ same files) - never anywhere else, never on a server:
 - A local WiFiSync history (filename, time, size, and which peer) for your
   own reference.
 - The result of the last manual "Check for updates" click (version, release
-  notes, date), if you've ever run one.
+  notes, date, and the name, size and SHA-256 fingerprint of that release's
+  Windows installer), if you've ever run one.
+- After an "Update now", the installer it downloaded, in an `updates`
+  folder inside that same SeisConv data folder. It is deleted on the first
+  start of the updated version, and the next "Update now" also clears the
+  folder before it downloads anything.
 
 None of this is sent anywhere. It is the only copy; SeisConv keeps nothing
 elsewhere, and removing it later is a normal file or uninstall operation like
@@ -57,10 +62,19 @@ reach the network, only when you use them:
   sent.
 - **Check for updates.** Clicking "Check for updates" in Help asks GitHub's
   public releases API for the latest published version and its release
-  notes; nothing is downloaded or installed automatically, and nothing runs
-  on its own - no startup check, no background timer. The Microsoft Store
-  build of SeisConv contains no update-check code at all, since the Store
-  handles updates itself.
+  notes; the check itself downloads and installs nothing, and nothing runs
+  on its own - no startup check, no background timer. When the check finds a
+  newer release, the Windows build offers **Update now**: only when you click
+  it, and confirm, does SeisConv download that release's installer from the
+  GitHub release, verify its SHA-256 fingerprint against the one GitHub
+  publishes, and install it (a file that does not match is deleted and never
+  run). Both requests send GitHub the SeisConv version (in the User-Agent
+  header) and, like any request on the internet, your IP address; nothing
+  about you, your data or your surveys is sent. The fingerprint proves the
+  file is exactly what was published on the GitHub release; it does not prove
+  that the release itself is trustworthy, and the installer is not
+  code-signed. The Microsoft Store build of SeisConv contains no update-check
+  or update code at all, since the Store handles updates itself.
 
 ## WiFiSync stays on your local network
 

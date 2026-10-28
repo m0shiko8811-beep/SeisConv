@@ -168,6 +168,8 @@ import {
 import {
   parseVersion, compareVersions, isNewerVersion, parseCriticalReason, releaseNotesText,
   updateBadgeVisible, MAX_VERSION_TAG, MAX_CRITICAL_REASON,
+  installerAssetName, parseSha256Digest, sha256Equal, isReleaseDownloadUrl, isAllowedDownloadUrl,
+  selectInstallerAsset, UPDATE_INSTALLER_MAX_BYTES, MAX_RELEASE_ASSETS,
 } from '../version';
 import { GOLDEN_PROJ } from './golden-proj';
 import { GOLDEN_TM } from './golden-tmutm';
@@ -7737,11 +7739,140 @@ function versionTests(): void {
   });
 
   test('version: release notes come back as bounded plain text', () => {
-    assert.equal(releaseNotesText('line one\r\nline two'), 'line one\nline two');
+    assert.equal(releaseNotesText('line one\r\n\r\nline two'), 'line one\n\nline two');
     assert.equal(releaseNotesText('a\n\n\n\n\nb'), 'a\n\nb');
     assert.equal(releaseNotesText('drop\u0000the\u0007bell'), 'dropthebell');
     assert.equal(releaseNotesText(''), '');
     assert.ok(releaseNotesText('y'.repeat(9000), 500).length <= 502);
+  });
+
+  test('version: release-note Markdown is shown as readable plain text', () => {
+    // The shape of a real SeisConv release body.
+    const md = [
+      '**Windows 10/11, 64-bit.** Download `SeisConv-Setup-0.8.7.exe` below and run it.',
+      '',
+      'The installer is not code-signed: **More info**, then **Run anyway**.',
+      '',
+      'The 101-page manual is attached as a PDF in both A4 and Letter.',
+      '',
+      '---',
+      '',
+      '### Fixed',
+      '',
+      '- **Converting keeps the trace headers.** Converting SEG-D to',
+      '  SEG-Y wrote the trace number; see [the manual](https://example.com/m) for `FFID`.',
+      '- Second item.',
+      '',
+      '## Security ##',
+      '',
+      '1. First step',
+      '> quoted *note* and __strong__ text, snake_case_name stays.',
+    ].join('\n');
+    assert.equal(releaseNotesText(md), [
+      'The installer is not code-signed: More info, then Run anyway.',
+      '',
+      'Fixed',
+      '',
+      '• Converting keeps the trace headers. Converting SEG-D to SEG-Y wrote the trace number; see the manual for FFID.',
+      '• Second item.',
+      '',
+      'Security',
+      '',
+      '1. First step quoted note and strong text, snake_case_name stays.',
+    ].join('\n'));
+    // Rules of every kind go; an image keeps its alt text; an autolink its URL.
+    assert.equal(releaseNotesText('a\n\n***\n\n_ _ _\n\nb'), 'a\n\nb');
+    assert.equal(releaseNotesText('![logo](x.png) and <https://github.com/x>'), 'logo and https://github.com/x');
+    // A critical marker line keeps its text (the marker itself is read off the
+    // raw body by main, not off this text).
+    assert.equal(releaseNotesText('SEISCONV_CRITICAL: data loss fixed'), 'SEISCONV_CRITICAL: data loss fixed');
+    assert.equal(releaseNotesText('Not code-signed, so SmartScreen will warn.\n\nKept.'), 'Kept.');
+    // Pathological input stays fast and bounded.
+    const t0 = Date.now();
+    releaseNotesText('**'.repeat(5000) + '['.repeat(5000) + '_'.repeat(5000), 20000);
+    assert.ok(Date.now() - t0 < 2000);
+  });
+
+  // -- "Update now": the installer asset, its digest and the download URLs --
+  const DL = 'https://github.com/m0shiko8811-beep/SeisConv/releases/download';
+  const HEX = 'b3ae76a4a20df91069818626e6221ab43d6fad4baaaf98499bb5e5f3e687b879';
+  const asset = (over: Record<string, unknown> = {}) => ({
+    name: 'SeisConv-Setup-0.8.8.exe',
+    size: 114225681,
+    digest: `sha256:${HEX}`,
+    browser_download_url: `${DL}/v0.8.8/SeisConv-Setup-0.8.8.exe`,
+    ...over,
+  });
+
+  test('update: the installer name follows the NSIS artifact rule', () => {
+    assert.equal(installerAssetName('v0.8.8'), 'SeisConv-Setup-0.8.8.exe');
+    assert.equal(installerAssetName('0.9.0'), 'SeisConv-Setup-0.9.0.exe');
+    assert.equal(installerAssetName('main'), null);
+    assert.equal(installerAssetName(''), null);
+  });
+
+  test('update: a GitHub digest parses to lower-case hex, anything else to null', () => {
+    assert.equal(parseSha256Digest(`sha256:${HEX.toUpperCase()}`), HEX);
+    assert.equal(parseSha256Digest(`sha256:${HEX.slice(1)}`), null);        // 63 hex
+    assert.equal(parseSha256Digest(`sha256:${HEX}0`), null);                 // 65 hex
+    assert.equal(parseSha256Digest(`sha512:${HEX}`), null);                  // other algorithm
+    assert.equal(parseSha256Digest(`sha256:${HEX.slice(2)}zz`), null);      // not hex
+    assert.equal(parseSha256Digest(HEX), null);                              // no prefix
+    assert.equal(parseSha256Digest(null), null);
+    assert.equal(parseSha256Digest(42), null);
+  });
+
+  test('update: fingerprints agree only when both are well-formed and equal', () => {
+    assert.ok(sha256Equal(HEX, HEX.toUpperCase()));
+    assert.equal(sha256Equal(HEX, HEX.replace(/^b/, 'c')), false);
+    assert.equal(sha256Equal('', ''), false);
+    assert.equal(sha256Equal('abc', 'abc'), false);
+  });
+
+  test('update: only the repo release download and the GitHub asset hosts are fetched', () => {
+    assert.ok(isReleaseDownloadUrl(`${DL}/v0.8.8/SeisConv-Setup-0.8.8.exe`));
+    assert.equal(isReleaseDownloadUrl('http://github.com/m0shiko8811-beep/SeisConv/releases/download/v1/x.exe'), false);
+    assert.equal(isReleaseDownloadUrl('https://github.com/someone-else/SeisConv/releases/download/v1/x.exe'), false);
+    assert.equal(isReleaseDownloadUrl('https://github.com.evil.example/m0shiko8811-beep/SeisConv/releases/download/v1/x.exe'), false);
+    assert.equal(isReleaseDownloadUrl('https://user:pw@github.com/m0shiko8811-beep/SeisConv/releases/download/v1/x.exe'), false);
+    assert.equal(isReleaseDownloadUrl('https://github.com:8443/m0shiko8811-beep/SeisConv/releases/download/v1/x.exe'), false);
+    assert.ok(isAllowedDownloadUrl('https://release-assets.githubusercontent.com/github-production-release-asset/1/2?sig=x'));
+    assert.ok(isAllowedDownloadUrl('https://objects.githubusercontent.com/github-production-release-asset-2e65be/1'));
+    assert.equal(isAllowedDownloadUrl('https://evil.githubusercontent.com.example/x'), false);
+    assert.equal(isAllowedDownloadUrl('https://raw.githubusercontent.com/x'), false);
+    assert.equal(isAllowedDownloadUrl('file:///C:/Windows/System32/cmd.exe'), false);
+    assert.equal(isAllowedDownloadUrl('not a url'), false);
+    assert.equal(isAllowedDownloadUrl(undefined), false);
+  });
+
+  test('update: the installer asset is picked by exact name, URL and size', () => {
+    const pdf = { name: 'SeisConv-Manual-A4.pdf', size: 1000, digest: `sha256:${HEX}`, browser_download_url: `${DL}/v0.8.8/SeisConv-Manual-A4.pdf` };
+    const got = selectInstallerAsset([pdf, asset()], 'v0.8.8');
+    assert.deepEqual(got, { name: 'SeisConv-Setup-0.8.8.exe', url: `${DL}/v0.8.8/SeisConv-Setup-0.8.8.exe`, size: 114225681, sha256: HEX });
+    // Another version's installer in the list is not this release's installer.
+    assert.equal(selectInstallerAsset([asset({ name: 'SeisConv-Setup-0.8.7.exe' })], 'v0.8.8'), null);
+    // The right name served from the wrong place is refused outright.
+    assert.equal(selectInstallerAsset([asset({ browser_download_url: 'https://example.com/SeisConv-Setup-0.8.8.exe' })], 'v0.8.8'), null);
+    assert.equal(selectInstallerAsset([asset({ browser_download_url: `${DL}/v0.8.8/other.exe` })], 'v0.8.8'), null);
+    // Size: whole bytes, positive, within the cap.
+    assert.equal(selectInstallerAsset([asset({ size: 0 })], 'v0.8.8'), null);
+    assert.equal(selectInstallerAsset([asset({ size: -5 })], 'v0.8.8'), null);
+    assert.equal(selectInstallerAsset([asset({ size: 1.5 })], 'v0.8.8'), null);
+    assert.equal(selectInstallerAsset([asset({ size: '114225681' })], 'v0.8.8'), null);
+    assert.equal(selectInstallerAsset([asset({ size: UPDATE_INSTALLER_MAX_BYTES + 1 })], 'v0.8.8'), null);
+    // Not an array, nothing usable, unreadable tag.
+    assert.equal(selectInstallerAsset({ length: 1, 0: asset() }, 'v0.8.8'), null);
+    assert.equal(selectInstallerAsset([null, 7, 'x'], 'v0.8.8'), null);
+    assert.equal(selectInstallerAsset([asset()], 'latest'), null);
+    // Only the first MAX_RELEASE_ASSETS entries are looked at.
+    const filler = Array.from({ length: MAX_RELEASE_ASSETS }, () => pdf);
+    assert.equal(selectInstallerAsset([...filler, asset()], 'v0.8.8'), null);
+  });
+
+  test('update: an installer without a usable digest is found but marked unverifiable', () => {
+    assert.equal(selectInstallerAsset([asset({ digest: undefined })], 'v0.8.8')?.sha256, null);
+    assert.equal(selectInstallerAsset([asset({ digest: 'sha256:abc' })], 'v0.8.8')?.sha256, null);
+    assert.equal(selectInstallerAsset([asset({ digest: `sha256:${HEX}` })], '0.8.8')?.sha256, HEX);
   });
 }
 

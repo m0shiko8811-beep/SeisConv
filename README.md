@@ -52,7 +52,7 @@
 
 SeisConv is a Windows desktop application built on Electron, with a platform-agnostic TypeScript core, for working with seismic data files. Drop in any file and SeisConv identifies the format revision, sample encoding (IBM float or IEEE), and byte order automatically, before you choose an output format. All parsing runs on a worker thread; the UI stays responsive on multi-gigabyte files.
 
-It **runs offline** - no account, no cloud, no licence server - and nothing you open is uploaded anywhere. Four optional features touch the internet: the real-map basemap on the SPS tabs, which fetches map tiles; the optional basemap band in a GeoTIFF export, which downloads the tiles it resamples; Sync clock in the Observer's Log, which queries an NTP time server; and Check for updates in Help, which asks GitHub once whether a newer release has been published and downloads nothing. None of the four is required to use the app, none of them is contacted unless you ask for it, and everything else, the roughly 7,000-CRS EPSG registry included, works with no connection at all.
+It **runs offline** - no account, no cloud, no licence server - and nothing you open is uploaded anywhere. Four optional features touch the internet: the real-map basemap on the SPS tabs, which fetches map tiles; the optional basemap band in a GeoTIFF export, which downloads the tiles it resamples; Sync clock in the Observer's Log, which queries an NTP time server; and Check for updates in Help, which asks GitHub once whether a newer release has been published and downloads nothing; on Windows its Update now button, only when you click and confirm it, downloads that release's installer from GitHub, verifies its SHA-256 fingerprint and installs it. None of the four is required to use the app, none of them is contacted unless you ask for it, and everything else, the roughly 7,000-CRS EPSG registry included, works with no connection at all.
 
 **Who it is for:** field crews, party chiefs and observers who need to check and convert a record on the spot, and processing geophysicists who need geometry and headers to be right before the data reaches a processing system.
 
@@ -441,7 +441,7 @@ will give you different figures.
 
 | What | Measured |
 |---|---|
-| Core unit tests | **506 passed, 0 failed, 4 skipped** without local sample data (`npm run test:core`) |
+| Core unit tests | **513 passed, 0 failed, 4 skipped** without local sample data (`npm run test:core`) |
 | Pixel render oracle | **197 display states** hashed and compared, so a refactor cannot silently change a drawing |
 | File Viewer section redraw | **234 ms down to 43 ms** after the display rework, on the same record |
 | Near-trace gather | **116 records** of a real field folder read and drawn in about **2 seconds** |

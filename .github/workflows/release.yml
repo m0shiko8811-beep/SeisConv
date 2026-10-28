@@ -289,7 +289,7 @@ jobs:
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
-          node scripts/release-check.mjs update-check-presence dist/main.js --expect present
+          node scripts/release-check.mjs update-check-presence dist/main.js dist/preload.js --expect present
 
       - name: Build Store package
         shell: pwsh
@@ -314,7 +314,7 @@ jobs:
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
-          node scripts/release-check.mjs update-check-presence dist/main.js --expect absent
+          node scripts/release-check.mjs update-check-presence dist/main.js dist/preload.js --expect absent
 
       - name: Build facts.json
         shell: pwsh

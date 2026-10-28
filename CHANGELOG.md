@@ -5,6 +5,40 @@ All notable changes to SeisConv are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.8.8] - 2026-10-28
+
+### Added
+
+- **Check for updates can now install the update for you.** In the Windows build from
+  GitHub, when Check for updates in Help finds a newer release, an Update now button offers
+  to install it. After you confirm the version and the size, SeisConv downloads that
+  release's installer from GitHub into an updates folder inside its own data folder, and
+  checks its digital fingerprint (SHA-256) against the one GitHub publishes for it. A file
+  that does not match is deleted and never run, and when GitHub publishes no fingerprint
+  the button is not offered at all. SeisConv then saves the observer log and starts the
+  installer, which closes SeisConv, installs the update and opens it again. You can cancel
+  while it downloads. If SeisConv was installed for all users of the computer, Windows asks
+  for permission first; if you refuse, nothing changes, SeisConv stays open, and Try again
+  starts the same checked installer without downloading it again. The downloaded installer
+  is deleted on the first start of the new version. Nothing reaches the internet unless you
+  click: there is still no check at startup and nothing runs in the background. PRIVACY.md
+  describes what the download sends to GitHub and what it keeps on your computer.
+
+### Changed
+
+- **Release notes in the update dialog are now easy to read.** They were shown as raw
+  Markdown, with the hash marks, asterisks and link brackets of the release page; they are
+  now plain text, with headings as text, bullets as bullets, links as their words, and
+  lines that only make sense on the release page, such as "download the installer below",
+  left out.
+
+### Security
+
+- **The Microsoft Store build carries no update code at all.** The Store updates SeisConv
+  itself, so its build already left the update check out of the program; it now also
+  leaves it out of the part that connects the window to the program, and the release
+  pipeline checks both parts before the Store package is built.
+
 ## [0.8.7] - 2026-10-26
 
 ### Fixed

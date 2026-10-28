@@ -777,7 +777,8 @@ table.olog-grid tr.olog-row-pending:hover td:not(.olog-rowhdr){background:rgba(2
 .help-foot .hf-note.crit{color:var(--red);}
 
 /* ---- Update-check result (a compact .modal variant). Text only: this dialog
-       reports what a release says, it never downloads or runs anything. ---- */
+       reports what a release says; the one-click "Update now" (confirmed in the
+       same dialog) is the only path that downloads, and main does that. ---- */
 .upd-modal{width:min(560px,100%);}
 .upd-modal .mbody{font-size:13px;color:var(--ink-2);line-height:1.5;}
 /* Same footer bar as the confirm/prompt dialogs (whose rule is scoped to
@@ -801,6 +802,12 @@ html[data-theme="dark"] .upd-crit{background:transparent;}
   max-height:210px;color:var(--ink-2);
 }
 .upd-url{font-family:var(--mono);font-size:11.5px;color:var(--ink-2);word-break:break-all;}
+/* A file path: each folder or file name is its own unbreakable span (Chromium
+   would otherwise break after every "-"), so lines break only at the <wbr>
+   after a separator; a single name wider than the dialog still wraps inside. */
+.upd-path{font-family:var(--mono);font-size:11.5px;color:var(--ink-2);margin-top:8px;}
+.upd-path .upd-seg{display:inline-block;white-space:nowrap;max-width:100%;}
+.upd-path .upd-seg.wide{white-space:normal;overflow-wrap:anywhere;}
 
 /* ---- Provenance: Undo snackbar (transient, bottom-centre) ---- */
 .undo-toast{
@@ -3304,14 +3311,16 @@ canvas.sec-attr{height:172px;margin-top:8px;}
       <span class="hf-note" id="manualUpdateNote"></span>
       <span style="flex:1"></span>
       <button class="btn sm hidden" id="checkUpdatesBtn" type="button"
-              title="Ask GitHub once, now, whether a newer SeisConv has been released. Nothing is downloaded or installed, and nothing is checked unless you press this.">Check for updates</button>
+              title="Ask GitHub once, now, whether a newer SeisConv has been released. The check downloads and installs nothing, and nothing is checked unless you press this.">Check for updates</button>
     </div>
   </div>
 </div>
 
 <!-- ============================ UPDATE-CHECK RESULT MODAL ============================ -->
-<!-- Reports what the check found, as text. It downloads nothing, installs nothing
-     and blocks nothing: every outcome is dismissible, including a critical one. -->
+<!-- Reports what the check found, as text. The check downloads nothing, installs
+     nothing and blocks nothing: every outcome is dismissible, including a critical
+     one. "Update now" (Windows build, verifiable installer only) asks for an
+     in-app confirmation first; only then does main download, verify and install. -->
 <div class="modal-back" id="updateBack" role="dialog" aria-modal="true" aria-labelledby="updateTitle">
   <div class="modal upd-modal">
     <div class="mh">
@@ -3324,13 +3333,18 @@ canvas.sec-attr{height:172px;margin-top:8px;}
     <!-- Filled by app.ts with DOM nodes + textContent only: the release notes are
          untrusted text off the network and are NEVER written as HTML. -->
     <div class="mbody" id="updateBody"></div>
-    <div class="mh confirm-foot">
+    <div class="mh confirm-foot" id="updateFoot">
       <button class="btn sm hidden" id="updateHideBtn" type="button"
               title="Stop showing the dot for this version. A newer release found by a later check brings it back.">Hide this reminder</button>
       <span style="flex:1"></span>
       <button class="btn sm" id="updateCloseBtn" type="button">Close</button>
       <button class="btn btn-primary sm hidden" id="updateOpenBtn" type="button"
               title="Open the release page in your browser. SeisConv does not download or install anything.">Open release page</button>
+      <button class="btn btn-primary sm hidden" id="updateNowBtn" type="button"
+              title="Download this release's installer from GitHub, check its digital fingerprint, install it and restart. Asks you to confirm first.">Update now</button>
+      <button class="btn sm hidden" id="updateCancelBtn" type="button">Cancel</button>
+      <button class="btn btn-primary sm hidden" id="updateGoBtn" type="button"
+              title="Download, verify and install now. The installer closes SeisConv and reopens it when the update is done.">Download and install</button>
     </div>
   </div>
 </div>
