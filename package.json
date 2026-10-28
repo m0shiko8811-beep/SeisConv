@@ -60,7 +60,7 @@
   },
   "devDependencies": {
     "@types/node": "^22.10.0",
-    "electron": "^44.9.3",
+    "electron": "^45.0.0",
     "electron-builder": "^26.15.3",
     "epsg-index": "^2.0.0",
     "esbuild": "^0.28.2",
