@@ -983,5 +983,20 @@
     "hash": "d9f08c78-0d6aad2b-0f1b233a",
     "w": 1116,
     "h": 514
+  },
+  "paramsheet:map:lines:nobasemap": {
+    "hash": "06c0bc4d-327fca67-34e42433",
+    "w": 1600,
+    "h": 1130
+  },
+  "paramsheet:map:polygon:nobasemap": {
+    "hash": "677b042b-31d03434-349bbb9c",
+    "w": 1600,
+    "h": 1130
+  },
+  "paramsheet:map:degrees:nobasemap": {
+    "hash": "d2ac62a5-32e2d204-35037d80",
+    "w": 1600,
+    "h": 1130
   }
 }

@@ -1023,6 +1023,47 @@ async function main() {
       excluded.push('section:reduce=* and section:spacing=* - LE fixture not found');
     }
 
+    // ================= PARAMETERS SHEET area map (drawAreaMap) =================
+    // LAST, on its own canvas (#psMapCanvas), so no earlier state can move. The
+    // map is drawn with NO basemap (no network, fully deterministic): background,
+    // coordinate grid with labels, extent outline / polygon, named lines with
+    // start and end marks, numbered corners, scale bar, north arrow, title block.
+    // Everything it draws comes from the fields set here: "New sheet" first so a
+    // stale draft cannot leak in, and the title / dates are typed explicitly
+    // (nothing from the clock or the app version reaches this canvas).
+    await gotoTab(win, 'tab-paramsheet', 'panel-paramsheet');
+    const psNew = async () => {
+      await win.click('#psNewBtn');
+      await win.waitForSelector('#confirmBack.open', { timeout: 5000 });
+      await win.click('#confirmOk');
+      await twoFrames(win);
+    };
+    const psFill = async (id, v) => { await win.fill('#' + id, String(v)); await win.locator('#' + id).dispatchEvent('change'); };
+    const psMap = async (key, text) => {
+      await win.click('#psStep-coords');
+      await win.fill('#psCoordText', text);
+      await win.click('#psCoordRead');
+      await win.click('#psCoordConfirm');
+      await win.selectOption('#psBasemap', '');
+      await win.click('#psStep-review');
+      await win.waitForFunction(() => /^Preview/.test(document.getElementById('psMapMsg')?.textContent || ''), null, { timeout: 15000 })
+        .catch(() => { throw new Error(`${key}: the map preview never drew`); });
+      await twoFrames(win);
+      await capture(key, 'psMapCanvas');
+    };
+    await psNew();
+    await psFill('ps-job-jobType', 'Refraction Tomography');
+    await psFill('ps-job-prospect', 'Golden block');
+    await psFill('ps-job-startDate', '2027-01-05');
+    await psFill('ps-job-endDate', '2027-01-20');
+    // Two named lines in ITM metres (start circle, end square, names).
+    await psMap('paramsheet:map:lines:nobasemap', 'id,E,N\nR1-S,200000,600000\nR1-E,201200,600150\nR2-S,200050,600600\nR2-E,201150,600800\n');
+    // A closed outline (filled polygon with numbered corners).
+    await psMap('paramsheet:map:polygon:nobasemap', 'E N\n200000 600000\n201500 600000\n201800 600900\n200300 601100\n200000 600000\n');
+    // Decimal degrees: converted to ITM in MAIN (paramSheetCoords) before drawing.
+    await psMap('paramsheet:map:degrees:nobasemap', 'lat,lon\n31.7712,35.2101\n31.7720,35.2150\n31.7801,35.2155\n31.7790,35.2090\n');
+    await psNew();
+
     console.log(`\nCaptured ${Object.keys(results).length} canvas states.`);
     if (errors.length) {
       console.log(`\nWARNING: ${errors.length} console/page error(s) during the run:`);

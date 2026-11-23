@@ -31,6 +31,7 @@ import {
   launchEnv,
 } from './harness.mjs';
 import { resolveValue } from './local-paths.mjs';
+import JSZip from 'jszip';
 
 // -- Test files (override via env) ------------------------------------------
 // SEGY comes from the shared harness. LE/SPS are exercised only by this full
@@ -576,6 +577,90 @@ const globalPageErrors = [];
     }
     return { assertFail: fails.length ? fails.join('; ') : null };
   }, 'tab-conv-batch');
+
+  // -- 9) PARAMETERS SHEET - fill a known job, save the XLSX OFFLINE, read it back --
+  // Every tile fetch in MAIN is made to fail (globalThis.fetch replaced for the
+  // step, restored after), so this proves the "never fail the export because of
+  // tiles" path: the workbook must still carry the Map sheet with a grey map and
+  // the offline note. The save dialog answers a temp path; the file is unzipped
+  // and checked cell by cell, then removed. Starts and ends with New sheet so a
+  // draft from an earlier run cannot change what is checked.
+  await step('tab-paramsheet', 'panel-paramsheet', '9-paramsheet.png', async (notes) => {
+    const fails = [];
+    const root = mkdtempSync(join(tmpdir(), 'seisconv_qa_ps_'));
+    const out = join(root, 'qa_parameter_sheet.xlsx');
+    const newSheet = async () => {
+      await win.click('#psNewBtn');
+      await win.waitForSelector('#confirmBack.open', { timeout: 5000 }).catch(() => {});
+      await win.click('#confirmOk').catch(() => {});
+      await sleep(250);
+    };
+    const fill = async (id, v) => { await win.fill('#' + id, String(v)); await win.locator('#' + id).dispatchEvent('change'); };
+    try {
+      await app.evaluate(async ({ dialog }, p) => { dialog.showSaveDialog = async () => ({ canceled: false, filePath: p }); }, out);
+      await app.evaluate(() => {
+        globalThis.__qaRealFetch = globalThis.fetch;
+        globalThis.fetch = async () => { throw new Error('tiles blocked by QA'); };
+      });
+      await newSheet();
+      // Job: the preset fills 10 m / 20 m, 2 ms, 480 channels.
+      await fill('ps-job-jobType', 'Vibroseis 2D Reflection');
+      await fill('ps-job-prospect', 'QA block');
+      await fill('ps-job-startDate', '2027-01-05');
+      await win.click('#psNextBtn');
+      // Geometry: three 12 km lines -> 1803 shots, nominal fold 120.
+      await fill('ps-geom-lineLengthM', 12000);
+      for (let i = 0; i < 3; i++) await win.click('#psAddLineBtn');
+      for (let i = 0; i < 5; i++) await win.click('#psNextBtn');   // Source .. Coordinates
+      const onCoords = ((await win.textContent('#psStepTitle')) || '').trim();
+      if (onCoords !== 'Coordinates') fails.push(`expected the Coordinates step, got "${onCoords}"`);
+      await win.fill('#psCoordText', 'id,E,N\nL1-S,200000,600000\nL1-E,212000,600000\nL2-S,200000,600500\nL2-E,212000,600500\n');
+      await win.click('#psCoordRead');
+      const detected = ((await win.textContent('#psDetectText')) || '').trim();
+      notes.push(`detected: ${detected}`);
+      if (!/EPSG:2039/.test(detected) || !/4 points on 2 lines/.test(detected)) fails.push(`detection said "${detected}"`);
+      await win.click('#psCoordConfirm');
+      await win.selectOption('#psBasemap', 'satellite');
+      await win.click('#psNextBtn');
+      await win.waitForFunction(() => /Preview/.test(document.getElementById('psMapMsg')?.textContent || ''), null, { timeout: 15000 })
+        .catch(() => fails.push('the review map preview did not draw'));
+      const map = await canvasBlank(win, 'psMapCanvas', { r: 0xec, g: 0xec, b: 0xec });
+      if (map.blank) fails.push('review map canvas is blank: ' + map.reason);
+      await win.click('#psExportBtn');
+      await win.waitForFunction(() => /Saved|failed|Could not/.test(document.getElementById('psStatus')?.textContent || ''), null, { timeout: 60000 })
+        .catch(() => fails.push('the export did not report in 60s'));
+      const status = ((await win.textContent('#psStatus')) || '').trim();
+      notes.push(`status: ${status.slice(0, 90)}`);
+      if (!existsSync(out)) fails.push('no XLSX was written');
+      else {
+        const zip = await JSZip.loadAsync(readFileSync(out));
+        const part = async (n) => (zip.file(n) ? zip.file(n).async('string') : '');
+        const wb = await part('xl/workbook.xml');
+        const names = [...wb.matchAll(/<sheet name="([^"]+)"/g)].map((m) => m[1]);
+        notes.push(`sheets: ${names.join(', ')}`);
+        if (names.join('|') !== 'Parameters|Area|Map|About') fails.push(`sheets were ${names.join('|')}`);
+        const s1 = await part('xl/worksheets/sheet1.xml');
+        for (const want of ['Vibroseis 2D Reflection', '<v>480</v>', '<v>1803</v>', '<v>120</v>', '<v>46392</v>']) {
+          if (!s1.includes(want)) fails.push(`Parameters sheet lacks ${want}`);
+        }
+        const s2 = await part('xl/worksheets/sheet2.xml');
+        if (!s2.includes('<v>212000</v>') || !s2.includes('L2-E')) fails.push('Area sheet lacks the points');
+        const s3 = await part('xl/worksheets/sheet3.xml');
+        if (!/Basemap not available \(offline\)/.test(s3)) fails.push('Map sheet lacks the offline note');
+        const png = zip.file('xl/media/image1.png') ? await zip.file('xl/media/image1.png').async('uint8array') : new Uint8Array(0);
+        if (png.length < 10000 || png[0] !== 0x89 || png[1] !== 0x50) fails.push(`embedded map PNG missing or tiny (${png.length} bytes)`);
+        notes.push(`xlsx ${readFileSync(out).length} bytes, map png ${png.length} bytes`);
+      }
+      await win.locator('#psMapCanvas').scrollIntoViewIfNeeded().catch(() => {});
+      await win.screenshot({ path: join(SHOTS, '9b-paramsheet-map.png') }).catch(() => {});
+      await newSheet();
+    } finally {
+      await app.evaluate(() => { if (globalThis.__qaRealFetch) { globalThis.fetch = globalThis.__qaRealFetch; delete globalThis.__qaRealFetch; } }).catch(() => {});
+      await mockDialogs(app, []).catch(() => {});
+      try { rmSync(root, { recursive: true, force: true }); } catch { /* best effort */ }
+    }
+    return { assertFail: fails.length ? fails.join('; ') : null };
+  });
 
   // -- teardown + report --
   await app.close();
