@@ -53,20 +53,20 @@
     "release:install": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/install-latest.ps1"
   },
   "dependencies": {
-    "@types/leaflet": "^1.9.21",
-    "jszip": "^3.10.1",
+    "@types/leaflet": "^1.9.22",
+    "jszip": "^3.10.2",
     "leaflet": "^1.9.4",
-    "leaflet-rotate": "^0.2.8"
+    "leaflet-rotate": "^0.6.2"
   },
   "devDependencies": {
-    "@types/node": "^22.10.0",
+    "@types/node": "^22.20.5",
     "electron": "^44.9.3",
     "electron-builder": "^26.15.3",
     "epsg-index": "^2.0.0",
     "esbuild": "^0.28.2",
-    "playwright": "^1.62.1",
-    "png-to-ico": "^3.0.1",
-    "tsx": "^4.19.2",
+    "playwright": "^1.65.1",
+    "png-to-ico": "^3.0.2",
+    "tsx": "^4.23.15",
     "typescript": "^5.6.0"
   },
   "overrides": {
