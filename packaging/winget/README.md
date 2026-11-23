@@ -59,7 +59,7 @@ winget install Microsoft.WingetCreate
 
 # From the repo root. Point it at the release asset; it downloads the installer,
 # computes the hash itself and pre-fills what it can detect.
-wingetcreate new https://github.com/m0shiko8811-beep/SeisConv/releases/download/v0.8.1/SeisConv-Setup-0.8.1.exe
+wingetcreate new https://github.com/m0shiko8811-beep/SeisConv/releases/download/v0.8.9/SeisConv-Setup-0.8.9.exe
 ```
 
 When it prompts, copy the field values out of the three YAML files in this folder so
