@@ -1,29 +1,29 @@
 {
   "schema": 1,
-  "version": "0.8.8",
-  "preparedAt": "2026-10-28T09:08:31.019Z",
+  "version": "0.8.9",
+  "preparedAt": "2026-11-23T16:16:12.965Z",
   "typecheck": "clean",
   "coreTests": {
-    "passed": 513,
+    "passed": 561,
     "failed": 0,
     "skipped": 4
   },
   "qa": {
-    "passed": 13,
-    "total": 13,
+    "passed": 14,
+    "total": 14,
     "failed": 0,
     "pageErrors": 0,
     "consoleErrors": 0
   },
   "bound": {
-    "core": "2f3bf255f4eb2eb65c944b30d4fc00248766f800",
-    "electron": "9c2f85eaca45539df8d60881eb7ac0e3694e35a5",
-    "renderer": "f3f4000c699873dc62968fbde7ff8af5ce943a09",
+    "core": "704ec83419ff7fc04381c662b59015c18dbbaa36",
+    "electron": "64f09ef4a9cd5f96e7ff7baee0dade54f150617f",
+    "renderer": "0339c90e695e1a261683552509a0724c763b2e61",
     "workers": "a8ac364c54f3c59c0c0c4722564e7ac946991676",
     "build": "26558a03e0ed6a8f6265d129d5c62717c77b6d8e",
-    "qa": "c706e24e461a0808f059fde5f4e30862c72eeb66",
-    "scripts": "702f5d42d67728c5d41a13ebe294cc3a3b563458",
-    "docs": "b6c80bdd2602d0120fc6c4ddbc89ea4f0d0a9975",
+    "qa": "4381fb34a3eb177f18992d756e7d925bcd420b3f",
+    "scripts": "2a9bbc2ce5592a570c22a9c333ffb6b7de1f729a",
+    "docs": "23bc1ca7193ba2dc41cdfe3da4807e78f02cfccd",
     "dependencies": "8e151201cc67d82070a363cb887f547aa5b3585dea1951b3b010f6b72041fa51"
   }
 }

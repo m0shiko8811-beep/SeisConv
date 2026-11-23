@@ -9,7 +9,7 @@
       "selector": "#psStep-job",
       "rect": {
         "x": 109,
-        "y": 217,
+        "y": 261,
         "w": 212,
         "h": 56
       }
@@ -20,7 +20,7 @@
       "selector": "#ps-job-jobType",
       "rect": {
         "x": 373,
-        "y": 226,
+        "y": 358,
         "w": 381,
         "h": 30
       }
@@ -31,7 +31,7 @@
       "selector": "#ps-job-geometry",
       "rect": {
         "x": 770,
-        "y": 226,
+        "y": 358,
         "w": 381,
         "h": 32
       }
@@ -42,7 +42,7 @@
       "selector": "#psNextBtn",
       "rect": {
         "x": 443,
-        "y": 640,
+        "y": 855,
         "w": 59,
         "h": 35
       }
@@ -50,5 +50,5 @@
   ],
   "missingCallouts": [],
   "frameLeaks": [],
-  "bytes": 132158
+  "bytes": 161743
 }

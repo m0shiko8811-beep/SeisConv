@@ -9,7 +9,7 @@
       "selector": "#psMapCanvas",
       "rect": {
         "x": 373,
-        "y": 148,
+        "y": 170,
         "w": 1176,
         "h": 831
       }
@@ -17,5 +17,5 @@
   ],
   "missingCallouts": [],
   "frameLeaks": [],
-  "bytes": 113921
+  "bytes": 124793
 }
