@@ -340,6 +340,32 @@ export const PS_STEP_TITLES: Record<PsStep, string> = {
   review: 'Review and export',
 };
 
+/** True when the user filled at least one field of a step (the wizard's green
+ *  "done" circle). Form defaults the user never chose (survey geometry 2D, the
+ *  weight unit, the basemap, an unticked box) do not count; Coordinates counts
+ *  only a confirmed point list or the "No area yet" skip. Review has no fields. */
+export function stepFilled(m: ParamSheet, s: PsStep): boolean {
+  const has = (v: unknown): boolean => {
+    if (v == null || v === false) return false;
+    if (typeof v === 'string') return v.trim() !== '';
+    if (typeof v === 'number') return Number.isFinite(v);
+    if (Array.isArray(v)) return v.some(has);
+    if (typeof v === 'object') return Object.values(v as Record<string, unknown>).some(has);
+    return true;
+  };
+  const anyBut = (o: Record<string, unknown>, skip: string[]) => Object.keys(o).some((k) => !skip.includes(k) && has(o[k]));
+  switch (s) {
+    case 'job': return !!m.logo || m.job.geometry !== '2D' || anyBut(m.job, ['geometry']);
+    case 'geometry': return anyBut(m.geom, []);
+    case 'source': return anyBut(m.source, ['unitWeightUnit']);
+    case 'receiver': return anyBut(m.receiver, []);
+    case 'recording': return anyBut(m.recording, []);
+    case 'totals': return anyBut(m.totals, []);
+    case 'coords': return m.coords.skip || (m.coords.confirmed && m.coords.points.length > 0);
+    case 'review': return false;
+  }
+}
+
 const ISO_DATE = /^(\d{4})-(\d{2})-(\d{2})$/;
 /** True for a real calendar date in YYYY-MM-DD form. */
 export function isIsoDate(s: string): boolean {

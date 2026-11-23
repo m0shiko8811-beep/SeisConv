@@ -24,7 +24,7 @@ import {
 } from '../../core/sheet/lists';
 import { presetFor, type JobPreset } from '../../core/sheet/presets';
 import {
-  emptySheet, applyPreset, deriveSheet, validateStep, crossChecks, allHints, fmtNum,
+  emptySheet, applyPreset, deriveSheet, validateStep, crossChecks, allHints, fmtNum, stepFilled,
   PS_STEPS, PS_STEP_TITLES, PS_MAX_LINES, type ParamSheet, type PsStep, type Issue,
 } from '../../core/sheet/model';
 import { sniffCoords, crsGuessName, type SniffResult } from '../../core/sheet/coordsniff';
@@ -63,7 +63,6 @@ export interface PsDeps {
 let D: PsDeps;
 let M: ParamSheet = emptySheet();
 let step: PsStep = 'job';
-const visited = new Set<PsStep>(['job']);
 /** Detection result of the current coordinate text (not persisted). */
 let sniff: SniffResult | null = null;
 let coordText = '';
@@ -1134,7 +1133,8 @@ function refreshChecks(): void {
     const row = $(`psStep-${s}`);
     if (!row) continue;
     row.classList.toggle('active', s === step);
-    row.classList.toggle('done', s !== step && visited.has(s));
+    // Green only when something in the step was filled; visiting it is not enough.
+    row.classList.toggle('done', s !== step && stepFilled(M, s));
     row.classList.remove('err');
     const sum = $(`psSum-${s}`);
     if (sum) sum.textContent = stepSummary(s);
@@ -1184,7 +1184,6 @@ function renderStep(): void {
 
 function go(s: PsStep): void {
   step = s;
-  visited.add(s);
   renderStep();
   const top = $('panel-paramsheet');
   top?.scrollIntoView({ block: 'start' });
@@ -1207,7 +1206,6 @@ export async function paramSheetNew(): Promise<void> {
   M = emptySheet();
   lastPresetFor = '';
   sniff = null; coordText = ''; coordFile = ''; previewBasemap = null;
-  visited.clear(); visited.add('job');
   D.audit('clear', 'cleared the parameter sheet', 'paramsheet');
   setStatus('');
   go('job');

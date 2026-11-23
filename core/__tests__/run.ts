@@ -184,7 +184,7 @@ import { createHash } from 'node:crypto';
 import { buildStyledXlsx, xlsxCleanText } from '../export/xlsx';
 import { JOB_TYPES, SOURCE_TYPES, MANUFACTURER_MODELS, modelsFor, sourceKind, isHorizontalPhone } from '../sheet/lists';
 import { JOB_PRESETS, presetFor } from '../sheet/presets';
-import { emptySheet, applyPreset, deriveSheet, pointsAlong, validateStep, crossChecks, allHints, isIsoDate, PS_STEPS, type ParamSheet } from '../sheet/model';
+import { emptySheet, applyPreset, deriveSheet, pointsAlong, validateStep, crossChecks, allHints, isIsoDate, stepFilled, PS_STEPS, type ParamSheet } from '../sheet/model';
 import { ringArea, ringPerimeter, cleanRing, isClosed, pathLength, bbox, selfIntersects, convexHull } from '../gis/polygon';
 import { sniffCoords, parseCoordField, suggestGridCode, utmCodeFor, SNIFF_MAX_POINTS } from '../sheet/coordsniff';
 import { sanitizeLogo, logoBytes, fitInside, fitToHeight, LOGO_MAX_BYTES } from '../sheet/logo';
@@ -7980,6 +7980,22 @@ async function paramSheetTests(): Promise<void> {
     for (const v of [d.shots, d.fold2d, d.maxStations, d.nyquistHz, d.spreadLengthM]) assert.equal(v, null);
     assert.equal(pointsAlong(10, -1), null);
     assert.equal(pointsAlong(10, 2.5), 5);
+  });
+  test('sheet steps: an empty sheet has no filled step; one typed value fills only its step', () => {
+    const m = emptySheet();
+    for (const s of PS_STEPS) assert.equal(stepFilled(m, s), false, `${s} looks filled on an empty sheet`);
+    m.geom.rxIntervalM = 2;
+    assert.equal(stepFilled(m, 'geometry'), true);
+    for (const s of PS_STEPS) if (s !== 'geometry') assert.equal(stepFilled(m, s), false, s);
+    const c = emptySheet();
+    c.coords.points = [{ id: 'A', x: 1, y: 2 }];
+    assert.equal(stepFilled(c, 'coords'), false, 'unconfirmed points do not fill Coordinates');
+    c.coords.confirmed = true;
+    assert.equal(stepFilled(c, 'coords'), true);
+    const k = emptySheet(); k.coords.skip = true;
+    assert.equal(stepFilled(k, 'coords'), true, '"No area yet" fills Coordinates');
+    const j = emptySheet(); j.job.geometry = '3D';
+    assert.equal(stepFilled(j, 'job'), true, 'a non-default survey geometry fills Job');
   });
   test('sheet hints: nothing is required, and nothing ever blocks (errors always empty)', () => {
     const m = emptySheet();
