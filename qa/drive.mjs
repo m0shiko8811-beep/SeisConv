@@ -606,6 +606,14 @@ const globalPageErrors = [];
         globalThis.fetch = async () => { throw new Error('tiles blocked by QA'); };
       });
       await newSheet();
+      // Nothing is mandatory: on an EMPTY sheet Next is enabled, any step can be
+      // opened, and Save on Review is enabled.
+      const emptyNext = await win.evaluate(() => !document.getElementById('psNextBtn')?.disabled);
+      await win.click('#psStep-review');
+      const emptySave = await win.evaluate(() => !!document.getElementById('psExportBtn') && !document.getElementById('psExportBtn').disabled);
+      notes.push(`empty sheet: next=${emptyNext} save=${emptySave}`);
+      if (!emptyNext || !emptySave) fails.push('an empty sheet blocks Next or Save');
+      await win.click('#psStep-job');
       // Job: the preset fills 10 m / 20 m, 2 ms, 480 channels.
       await fill('ps-job-jobType', 'Vibroseis 2D Reflection');
       await fill('ps-job-prospect', 'QA block');

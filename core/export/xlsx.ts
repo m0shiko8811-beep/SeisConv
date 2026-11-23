@@ -224,6 +224,10 @@ export interface StyledSheet {
   fitPage?: boolean;
   /** Set the print area to the used range (A1 to the last used cell). */
   printArea?: boolean;
+  /** Printed footer, in Excel header/footer codes (&L left, &R right, &P page). */
+  footer?: string;
+  /** Hide the on-screen gridlines (a form-like sheet). */
+  hideGrid?: boolean;
 }
 
 /** Excel's limit for one cell's text. */
@@ -332,7 +336,7 @@ function styledSheetXml(t: StyledSheet, book: StyleBook, first: boolean, drawing
   parts.push(`<dimension ref="A1:${colLetter(Math.max(0, maxCol - 1))}${Math.max(1, rows.length)}"/>`);
   const fr = Math.max(0, Math.min(1000, Math.floor(t.freezeRows || 0)));
   const pane = fr > 0 ? `<pane ySplit="${fr}" topLeftCell="A${fr + 1}" activePane="bottomLeft" state="frozen"/>` : '';
-  parts.push(`<sheetViews><sheetView${first ? ' tabSelected="1"' : ''} workbookViewId="0">${pane}</sheetView></sheetViews>`);
+  parts.push(`<sheetViews><sheetView${t.hideGrid ? ' showGridLines="0"' : ''}${first ? ' tabSelected="1"' : ''} workbookViewId="0">${pane}</sheetView></sheetViews>`);
   parts.push('<sheetFormatPr defaultRowHeight="15"/>');
   const widths = (t.cols || []).slice(0, 200);
   if (widths.length) {
@@ -354,6 +358,7 @@ function styledSheetXml(t: StyledSheet, book: StyleBook, first: boolean, drawing
   parts.push('<pageMargins left="0.5" right="0.5" top="0.6" bottom="0.6" header="0.3" footer="0.3"/>');
   const fit = t.fitPage ? ' fitToWidth="1" fitToHeight="1"' : t.fitWidth ? ' fitToWidth="1" fitToHeight="0"' : '';
   parts.push(`<pageSetup paperSize="9" orientation="${t.landscape ? 'landscape' : 'portrait'}"${fit}/>`);
+  if (t.footer) parts.push(`<headerFooter><oddFooter>${xmlEscape(xlsxCleanText(t.footer).slice(0, 250))}</oddFooter></headerFooter>`);
   if (drawingRid) parts.push(`<drawing r:id="${drawingRid}"/>`);
   return (
     '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>' +

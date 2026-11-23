@@ -155,7 +155,7 @@ export function emptySheet(): ParamSheet {
     v: 1,
     job: {
       jobType: '', geometry: '2D', client: '', prospect: '', jobNumber: '', contractor: '', crew: '',
-      manager: '', observer: '', startDate: '', endDate: '', targetDepthM: null, preparedBy: '', revision: 'A', notes: '',
+      manager: '', observer: '', startDate: '', endDate: '', targetDepthM: null, preparedBy: '', revision: '', notes: '',
     },
     geom: {
       rxIntervalM: null, sxIntervalM: null, lineLengthM: null, spreadType: '', spread: '', activeChannels: null,
@@ -170,7 +170,7 @@ export function emptySheet(): ParamSheet {
     receiver: { manufacturer: '', model: '', naturalFreqHz: null, geophoneType: '', phonesPerStation: null, comments: '' },
     recording: {
       instrumentMfr: '', instrumentModel: '', sampleRateMs: null, recordLengthS: null, lowCutHz: null, highCutHz: null,
-      highCutAntiAlias: false, notchHz: null, preampGainDb: null, aux: ['Time Break', '', '', ''], dataFormat: '',
+      highCutAntiAlias: false, notchHz: null, preampGainDb: null, aux: ['', '', '', ''], dataFormat: '',
       correlation: '', coordSystem: '',
     },
     totals: { totalShots: null, totalFiles: null, weather: '' },
@@ -304,7 +304,13 @@ export function deriveSheet(m: ParamSheet): Derived {
   };
 }
 
-// -- validation ---------------------------------------------------------------
+// -- hints ----------------------------------------------------------------------
+//
+// Nothing in a parameter sheet is mandatory: the planner fills in whatever they
+// want and it is exported as it stands. The checks below therefore only produce
+// HINTS (StepCheck.warnings); `errors` is always empty and kept only so callers
+// have one shape. A hint is a likely mistake (Nyquist, typed vs derived totals,
+// MASW depth, SH phones, an end date before the start), never "field required".
 
 export interface Issue {
   /** Model field path the issue is about (for outlining the input), or ''. */
@@ -342,16 +348,15 @@ export function isIsoDate(s: string): boolean {
 }
 
 /** Check an optional number against [min, max]; integer when `int`. */
-function num(out: Issue[], field: string, label: string, v: number | null, min: number, max: number, int = false, required = false): void {
-  if (v == null) { if (required) out.push({ field, msg: `${label} is required.` }); return; }
+function num(out: Issue[], field: string, label: string, v: number | null, min: number, max: number, int = false, _optional = false): void {
+  if (v == null) return;
   if (!fin(v)) { out.push({ field, msg: `${label} must be a number.` }); return; }
   if (int && !Number.isInteger(v)) { out.push({ field, msg: `${label} must be a whole number.` }); return; }
   if (v < min || v > max) out.push({ field, msg: `${label} must be between ${min} and ${max}.` });
 }
 
-function text(out: Issue[], field: string, label: string, v: string, max: number, required = false): void {
-  if (required && !(v || '').trim()) out.push({ field, msg: `${label} is required.` });
-  else if ((v || '').length > max) out.push({ field, msg: `${label} is longer than ${max} characters.` });
+function text(out: Issue[], field: string, label: string, v: string, max: number, _optional = false): void {
+  if ((v || '').length > max) out.push({ field, msg: `${label} is longer than ${max} characters.` });
 }
 
 /** Per-step checks. Errors block Next; warnings are shown but do not block. */
@@ -387,7 +392,6 @@ export function validateStep(step: PsStep, m: ParamSheet): StepCheck {
       text(errors, 'geom.spreadType', 'Spread type', g.spreadType, PS_MAX_TEXT);
       text(errors, 'geom.receiverTable', 'Receiver table', g.receiverTable, PS_MAX_TEXT);
       if (g.lines.length > PS_MAX_LINES) errors.push({ field: 'geom.lines', msg: `At most ${PS_MAX_LINES} lines.` });
-      if (needIntervals && g.lines.length === 0) errors.push({ field: 'geom.lines', msg: 'Add at least one line (name and length).' });
       const seen = new Set<string>();
       g.lines.forEach((l, i) => {
         const nm = (l.name || '').trim();
@@ -486,8 +490,7 @@ export function validateStep(step: PsStep, m: ParamSheet): StepCheck {
       const c = m.coords;
       if (c.skip) break;
       if (c.points.length > PS_MAX_POINTS) errors.push({ field: 'coords.points', msg: `At most ${PS_MAX_POINTS} points.` });
-      if (c.points.length === 0) errors.push({ field: 'coords.points', msg: 'Paste or load the coordinates, or choose "No area yet".' });
-      else if (!c.confirmed) errors.push({ field: 'coords.crs', msg: 'Confirm the detected layout and coordinate system first.' });
+      if (c.points.length && !c.confirmed) errors.push({ field: 'coords.crs', msg: 'The detected layout and coordinate system are not confirmed yet.' });
       if (c.points.some((p) => !fin(p.x) || !fin(p.y))) errors.push({ field: 'coords.points', msg: 'A point has a coordinate that is not a number.' });
       if (c.crsCode === 'EPSG:4326' && c.points.some((p) => Math.abs(p.y) > 90 || Math.abs(p.x) > 180)) {
         errors.push({ field: 'coords.points', msg: 'Latitude must be within +/-90 and longitude within +/-180.' });
@@ -497,7 +500,7 @@ export function validateStep(step: PsStep, m: ParamSheet): StepCheck {
     case 'review':
       break;
   }
-  return { errors, warnings };
+  return { errors: [], warnings: errors.concat(warnings) };
 }
 
 /** Checks that need more than one step's values. Run on Recording, Totals and
@@ -545,7 +548,7 @@ export function crossChecks(m: ParamSheet): StepCheck {
   if (kind === 'vibrator' && fin(m.receiver.naturalFreqHz) && fin(s.sweepStartHz) && m.receiver.naturalFreqHz > s.sweepStartHz * 2) {
     warnings.push({ field: 'receiver.naturalFreqHz', msg: 'Geophone natural frequency is well above the sweep start frequency.' });
   }
-  return { errors, warnings };
+  return { errors: [], warnings: errors.concat(warnings) };
 }
 
 /** Short number text: up to 3 decimals, no trailing zeros. */
@@ -555,15 +558,11 @@ export function fmtNum(v: number | null | undefined, maxDec = 3): string {
   return String(Object.is(r, -0) ? 0 : r);
 }
 
-/** The steps whose own checks currently fail (for the stepper badges). */
-export function failingSteps(m: ParamSheet): PsStep[] {
-  return PS_STEPS.filter((s) => validateStep(s, m).errors.length > 0);
-}
-
-/** Everything that blocks export: every step's errors plus the cross-checks. */
-export function exportBlockers(m: ParamSheet): Issue[] {
+/** Every hint for the whole sheet: each step's own plus the cross-step checks.
+ *  Hints never block anything - the sheet is exported with whatever was filled. */
+export function allHints(m: ParamSheet): Issue[] {
   const out: Issue[] = [];
-  for (const s of PS_STEPS) out.push(...validateStep(s, m).errors);
-  out.push(...crossChecks(m).errors);
+  for (const s of PS_STEPS) out.push(...validateStep(s, m).warnings);
+  out.push(...crossChecks(m).warnings);
   return out;
 }

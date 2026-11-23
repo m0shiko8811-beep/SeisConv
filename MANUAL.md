@@ -704,7 +704,7 @@ Plan one seismic job step by step and save a single Excel workbook for the field
 
 ### Controls
 
-- **Steps** - the eight wizard steps (Job, Geometry, Source, Receiver, Recording, Totals and conditions, Coordinates, Review and export). Click any step to go there; a green number means the step checks out, a red one that it has a problem. Back never loses data.
+- **Steps** - the eight wizard steps (Job, Geometry, Source, Receiver, Recording, Totals and conditions, Coordinates, Review and export). Click any step, in any order. Nothing is mandatory: fill in whatever you want and leave the rest empty; the sheet lists only what was filled. A green number marks a step you have visited. Back never loses data.
 - **Job type** - chosen first. Picking one of the listed job types fills the recommended defaults (intervals, sample rate, record length, low cut, source, stack, geophone frequency and type, spread type, channels). The recommended RANGE is shown under each field; every value stays editable and free typing is always allowed.
 - **Survey geometry** - 2D line(s), 3D grid, borehole / downhole, or passive / point. The 3D fields (line intervals, patch, azimuth) appear only for a 3D grid.
 - **Lines** - the named lines of the job, each with its length. The line count is derived, never typed. Stations and shots per line are shown beside each line.
@@ -721,7 +721,7 @@ Plan one seismic job step by step and save a single Excel workbook for the field
 - 2D nominal fold = channels x receiver interval / (2 x source interval). 3D: bin = RI/2 x SI/2, fold = (channels per patch line x RI / (2 x SLI)) x (patch lines / 2).
 - Nyquist = 500 / sample rate (ms); samples per trace = record length / sample rate + 1.
 
-### Checks it runs
+### Hints it gives (never blocking)
 
 - High cut and the sweep frequencies must stay below Nyquist; low cut below high cut.
 - Active channels against the stations on the longest line.
@@ -741,8 +741,8 @@ Plan one seismic job step by step and save a single Excel workbook for the field
 
 1. Pick the **Job type**; check the filled values and type the job details.
 2. On **Geometry**, set the intervals and channels, then **Add line** for each line with its length.
-3. Walk Source, Receiver, Recording and Totals; fix anything listed in red, read anything listed as a check.
-4. On **Coordinates**, paste or load the points, read what was detected, correct the CRS if needed and press **Confirm** (or tick **No area yet**).
+3. Walk Source, Receiver, Recording and Totals as far as you want; read any **Hint** (a likely mistake). Hints never stop you.
+4. On **Coordinates**, paste or load the points, read what was detected, correct the CRS if needed and press **Confirm** (or tick **No area yet**, or leave it empty).
 5. On **Review and export**, press **Save parameter sheet (XLSX)...**.
 
 ### Good to know

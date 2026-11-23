@@ -637,7 +637,7 @@ export const MANUAL: Record<string, HelpTopic> = {
     title: 'Parameters Sheet',
     what: 'Plan one seismic job step by step and save a single Excel workbook for the field crew: every planned (dry) parameter, the area coordinates, and an area map. Nothing here is measured; values are typed, picked from lists, or derived from what you typed.',
     controls: [
-      '<b>Steps</b> - the eight wizard steps (Job, Geometry, Source, Receiver, Recording, Totals and conditions, Coordinates, Review and export). Click any step to go there; a green number means the step checks out, a red one that it has a problem. Back never loses data.',
+      '<b>Steps</b> - the eight wizard steps (Job, Geometry, Source, Receiver, Recording, Totals and conditions, Coordinates, Review and export). Click any step, in any order. Nothing is mandatory: fill in whatever you want and leave the rest empty; the sheet lists only what was filled. A green number marks a step you have visited. Back never loses data.',
       '<b>Job type</b> - chosen first. Picking one of the listed job types fills the recommended defaults (intervals, sample rate, record length, low cut, source, stack, geophone frequency and type, spread type, channels). The recommended RANGE is shown under each field; every value stays editable and free typing is always allowed.',
       '<b>Survey geometry</b> - 2D line(s), 3D grid, borehole / downhole, or passive / point. The 3D fields (line intervals, patch, azimuth) appear only for a 3D grid.',
       '<b>Lines</b> - the named lines of the job, each with its length. The line count is derived, never typed. Stations and shots per line are shown beside each line.',
@@ -650,8 +650,8 @@ export const MANUAL: Record<string, HelpTopic> = {
     steps: [
       'Pick the <b>Job type</b>; check the filled values and type the job details.',
       'On <b>Geometry</b>, set the intervals and channels, then <b>Add line</b> for each line with its length.',
-      'Walk Source, Receiver, Recording and Totals; fix anything listed in red, read anything listed as a check.',
-      'On <b>Coordinates</b>, paste or load the points, read what was detected, correct the CRS if needed and press <b>Confirm</b> (or tick <b>No area yet</b>).',
+      'Walk Source, Receiver, Recording and Totals as far as you want; read any <b>Hint</b> (a likely mistake). Hints never stop you.',
+      'On <b>Coordinates</b>, paste or load the points, read what was detected, correct the CRS if needed and press <b>Confirm</b> (or tick <b>No area yet</b>, or leave it empty).',
       'On <b>Review and export</b>, press <b>Save parameter sheet (XLSX)...</b>.',
     ],
     sections: [
@@ -665,7 +665,7 @@ export const MANUAL: Record<string, HelpTopic> = {
         ],
       },
       {
-        h: 'Checks it runs',
+        h: 'Hints it gives (never blocking)',
         items: [
           'High cut and the sweep frequencies must stay below Nyquist; low cut below high cut.',
           'Active channels against the stations on the longest line.',

@@ -267,14 +267,14 @@
       "image": "img/21-paramsheet-job.png",
       "caption": "Parameters Sheet: the job type fills the recommended values, every one still editable",
       "callouts": 4,
-      "bytes": 132723
+      "bytes": 132158
     },
     {
       "name": "22-paramsheet-review",
       "image": "img/22-paramsheet-review.png",
       "caption": "Parameters Sheet: review every step and the area map, then save one XLSX",
       "callouts": 1,
-      "bytes": 113938
+      "bytes": 113921
     }
   ]
 }

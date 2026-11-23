@@ -38,7 +38,7 @@
     },
     {
       "n": 4,
-      "label": "Next is enabled only when the step checks out",
+      "label": "Next, or click any step: nothing is mandatory",
       "selector": "#psNextBtn",
       "rect": {
         "x": 443,
@@ -50,5 +50,5 @@
   ],
   "missingCallouts": [],
   "frameLeaks": [],
-  "bytes": 132723
+  "bytes": 132158
 }

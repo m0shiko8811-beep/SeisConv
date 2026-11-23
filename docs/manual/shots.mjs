@@ -787,7 +787,7 @@ async function main() {
       { sel: '#psStep-job', label: 'The eight steps; click any of them' },
       { sel: '#ps-job-jobType', label: 'Job type first: it fills the presets' },
       { sel: '#ps-job-geometry', label: 'Survey geometry: 2D, 3D, borehole or point', at: 'tr' },
-      { sel: '#psNextBtn', label: 'Next is enabled only when the step checks out' },
+      { sel: '#psNextBtn', label: 'Next, or click any step: nothing is mandatory' },
     ]);
     await win.click('#psStep-geometry');
     await fill('ps-geom-lineLengthM', 235);

@@ -20,7 +20,7 @@ import {
 } from '../../core/sheet/lists';
 import { presetFor, type JobPreset } from '../../core/sheet/presets';
 import {
-  emptySheet, applyPreset, deriveSheet, validateStep, crossChecks, exportBlockers, fmtNum,
+  emptySheet, applyPreset, deriveSheet, validateStep, crossChecks, allHints, fmtNum,
   PS_STEPS, PS_STEP_TITLES, PS_MAX_LINES, type ParamSheet, type PsStep, type Issue,
 } from '../../core/sheet/model';
 import { sniffCoords, crsGuessName, type SniffResult } from '../../core/sheet/coordsniff';
@@ -351,7 +351,7 @@ function derivedFor(s: PsStep): [string, string][] {
   const u = (v: number | null, unit: string, dec = 3) => (v == null ? '' : `${fmtNum(v, dec)} ${unit}`.trim());
   if (s === 'geometry') {
     const out: [string, string][] = [
-      ['Lines', String(d.lineCount)],
+      ['Lines', d.lineCount > 0 ? String(d.lineCount) : ''],
       ['Total line length', u(d.totalLengthM, 'm')],
       ['Stations per line (max)', d.maxStations != null ? String(d.maxStations) : ''],
       ['Shots', d.shots != null ? String(d.shots) : ''],
@@ -902,10 +902,21 @@ async function renderMapPreview(withBasemap: boolean): Promise<void> {
 
 // -- review + export -----------------------------------------------------------------------
 
+/** The Review text of a field, '' when it was not filled in. Form defaults the
+ *  user never chose (survey geometry 2D, the weight unit) are not shown, the same
+ *  rule the exported sheet follows. */
 function valueText(f: FSpec): string {
   const v = getPath(f.path);
-  if (v == null || v === '') return '';
+  if (v == null || v === '' || (typeof v === 'number' && !Number.isFinite(v))) return '';
   if (typeof v === 'boolean') return v ? 'yes' : '';
+  if (f.path === 'source.unitWeightUnit') return '';
+  if (f.path === 'source.unitWeight') return `${v} ${M.source.unitWeightUnit}`;
+  if (f.path === 'job.geometry') {
+    const g = M.geom;
+    const chosen = !!presetFor(M.job.jobType) || v !== '2D' || g.lines.length > 0
+      || [g.rxIntervalM, g.sxIntervalM, g.lineLengthM, g.activeChannels].some((x) => x != null);
+    if (!chosen) return '';
+  }
   if (f.kind === 'select') return f.options?.().find((o) => o.value === String(v))?.label ?? String(v);
   return `${v}${f.unit ? ` ${f.unit}` : ''}`;
 }
@@ -925,7 +936,7 @@ function renderReview(form: HTMLElement): void {
     if (s === 'coords') {
       const c = M.coords;
       if (c.skip) add('Survey area', 'not provided');
-      else {
+      else if (c.points.length) {
         add('Points', String(c.points.length));
         add('Coordinate system', c.crsName ? (c.crsCode ? `${c.crsName} (${c.crsCode})` : c.crsName) : 'not chosen');
         add('Confirmed', c.confirmed ? 'yes' : 'no');
@@ -936,12 +947,16 @@ function renderReview(form: HTMLElement): void {
       if (s === 'geometry') M.geom.lines.forEach((l) => add(`Line: ${l.name}`, l.lengthM != null ? `${l.lengthM} m` : ''));
       for (const [k, v] of derivedFor(s)) add(`${k} (derived)`, v);
     }
+    if (!dl.childElementCount) {
+      wrap.appendChild(el('div', { class: 'trace-label' }, 'Nothing filled in (left out of the sheet).'));
+      continue;
+    }
     wrap.appendChild(dl);
   }
   form.appendChild(wrap);
-  if (!M.coords.skip && M.coords.confirmed && M.coords.points.length) appendLineCheck(form);
+  if (!M.coords.skip && M.coords.points.length) appendLineCheck(form);
 
-  if (!M.coords.skip && M.coords.points.length && M.coords.confirmed) {
+  if (!M.coords.skip && M.coords.points.length) {
     form.appendChild(el('div', { class: 'ps-sub' }, 'Area map (goes into the XLSX)'));
     const cv = el('canvas', { id: 'psMapCanvas', class: 'ps-map', width: String(MAP_W), height: String(MAP_H) });
     form.appendChild(cv);
@@ -957,7 +972,6 @@ function renderReview(form: HTMLElement): void {
 
   const exp = el('div', { class: 'wiz-actions', style: 'margin-top:14px;' });
   const btn = el('button', { class: 'btn btn-primary lg', type: 'button', id: 'psExportBtn' }, 'Save parameter sheet (XLSX)...');
-  btn.disabled = exportBlockers(M).length > 0;
   btn.addEventListener('click', () => void exportSheet());
   exp.appendChild(btn);
   form.appendChild(exp);
@@ -977,12 +991,6 @@ async function encodeMap(cv: HTMLCanvasElement, jpeg: boolean): Promise<Uint8Arr
 }
 
 async function exportSheet(): Promise<void> {
-  const blockers = exportBlockers(M);
-  if (blockers.length) {
-    setStatus(`Cannot save yet: ${blockers[0].msg}`);
-    renderIssues(blockers, []);
-    return;
-  }
   D.showProgress('Building the parameter sheet (XLSX)...', undefined, 0);
   try {
     const area = await computeArea();
@@ -1026,7 +1034,7 @@ function setStatus(msg: string): void {
 /** The step's own checks plus the cross-step checks that point into it. The
  *  Review step shows everything that blocks export. */
 function issuesFor(s: PsStep): { errors: Issue[]; warnings: Issue[] } {
-  if (s === 'review') return { errors: exportBlockers(M), warnings: crossChecks(M).warnings };
+  if (s === 'review') return { errors: [], warnings: allHints(M) };
   const own = validateStep(s, M);
   const prefix: Partial<Record<PsStep, string>> = { geometry: 'geom.', totals: 'totals.', receiver: 'receiver.', recording: 'recording.', source: 'source.' };
   const pre = prefix[s];
@@ -1042,25 +1050,24 @@ function renderIssues(errors: Issue[], warnings: Issue[]): void {
   const box = $('psIssues');
   if (!box) return;
   box.innerHTML = '';
-  for (const e of errors.slice(0, 40)) box.appendChild(el('div', { class: 'e' }, e.msg));
-  for (const w of warnings.slice(0, 40)) box.appendChild(el('div', { class: 'w' }, `Check: ${w.msg}`));
-  document.querySelectorAll('#psForm [data-path]').forEach((n) => {
-    const p = (n as HTMLElement).dataset.path || '';
-    (n as HTMLElement).classList.toggle('bad', errors.some((e) => e.field === p));
-  });
+  // Nothing is mandatory: every finding is a gentle hint, never a block or a red field.
+  for (const w of errors.concat(warnings).slice(0, 40)) box.appendChild(el('div', { class: 'w' }, `Hint: ${w.msg}`));
 }
 
 function stepSummary(s: PsStep): string {
   const d = deriveSheet(M);
   switch (s) {
     case 'job': return M.job.jobType || 'Job type first: it fills the defaults';
-    case 'geometry': return `${d.lineCount} line${d.lineCount === 1 ? '' : 's'}${M.geom.rxIntervalM != null ? `, RI ${fmtNum(M.geom.rxIntervalM)} m` : ''}${M.geom.activeChannels != null ? `, ${M.geom.activeChannels} ch` : ''}`;
+    case 'geometry': {
+      const bits = [d.lineCount ? `${d.lineCount} line${d.lineCount === 1 ? '' : 's'}` : '', M.geom.rxIntervalM != null ? `RI ${fmtNum(M.geom.rxIntervalM)} m` : '', M.geom.activeChannels != null ? `${M.geom.activeChannels} ch` : ''].filter(Boolean);
+      return bits.length ? bits.join(', ') : 'Intervals, spread, lines';
+    }
     case 'source': return M.source.type || 'Source type, energy, stack';
     case 'receiver': return [M.receiver.geophoneType, M.receiver.naturalFreqHz != null ? `${fmtNum(M.receiver.naturalFreqHz)} Hz` : ''].filter(Boolean).join(', ') || 'Geophones';
     case 'recording': return [M.recording.sampleRateMs != null ? `${fmtNum(M.recording.sampleRateMs, 4)} ms` : '', M.recording.recordLengthS != null ? `${fmtNum(M.recording.recordLengthS)} s` : ''].filter(Boolean).join(', ') || 'Instrument, sampling, filters';
     case 'totals': return d.shots != null ? `${d.shots} shots planned` : 'Typed totals vs the plan';
     case 'coords': return M.coords.skip ? 'No area yet' : M.coords.points.length ? `${M.coords.points.length} points${M.coords.confirmed ? ', confirmed' : ', not confirmed'}` : 'Paste or load points (or skip)';
-    case 'review': return exportBlockers(M).length ? `${exportBlockers(M).length} problem(s) to fix` : 'Ready to save';
+    case 'review': { const n = allHints(M).length; return n ? `${n} hint${n === 1 ? '' : 's'}, ready to save` : 'Ready to save'; }
   }
 }
 
@@ -1068,21 +1075,20 @@ function refreshChecks(): void {
   const { errors, warnings } = issuesFor(step);
   renderIssues(errors, warnings);
   const next = $('psNextBtn') as HTMLButtonElement | null;
-  if (next) { next.disabled = step === 'review' || errors.length > 0; next.style.visibility = step === 'review' ? 'hidden' : ''; }
+  if (next) { next.disabled = step === 'review'; next.style.visibility = step === 'review' ? 'hidden' : ''; }
   const back = $('psBackBtn') as HTMLButtonElement | null;
   if (back) back.disabled = step === 'job';
   for (const s of PS_STEPS) {
     const row = $(`psStep-${s}`);
     if (!row) continue;
-    const bad = validateStep(s, M).errors.length > 0;
     row.classList.toggle('active', s === step);
-    row.classList.toggle('done', s !== step && visited.has(s) && !bad);
-    row.classList.toggle('err', s !== step && visited.has(s) && bad);
+    row.classList.toggle('done', s !== step && visited.has(s));
+    row.classList.remove('err');
     const sum = $(`psSum-${s}`);
     if (sum) sum.textContent = stepSummary(s);
   }
   const exp = $('psExportBtn') as HTMLButtonElement | null;
-  if (exp) exp.disabled = exportBlockers(M).length > 0;
+  if (exp) exp.disabled = false;
   const der = $('psDerived');
   if (der && step !== 'review') {
     const fresh = derivedBox(derivedFor(step));
@@ -1133,7 +1139,6 @@ function go(s: PsStep): void {
 
 function next(): void {
   const idx = PS_STEPS.indexOf(step);
-  if (issuesFor(step).errors.length) { refreshChecks(); return; }
   if (step === 'job') rememberClient(M.job.client);
   if (idx < PS_STEPS.length - 1) go(PS_STEPS[idx + 1]);
 }

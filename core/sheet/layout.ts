@@ -9,10 +9,11 @@
 // Pure: no DOM / Electron. The caller supplies the date, the version, the area
 // coordinates (already converted) and the map PNG.
 
-import type { StyledCellLike, StyledSheet, CellStyle } from '../export/xlsx';
+import { colLetter, type StyledCellLike, type StyledSheet, type CellStyle } from '../export/xlsx';
 import { deriveSheet, crossChecks, fmtNum, type ParamSheet } from './model';
 import { SURVEY_GEOMETRIES, sourceKind } from './lists';
 import { coordLines, lineMismatch } from './reconcile';
+import { presetFor } from './presets';
 
 export interface AreaPoint {
   id: string;
@@ -65,9 +66,10 @@ export interface LayoutMeta {
 // -- styles ---------------------------------------------------------------------
 
 const NAVY = '1F4E79';
-const S_TITLE: CellStyle = { bold: true, size: 16, color: NAVY };
+const S_TITLE: CellStyle = { bold: true, size: 18, color: 'FFFFFF', fill: NAVY };
+const S_HEAD2: CellStyle = { bold: true, size: 13, color: NAVY, fill: 'DCE6F1' };
 const S_SUB: CellStyle = { italic: true, color: '595959' };
-const S_SECTION: CellStyle = { bold: true, size: 12, color: 'FFFFFF', fill: NAVY };
+const S_SECTION: CellStyle = { bold: true, size: 12, color: 'FFFFFF', fill: '2E75B6' };
 const S_LABEL: CellStyle = { bold: true, color: '262626', fill: 'F2F2F2', border: true };
 const S_VALUE: CellStyle = { border: true, align: 'left' };
 const S_DERIVED: CellStyle = { border: true, italic: true, fill: 'E8F3F3', align: 'left' };
@@ -98,18 +100,26 @@ const GROUP_COLS = 4; // label, value, unit, spacer
 const NCOLS = GROUP_COLS * 3 - 1; // A..K
 const lastCol = 'K';
 
+/** True when a value was actually filled in (never empty text, null or NaN). */
+function filled(v: Val | undefined): boolean {
+  if (v == null) return false;
+  if (typeof v === 'number') return Number.isFinite(v);
+  return v.trim() !== '';
+}
+
 class Grid {
   rows: StyledCellLike[][] = [];
   merges: string[] = [];
   heights: Record<number, number> = {};
   get r(): number { return this.rows.length; }
   blank(): void { this.rows.push([]); }
-  section(title: string): void {
-    const row: StyledCellLike[] = [{ v: title, s: S_SECTION }];
-    for (let c = 1; c < NCOLS; c++) row.push({ v: '', s: S_SECTION });
+  /** One full-width row (merged A..K). */
+  band(text: string, s: CellStyle, height?: number): void {
+    const row: StyledCellLike[] = [{ v: text, s }];
+    for (let c = 1; c < NCOLS; c++) row.push({ v: '', s });
     this.merges.push(`A${this.r + 1}:${lastCol}${this.r + 1}`);
     this.rows.push(row);
-    this.heights[this.r - 1] = 18;
+    if (height) this.heights[this.r - 1] = height;
   }
   line(text: string, s: CellStyle = S_NOTE): void {
     this.merges.push(`A${this.r + 1}:${lastCol}${this.r + 1}`);
@@ -117,45 +127,62 @@ class Grid {
     const lines = Math.ceil(text.length / 150);
     if (lines > 1) this.heights[this.r - 1] = Math.min(400, 15 * lines);
   }
+  /** The filled fields, three label / value / unit groups per row. A field that
+   *  was not filled is left out entirely (no label, no empty cell, no lone unit). */
   fields(fs: (Field | null)[]): void {
-    for (let i = 0; i < fs.length; i += 3) {
+    const keep = fs.filter((f): f is Field => !!f && filled(f.value) && (!f.date || excelDateSerial(String(f.value)) != null));
+    for (let i = 0; i < keep.length; i += 3) {
       const row: StyledCellLike[] = [];
       for (let k = 0; k < 3; k++) {
-        const f = fs[i + k];
-        if (!f) { row.push(null, null, null); if (k < 2) row.push(null); continue; }
+        const f = keep[i + k];
+        if (!f) break;
         const lbl = f.derived ? `${f.label} (derived)` : f.label;
-        let v: StyledCellLike;
-        if (f.date) {
-          const serial = typeof f.value === 'string' ? excelDateSerial(f.value) : null;
-          v = serial != null ? { v: serial, s: S_DATE } : { v: '', s: S_VALUE };
-        } else {
-          v = { v: f.value ?? '', s: f.derived ? S_DERIVED : S_VALUE };
-        }
-        row.push({ v: lbl, s: S_LABEL }, v, { v: f.unit ?? '', s: S_UNIT });
+        const v: StyledCellLike = f.date
+          ? { v: excelDateSerial(String(f.value)), s: S_DATE }
+          : { v: f.value, s: f.derived ? S_DERIVED : S_VALUE };
+        row.push({ v: lbl, s: S_LABEL }, v, { v: f.unit ?? '', s: f.unit ? S_UNIT : (f.derived ? S_DERIVED : S_VALUE) });
+        if (!f.unit) this.merges.push(`${colLetter(k * GROUP_COLS + 1)}${this.r + 1}:${colLetter(k * GROUP_COLS + 2)}${this.r + 1}`);
         if (k < 2) row.push(null);
       }
       this.rows.push(row);
     }
   }
+  /** A section: its band, then the filled fields and any extra lines. Nothing at
+   *  all is written when the section has nothing filled. */
+  section(title: string, fs: (Field | null)[], extra: string[] = [], tail?: () => void): void {
+    const any = fs.some((f) => !!f && filled(f.value) && (!f.date || excelDateSerial(String(f.value)) != null));
+    const lines = extra.filter((x) => x.trim() !== '');
+    if (!any && !lines.length && !tail) return;
+    this.band(title, S_SECTION, 20);
+    this.fields(fs);
+    for (const x of lines) this.line(x);
+    tail?.();
+    this.blank();
+  }
 }
 
 const geomLabel = (g: string): string => SURVEY_GEOMETRIES.find((x) => x.value === g)?.label ?? g;
 
-/** The `Parameters` sheet. */
+/** The `Parameters` sheet: a title block, then one band per section that has
+ *  anything in it. A fully empty model gives the title block alone. */
 export function parametersSheet(m: ParamSheet, area: AreaInfo | null, meta: LayoutMeta): StyledSheet {
   const d = deriveSheet(m);
   const j = m.job, g = m.geom, s = m.source, r = m.receiver, rec = m.recording, t = m.totals;
   const G = new Grid();
-  G.rows.push([{ v: 'Parameter Sheet', s: S_TITLE }]);
-  G.merges.push(`A1:${lastCol}1`);
-  G.heights[0] = 24;
-  G.line(`${txt(j.jobType) || 'Job'}${txt(j.prospect) ? ` - ${txt(j.prospect)}` : ''}. Planned (dry) values, not field measurements. Derived values are nominal.`, S_SUB);
+  G.band('Parameter Sheet', S_TITLE, 32);
+  const head = [txt(j.jobType), txt(j.prospect)].filter(Boolean).join(' - ');
+  if (head) G.band(head, S_HEAD2, 22);
+  G.line(`Planned (dry) values, not field measurements. Derived values are nominal.${meta.preparedDate ? ` Prepared ${meta.preparedDate}.` : ''}`, S_SUB);
   G.blank();
 
-  G.section('Job');
-  G.fields([
+  // Survey geometry has a default in the form ('2D'), so it is printed only when
+  // it was really chosen: a job-type preset set it, it was changed, or geometry
+  // values were filled in. Otherwise the user never said.
+  const geomTouched = !!presetFor(j.jobType) || j.geometry !== '2D' || g.lines.length > 0
+    || [g.rxIntervalM, g.sxIntervalM, g.lineLengthM, g.activeChannels, g.rliM, g.sliM].some((v) => filled(v));
+  G.section('Job', [
     { label: 'Job type', value: txt(j.jobType) },
-    { label: 'Survey geometry', value: geomLabel(j.geometry) },
+    geomTouched ? { label: 'Survey geometry', value: geomLabel(j.geometry) } : null,
     { label: 'Target depth', value: j.targetDepthM, unit: 'm' },
     { label: 'Client', value: txt(j.client) },
     { label: 'Contractor', value: txt(j.contractor) },
@@ -168,12 +195,8 @@ export function parametersSheet(m: ParamSheet, area: AreaInfo | null, meta: Layo
     { label: 'End date', value: j.endDate, date: true },
     { label: 'Prepared by', value: txt(j.preparedBy) },
     { label: 'Revision', value: txt(j.revision) },
-    { label: 'Date prepared', value: meta.preparedDate, date: true },
-  ]);
-  if (txt(j.notes)) G.line(`Notes: ${txt(j.notes)}`);
-  G.blank();
+  ], txt(j.notes) ? [`Notes: ${txt(j.notes)}`] : []);
 
-  G.section('Geometry');
   const geo: (Field | null)[] = [
     { label: 'RX point interval', value: g.rxIntervalM, unit: 'm' },
     { label: 'SX point interval', value: g.sxIntervalM, unit: 'm' },
@@ -186,12 +209,12 @@ export function parametersSheet(m: ParamSheet, area: AreaInfo | null, meta: Layo
     { label: 'Source offset', value: g.sourceOffsetM, unit: 'm' },
     { label: 'Receiver table', value: txt(g.receiverTable) },
     { label: 'Receiver array', value: txt(g.receiverArray) },
-    { label: 'Lines', value: d.lineCount, derived: true },
+    d.lineCount > 0 ? { label: 'Lines', value: d.lineCount, derived: true } : null,
     { label: 'Stations per line (max)', value: d.maxStations, derived: true },
     { label: 'Spread length', value: round(d.spreadLengthM), unit: 'm', derived: true },
     { label: 'Total line length', value: round(d.totalLengthM), unit: 'm', derived: true },
   ];
-  if (j.geometry === '2D') geo.push({ label: 'Nominal fold', value: round(d.fold2d, 2), derived: true }, null, null);
+  if (j.geometry === '2D') geo.push({ label: 'Nominal fold', value: round(d.fold2d, 2), derived: true });
   if (j.geometry === '3D') {
     geo.push(
       { label: 'Receiver line interval', value: g.rliM, unit: 'm' },
@@ -205,45 +228,41 @@ export function parametersSheet(m: ParamSheet, area: AreaInfo | null, meta: Layo
       { label: 'Nominal fold', value: round(d.fold3d, 2), derived: true },
     );
   }
-  G.fields(geo);
-  if (d.lines.length) {
+  const linesTable = d.lines.length ? () => {
     G.rows.push([
       { v: 'Line', s: S_HEAD }, { v: 'Length', s: S_HEAD }, { v: 'Unit', s: S_HEAD }, null,
       { v: 'Stations (derived)', s: S_HEAD }, { v: 'Shots (derived)', s: S_HEAD },
     ]);
-    for (const l of d.lines) {
+    d.lines.forEach((l, i) => {
+      const has = l.lengthM != null;
       G.rows.push([
-        { v: l.name, s: S_CELL }, { v: l.lengthM ?? '', s: S_CELL }, { v: 'm', s: S_UNIT }, null,
+        { v: txt(l.name) || `Line ${i + 1}`, s: S_CELL }, { v: has ? l.lengthM : '', s: S_CELL }, { v: has ? 'm' : '', s: S_UNIT }, null,
         { v: l.stations ?? '', s: S_DERIVED }, { v: l.shots ?? '', s: S_DERIVED },
       ]);
-    }
-  }
-  G.blank();
+    });
+  } : undefined;
+  G.section('Geometry', geo, [], linesTable);
 
-  G.section('Recording');
-  G.fields([
+  G.section('Recording', [
     { label: 'Instrument', value: txt(rec.instrumentMfr) },
     { label: 'Instrument model', value: txt(rec.instrumentModel) },
     { label: 'Data format', value: txt(rec.dataFormat) },
     { label: 'Sample rate', value: rec.sampleRateMs, unit: 'ms' },
     { label: 'Record length', value: rec.recordLengthS, unit: 's' },
     { label: 'Nyquist', value: round(d.nyquistHz, 2), unit: 'Hz', derived: true },
-    { label: 'Low cut', value: rec.lowCutHz ?? 'None', unit: rec.lowCutHz != null ? 'Hz' : '' },
-    { label: 'High cut', value: rec.highCutAntiAlias ? 'Anti-alias' : (rec.highCutHz ?? 'None'), unit: !rec.highCutAntiAlias && rec.highCutHz != null ? 'Hz' : '' },
-    { label: 'Notch filter', value: rec.notchHz ?? 'None', unit: rec.notchHz != null ? 'Hz' : '' },
+    { label: 'Low cut', value: rec.lowCutHz, unit: 'Hz' },
+    rec.highCutAntiAlias ? { label: 'High cut', value: 'Anti-alias' } : { label: 'High cut', value: rec.highCutHz, unit: 'Hz' },
+    { label: 'Notch filter', value: rec.notchHz, unit: 'Hz' },
     { label: 'Pre-amp gain', value: rec.preampGainDb, unit: 'dB' },
     { label: 'Correlation', value: txt(rec.correlation) },
     { label: 'Coordinate system', value: txt(rec.coordSystem) },
     { label: 'Aux trace 1', value: txt(rec.aux[0]) },
     { label: 'Aux trace 2', value: txt(rec.aux[1]) },
-    { label: 'Samples per trace', value: d.samplesPerTrace, derived: true },
     { label: 'Aux trace 3', value: txt(rec.aux[2]) },
     { label: 'Aux trace 4', value: txt(rec.aux[3]) },
-    null,
+    { label: 'Samples per trace', value: d.samplesPerTrace, derived: true },
   ]);
-  G.blank();
 
-  G.section('Source');
   const kind = sourceKind(s.type);
   const src: (Field | null)[] = [
     { label: 'Source type', value: txt(s.type) },
@@ -252,11 +271,10 @@ export function parametersSheet(m: ParamSheet, area: AreaInfo | null, meta: Layo
     { label: 'Manufacturer', value: txt(s.manufacturer) },
     { label: 'Model', value: txt(s.model) },
     { label: 'Source wave type', value: txt(s.waveType) },
-    { label: kind === 'vibrator' ? 'Peak force' : 'Unit weight', value: s.unitWeight, unit: s.unitWeight != null ? s.unitWeightUnit : '' },
+    { label: kind === 'vibrator' ? 'Peak force' : 'Unit weight', value: s.unitWeight, unit: s.unitWeightUnit },
     { label: 'Plate type', value: txt(s.plate) },
     { label: 'Stack', value: s.stack },
     { label: 'Source array', value: txt(s.array) },
-    null, null,
   ];
   if (kind === 'vibrator') {
     src.push(
@@ -274,57 +292,48 @@ export function parametersSheet(m: ParamSheet, area: AreaInfo | null, meta: Layo
       { label: 'Depth', value: s.impDepthM, unit: 'm' },
       { label: 'Pattern', value: txt(s.impPattern) },
       { label: 'Count per point', value: s.impCount },
-      null, null,
     );
   }
-  G.fields(src);
-  if (txt(s.comments)) G.line(`Source comments: ${txt(s.comments)}`);
-  G.blank();
+  G.section('Source', src, txt(s.comments) ? [`Source comments: ${txt(s.comments)}`] : []);
 
-  G.section('Receiver');
-  G.fields([
+  G.section('Receiver', [
     { label: 'Manufacturer', value: txt(r.manufacturer) },
     { label: 'Model', value: txt(r.model) },
     { label: 'Natural frequency', value: r.naturalFreqHz, unit: 'Hz' },
     { label: 'Geophone type', value: txt(r.geophoneType) },
     { label: 'Phones per station', value: r.phonesPerStation },
     { label: 'Receiver interval', value: g.rxIntervalM, unit: 'm' },
-  ]);
-  if (txt(r.comments)) G.line(`Receiver comments: ${txt(r.comments)}`);
-  G.blank();
+  ], txt(r.comments) ? [`Receiver comments: ${txt(r.comments)}`] : []);
 
-  G.section('Totals and conditions');
-  G.fields([
+  G.section('Totals and conditions', [
     { label: 'Total shots', value: t.totalShots },
     { label: 'Total shots', value: d.shots, derived: true },
-    { label: 'Weather / noise', value: txt(t.weather) },
     { label: 'Total files', value: t.totalFiles },
     { label: 'Total files', value: d.files, derived: true },
-    null,
+    { label: 'Weather / noise', value: txt(t.weather) },
   ]);
-  G.blank();
 
-  G.section('Survey area');
-  if (!area) {
-    G.line('Survey area: not provided', { bold: true });
-  } else {
-    G.fields([
+  if (area) {
+    G.section('Survey area', [
       { label: 'Coordinate system', value: area.crsCode ? `${area.crsName} (${area.crsCode})` : area.crsName },
       { label: 'Points', value: area.points.length },
-      { label: area.closed ? 'Area' : 'Extent area', value: area.areaM2 != null ? round(area.areaM2 / 1e6, 4) : '', unit: 'km2', derived: true },
-    ]);
-    G.line('Every point with Easting, Northing, latitude and longitude is on the Area sheet; the map is on the Map sheet.');
+      { label: area.closed ? 'Area' : 'Extent area', value: area.areaM2 ? round(area.areaM2 / 1e6, 4) : null, unit: 'km2', derived: true },
+    ], ['Every point with Easting, Northing, latitude and longitude is on the Area sheet; the map is on the Map sheet.']);
+  } else if (m.coords.skip) {
+    G.section('Survey area', [], ['Survey area: not provided']);
   }
+
   const checks = crossChecks(m).warnings.map((w) => w.msg);
   // The Geometry lines and the coordinate list must describe the same lines.
   if (area) {
     const diff = lineMismatch(m.geom.lines, coordLines(area.points));
     if (diff) checks.push(`Lines do not match the coordinates: ${diff}`);
   }
-  if (checks.length) {
-    G.blank();
-    G.section('Plan checks');
-    for (const w of checks.slice(0, 30)) G.line(`Check: ${w}`, S_WARN);
+  if (checks.length) G.section('Plan checks', [], checks.slice(0, 30).map((w) => `Check: ${w}`));
+  // Plan-check lines are amber, not the grey of a note.
+  for (const row of G.rows) {
+    const c = row[0];
+    if (c && typeof c === 'object' && typeof c.v === 'string' && c.v.startsWith('Check: ')) c.s = S_WARN;
   }
 
   return {
@@ -337,6 +346,8 @@ export function parametersSheet(m: ParamSheet, area: AreaInfo | null, meta: Layo
     // One printed A4 page, like the hand-kept Template sheet.
     fitPage: true,
     printArea: true,
+    hideGrid: true,
+    footer: '&L&8SeisConv parameter sheet - planned values&R&8Page &P of &N',
   };
 }
 
@@ -399,28 +410,22 @@ export function mapSheet(map: MapInfo, title: string): StyledSheet {
 
 /** The `About` sheet. */
 export function aboutSheet(m: ParamSheet, map: MapInfo | null, meta: LayoutMeta): StyledSheet {
-  const kv = (k: string, v: StyledCellLike): StyledCellLike[] => [{ v: k, s: S_LABEL }, v];
-  const rows: StyledCellLike[][] = [
-    [{ v: 'About this sheet', s: S_TITLE }],
-    kv('Made with', { v: `SeisConv ${meta.version}`, s: S_VALUE }),
-    kv('Generated', { v: meta.generatedAt, s: S_VALUE }),
-    kv('Date prepared', excelDateSerial(meta.preparedDate) != null ? { v: excelDateSerial(meta.preparedDate), s: S_DATE } : { v: meta.preparedDate, s: S_VALUE }),
-    kv('Revision', { v: txt(m.job.revision), s: S_VALUE }),
-    kv('Prepared by', { v: txt(m.job.preparedBy), s: S_VALUE }),
-    [],
-    [{ v: 'Every value in this workbook is PLANNED (dry): typed or derived before the survey, not measured in the field.', s: S_NOTE }],
-    [{ v: 'Derived values (marked "derived") are nominal: stations, shots and files from the line lengths and intervals, fold from channels and intervals.', s: S_NOTE }],
-    [{ v: 'Latitude / longitude are WGS 84, converted from the listed coordinate system.', s: S_NOTE }],
-    [],
-    kv('Basemap', { v: map ? (map.attribution || 'No basemap') : 'No map (no survey area given)', s: S_VALUE }),
-  ];
-  return {
-    name: 'About',
-    rows,
-    cols: [22, 90],
-    merges: ['A1:B1', 'A8:B8', 'A9:B9', 'A10:B10'],
-    rowHeights: { 0: 22 },
-  };
+  const rows: StyledCellLike[][] = [[{ v: 'About this sheet', s: S_TITLE }, { v: '', s: S_TITLE }]];
+  const merges = ['A1:B1'];
+  const kv = (k: string, v: StyledCellLike) => rows.push([{ v: k, s: S_LABEL }, v]);
+  const note = (t: string) => { merges.push(`A${rows.length + 1}:B${rows.length + 1}`); rows.push([{ v: t, s: S_NOTE }]); };
+  kv('Made with', { v: `SeisConv ${meta.version}`, s: S_VALUE });
+  if (meta.generatedAt) kv('Generated', { v: meta.generatedAt, s: S_VALUE });
+  const serial = excelDateSerial(meta.preparedDate);
+  if (serial != null) kv('Date prepared', { v: serial, s: S_DATE });
+  if (txt(m.job.revision)) kv('Revision', { v: txt(m.job.revision), s: S_VALUE });
+  if (txt(m.job.preparedBy)) kv('Prepared by', { v: txt(m.job.preparedBy), s: S_VALUE });
+  if (map) kv('Basemap', { v: map.attribution || 'No basemap', s: S_VALUE });
+  rows.push([]);
+  note('Every value in this workbook is PLANNED (dry): typed or derived before the survey, not measured in the field.');
+  note('Only what was filled in is listed. Derived values (marked "derived") are nominal: stations, shots and files from the line lengths and intervals, fold from channels and intervals.');
+  if (map) note('Latitude / longitude are WGS 84, converted from the listed coordinate system.');
+  return { name: 'About', rows, cols: [22, 90], merges, rowHeights: { 0: 24 }, fitWidth: true, hideGrid: true };
 }
 
 /** The whole workbook, in sheet order. `area` / `map` null = "No area yet". */

@@ -184,7 +184,7 @@ import { createHash } from 'node:crypto';
 import { buildStyledXlsx, xlsxCleanText } from '../export/xlsx';
 import { JOB_TYPES, SOURCE_TYPES, MANUFACTURER_MODELS, modelsFor, sourceKind, isHorizontalPhone } from '../sheet/lists';
 import { JOB_PRESETS, presetFor } from '../sheet/presets';
-import { emptySheet, applyPreset, deriveSheet, pointsAlong, validateStep, crossChecks, exportBlockers, isIsoDate, type ParamSheet } from '../sheet/model';
+import { emptySheet, applyPreset, deriveSheet, pointsAlong, validateStep, crossChecks, allHints, isIsoDate, PS_STEPS, type ParamSheet } from '../sheet/model';
 import { ringArea, ringPerimeter, cleanRing, isClosed, pathLength, bbox, selfIntersects, convexHull } from '../gis/polygon';
 import { sniffCoords, parseCoordField, suggestGridCode, utmCodeFor, SNIFF_MAX_POINTS } from '../sheet/coordsniff';
 import { loadDraft, hasPollutionKey, PS_DRAFT_MAX_CHARS } from '../sheet/draft';
@@ -7981,45 +7981,59 @@ async function paramSheetTests(): Promise<void> {
     assert.equal(pointsAlong(10, -1), null);
     assert.equal(pointsAlong(10, 2.5), 5);
   });
-  test('sheet validate: job type required, dates checked, end before start refused', () => {
+  test('sheet hints: nothing is required, and nothing ever blocks (errors always empty)', () => {
     const m = emptySheet();
-    assert.ok(validateStep('job', m).errors.some((e) => e.field === 'job.jobType'));
+    for (const s of PS_STEPS) {
+      const c = validateStep(s, m);
+      assert.equal(c.errors.length, 0, `${s} has errors`);
+      assert.equal(c.warnings.length, 0, `${s} hints on an empty sheet: ${c.warnings.map((w) => w.msg).join('; ')}`);
+    }
+    assert.equal(crossChecks(m).errors.length, 0);
+    assert.deepEqual(allHints(m), []);
+    // A sheet with only a job type and two receiver values has no hints either.
     m.job.jobType = 'Downhole';
+    m.receiver.naturalFreqHz = 14;
+    m.receiver.geophoneType = 'Borehole 3C';
+    assert.deepEqual(allHints(m), []);
+  });
+  test('sheet hints: dates checked, end before start is a hint', () => {
+    const m = emptySheet();
     m.job.startDate = '2026-12-10';
     m.job.endDate = '2026-12-01';
-    assert.ok(validateStep('job', m).errors.some((e) => e.field === 'job.endDate'));
+    assert.ok(validateStep('job', m).warnings.some((e) => e.field === 'job.endDate'));
     m.job.endDate = '2026-02-30';
-    assert.ok(validateStep('job', m).errors.some((e) => /not a valid date/.test(e.msg)));
+    assert.ok(validateStep('job', m).warnings.some((e) => /not a valid date/.test(e.msg)));
     m.job.endDate = '2026-12-12';
-    assert.equal(validateStep('job', m).errors.length, 0);
+    assert.equal(validateStep('job', m).warnings.length, 0);
     assert.equal(isIsoDate('2028-02-29'), true);
     assert.equal(isIsoDate('2027-02-29'), false);
   });
-  test('sheet validate: geometry needs a named line, duplicate names refused, fold < 1 in 3D is an error', () => {
+  test('sheet hints: duplicate line names and 3D fold < 1 are hints; no lines is fine', () => {
     const m = vib();
-    assert.equal(validateStep('geometry', m).errors.length, 0);
+    assert.equal(validateStep('geometry', m).warnings.filter((w) => w.field.startsWith('geom.lines')).length, 0);
     m.geom.lines.push({ name: 'a-01', lengthM: 10 });
-    assert.ok(validateStep('geometry', m).errors.some((e) => /used twice/.test(e.msg)));
+    assert.ok(validateStep('geometry', m).warnings.some((e) => /used twice/.test(e.msg)));
     m.geom.lines = [];
-    assert.ok(validateStep('geometry', m).errors.some((e) => e.field === 'geom.lines'));
+    assert.ok(!validateStep('geometry', m).warnings.some((e) => e.field === 'geom.lines'));
     const t = emptySheet();
     t.job.geometry = '3D';
     Object.assign(t.geom, { rxIntervalM: 25, sxIntervalM: 50, sliM: 5000, rliM: 300, patchLines: 1, patchChannelsPerLine: 10, lines: [{ name: 'L', lengthM: 100 }] });
-    assert.ok(validateStep('geometry', t).errors.some((e) => /below 1/.test(e.msg)));
+    assert.ok(validateStep('geometry', t).warnings.some((e) => /below 1/.test(e.msg)));
+    assert.equal(validateStep('geometry', t).errors.length, 0);
   });
-  test('sheet validate: high cut at Nyquist and low >= high are errors', () => {
+  test('sheet hints: high cut at Nyquist and low >= high', () => {
     const m = vib();
     m.recording.highCutHz = 250;
-    assert.ok(validateStep('recording', m).errors.some((e) => /Nyquist/.test(e.msg)));
+    assert.ok(validateStep('recording', m).warnings.some((e) => /Nyquist/.test(e.msg)));
     m.recording.highCutHz = 200;
     m.recording.lowCutHz = 300;
-    assert.ok(validateStep('recording', m).errors.some((e) => e.field === 'recording.lowCutHz'));
+    assert.ok(validateStep('recording', m).warnings.some((e) => e.field === 'recording.lowCutHz'));
   });
   test('sheet cross-checks: sweep above Nyquist, typed totals, MASW depth, SH phones', () => {
     const m = vib();
     m.recording.sampleRateMs = 4; // Nyquist 125
     m.source.sweepEndHz = 150;
-    assert.ok(crossChecks(m).errors.some((e) => e.field === 'source.sweepEndHz'));
+    assert.ok(crossChecks(m).warnings.some((e) => e.field === 'source.sweepEndHz'));
     m.recording.sampleRateMs = 2;
     m.totals.totalShots = 1800;
     assert.ok(crossChecks(m).warnings.some((w) => /1800.*1803/.test(w.msg)));
@@ -8033,12 +8047,12 @@ async function paramSheetTests(): Promise<void> {
     masw.receiver.geophoneType = 'Horizontal (H)';
     assert.ok(!crossChecks(masw).warnings.some((w) => /horizontal/.test(w.msg)));
   });
-  test('sheet export blockers: coordinates must be confirmed unless skipped', () => {
+  test('sheet hints: unconfirmed coordinates are a hint, skipped ones are not', () => {
     const m = vib();
     m.coords.points = [{ id: 'a', x: 1, y: 2 }];
-    assert.ok(exportBlockers(m).some((e) => e.field === 'coords.crs'));
+    assert.ok(allHints(m).some((e) => e.field === 'coords.crs'));
     m.coords.skip = true;
-    assert.ok(!exportBlockers(m).some((e) => e.field.startsWith('coords')));
+    assert.ok(!allHints(m).some((e) => e.field.startsWith('coords')));
   });
 
   // -- polygon --
@@ -8251,6 +8265,37 @@ async function paramSheetTests(): Promise<void> {
     const get = async (n: string) => (zip.file(n) ? zip.file(n)!.async('string') : null);
     return { zip, get };
   };
+  await atest('styled xlsx: a fully empty sheet exports cleanly (title block + About, nothing else)', async () => {
+    const sheets = buildSheetWorkbook(emptySheet(), null, null, meta);
+    assert.deepEqual(sheets.map((s) => s.name), ['Parameters', 'About']);
+    const { get } = await readSheets(await buildStyledXlsx(sheets, new JSZip()));
+    const s1 = (await get('xl/worksheets/sheet1.xml'))!;
+    const texts = [...s1.matchAll(/<t xml:space="preserve">([^<]*)<\/t>/g)].map((x) => x[1]);
+    assert.deepEqual(texts, ['Parameter Sheet', 'Planned (dry) values, not field measurements. Derived values are nominal. Prepared 2026-11-23.']);
+    assert.ok(!/<v>/.test(s1), 'no number cells in an empty sheet');
+    for (const bad of ['NaN', 'undefined', 'null', 'Survey geometry', 'Revision']) assert.ok(!s1.includes(bad), `empty sheet contains ${bad}`);
+    const about = (await get('xl/worksheets/sheet2.xml'))!;
+    for (const bad of ['NaN', 'undefined', 'null', '>Revision<', '>Prepared by<']) assert.ok(!about.includes(bad), `About contains ${bad}`);
+  });
+  await atest('styled xlsx: a partial sheet lists only what was filled (no empty sections, no lone units)', async () => {
+    const m = emptySheet();
+    m.job.jobType = 'Downhole';
+    m.receiver.naturalFreqHz = 14;
+    m.receiver.geophoneType = 'Borehole 3C';
+    const { get } = await readSheets(await buildStyledXlsx(buildSheetWorkbook(m, null, null, meta), new JSZip()));
+    const s1 = (await get('xl/worksheets/sheet1.xml'))!;
+    const texts = [...s1.matchAll(/<t xml:space="preserve">([^<]*)<\/t>/g)].map((x) => x[1]);
+    for (const want of ['Job', 'Job type', 'Downhole', 'Receiver', 'Natural frequency', 'Hz', 'Geophone type', 'Borehole 3C']) assert.ok(texts.includes(want), `missing ${want}`);
+    for (const absent of ['Geometry', 'Recording', 'Source', 'Totals and conditions', 'Survey area', 'Plan checks', 'Low cut', 'Client', 'm', 'Nyquist']) {
+      assert.ok(!texts.includes(absent), `should not contain ${absent}`);
+    }
+    assert.ok(/<v>14<\/v>/.test(s1));
+    for (const bad of ['NaN', 'undefined', 'null']) assert.ok(!s1.includes(bad));
+    // A unitless value spans its value + unit cells: no empty unit cell is left behind.
+    assert.ok(/<mergeCell ref="B\d+:C\d+"\/>/.test(s1));
+    // Printed on one A4 landscape page with a footer.
+    assert.ok(/fitToHeight="1"/.test(s1) && /<oddFooter>/.test(s1));
+  });
   await atest('styled xlsx: no area gives Parameters + About only, with "Survey area: not provided"', async () => {
     const m = vib();
     m.coords.skip = true;
