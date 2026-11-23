@@ -13,6 +13,9 @@
 // What was typed lives only in memory for the running session (switching tabs
 // keeps it); no draft, no remembered client names, no logo is written to disk,
 // and any draft an older build left in localStorage is deleted at startup.
+// The one thing kept is what the user explicitly saves as a named LAYOUT (Review
+// step, "Save as layout..."): the main process stores it under userData until the
+// user deletes it; loading one is always the user's choice on the Job step.
 
 import JSZip from 'jszip';
 import { buildStyledXlsx } from '../../core/export/xlsx';
@@ -34,7 +37,13 @@ import { buildSheetWorkbook, type AreaInfo, type AreaPoint, type MapInfo } from 
 import { fitMapGrid, toPx, niceStep, scaleBarMetres, ticks, fmtDistance, type MapGrid } from '../../core/sheet/mapframe';
 import { ringArea, ringPerimeter, pathLength, convexHull, isClosed, type XY } from '../../core/gis/polygon';
 import { coordLines, lineMismatch, linesFromCoords } from '../../core/sheet/reconcile';
-import { buildConfig, parseConfig, describeConfig, CONFIG_EXT, type ConfigOptions } from '../../core/sheet/config';
+import { buildConfig, parseConfig, describeConfig, CONFIG_EXT, type ConfigOptions, type ConfigInfo } from '../../core/sheet/config';
+import { cleanLayoutName, findLayoutByName, LAYOUT_NAME_MAX } from '../../core/sheet/layouts';
+
+/** One saved layout as listed by the main process (A-Z). */
+export interface PsLayoutItem { id: string; name: string; savedAt: string; info: ConfigInfo }
+export interface PsLayoutListResult { ok: boolean; layouts: PsLayoutItem[]; skipped: number }
+export interface PsLayoutResult { ok: boolean; error?: string; exists?: boolean; id?: string; name?: string }
 
 export interface PsDeps {
   api: {
@@ -51,12 +60,19 @@ export interface PsDeps {
     paramSheetPickLogo(): Promise<{ ok: boolean; error?: string; data?: Uint8Array; format?: 'png' | 'jpeg'; w?: number; h?: number; name?: string } | null>;
     paramSheetOpenConfig(): Promise<{ ok: boolean; error?: string; text?: string; name?: string } | null>;
     exportText(name: string, text: string): Promise<{ ok: boolean; path?: string; canceled?: boolean; error?: string }>;
+    paramSheetLayoutList(): Promise<PsLayoutListResult>;
+    paramSheetLayoutSave(args: { name: string; text: string; replaceId?: string }): Promise<PsLayoutResult>;
+    paramSheetLayoutLoad(id: string): Promise<PsLayoutResult & { text?: string }>;
+    paramSheetLayoutRename(args: { id: string; name: string }): Promise<PsLayoutResult>;
+    paramSheetLayoutDelete(id: string): Promise<{ ok: boolean; error?: string }>;
   };
   showProgress(label: string, onCancel?: () => void, delayMs?: number): void;
   hideProgress(): void;
   infoToast(message: string): void;
   /** In-app confirm; `okLabel` names the OK button (defaults to "Delete"). */
   confirm(message: string, okLabel?: string): Promise<boolean>;
+  /** In-app text input; resolves to the trimmed text, or null on Cancel. */
+  prompt(message: string, defaultValue?: string, title?: string): Promise<string | null>;
   audit(action: string, detail: string, tab?: string): void;
   initCrsPicker(inputId: string, resultsId: string, pickedId: string, emptyLabel: string, onPick?: (code: string, name: string) => void): void;
   crsPickerSet(inputId: string, code: string, name: string): void;
@@ -279,31 +295,36 @@ function renderLogoField(form: HTMLElement): void {
     row.appendChild(rm);
   }
   wrap.appendChild(row);
-  wrap.appendChild(el('span', { class: 'ps-note' }, 'PNG or JPEG, up to 5 MB. Shown at the right of the sheet title and on the map. Not kept after the app closes.'));
+  wrap.appendChild(el('span', { class: 'ps-note' }, 'PNG or JPEG, up to 5 MB. Shown at the right of the sheet title and on the map. Not kept after the app closes, unless saved in a layout.'));
   form.appendChild(wrap);
 }
 
 // -- saved configurations (.seisparams) -----------------------------------------------
-// A configuration is a FILE the user chooses to write (Review step) and load into a
-// later, similar job. The app itself still stores nothing; the format and the
-// sanitiser are in core/sheet/config.ts.
+// A configuration is what the user chooses to keep (Review step) and load into a
+// later, similar job: as a named layout the main process stores under userData, or
+// as a .seisparams file. The format and the sanitiser are in core/sheet/config.ts.
 
 /** True when anything at all is filled in the current sheet. */
 function sheetHasData(): boolean {
   return !!M.logo || M.coords.points.length > 0 || PS_STEPS.some((s) => stepFilled(M, s));
 }
 
-/** The in-app "Save as configuration" dialog: two opt-in groups, both off. */
-function askConfigOptions(): Promise<ConfigOptions | null> {
+/** The in-app "Save as layout" dialog: a name, two opt-in groups (both off), and
+ *  "Export as file" (the .seisparams file) beside "Save layout" (kept in the app). */
+function askSaveLayout(): Promise<{ action: 'save' | 'export'; name: string; opts: ConfigOptions } | null> {
   let back = $('psCfgBack');
   if (!back) {
     back = el('div', { class: 'modal-back', id: 'psCfgBack', role: 'dialog', 'aria-modal': 'true', 'aria-labelledby': 'psCfgTitle' });
     const modal = el('div', { class: 'modal confirm-modal' });
     const head = el('div', { class: 'mh' });
-    head.appendChild(el('h2', { id: 'psCfgTitle' }, 'Save as configuration'));
+    head.appendChild(el('h2', { id: 'psCfgTitle' }, 'Save as layout'));
     modal.appendChild(head);
     const body = el('div', { class: 'mbody' });
-    body.appendChild(el('p', {}, 'Saves every parameter, the lines and the logo to a .seisparams file you can load next time there is a similar job (or send to a colleague).'));
+    body.appendChild(el('p', {}, 'Keeps every parameter, the lines and the logo as a layout on this computer, so the next similar job can start from it. Export as file writes the same thing to a .seisparams file (to keep elsewhere or send to a colleague).'));
+    body.appendChild(el('label', { for: 'psLayoutName', style: 'display:block;margin:10px 0 4px;font-weight:600;' }, 'Layout name'));
+    const nm = el('input', { class: 'ctl', id: 'psLayoutName', type: 'text', maxlength: String(LAYOUT_NAME_MAX), autocomplete: 'off', style: 'width:100%;' });
+    body.appendChild(nm);
+    body.appendChild(el('div', { id: 'psLayoutNameMsg', style: 'min-height:16px;font-size:11.5px;color:var(--red);margin-top:3px;' }));
     const box = (id: string, text: string) => {
       const lab = el('label', { style: 'display:flex;gap:8px;align-items:flex-start;margin:8px 0;cursor:pointer;' });
       const cb = el('input', { type: 'checkbox', id, style: 'margin-top:3px;accent-color:var(--teal);' });
@@ -315,44 +336,94 @@ function askConfigOptions(): Promise<ConfigOptions | null> {
     box('psCfgJob', 'Include job-specific details (job number, dates, client, prospect, prepared by, revision, notes)');
     modal.appendChild(body);
     const foot = el('div', { class: 'mh confirm-foot' });
+    foot.appendChild(el('button', { class: 'btn sm', type: 'button', id: 'psCfgExport' }, 'Export as file'));
     foot.appendChild(el('span', { style: 'flex:1' }));
     foot.appendChild(el('button', { class: 'btn sm', type: 'button', id: 'psCfgCancel' }, 'Cancel'));
-    foot.appendChild(el('button', { class: 'btn sm btn-primary', type: 'button', id: 'psCfgOk' }, 'Save...'));
+    foot.appendChild(el('button', { class: 'btn sm btn-primary', type: 'button', id: 'psCfgOk' }, 'Save layout'));
     modal.appendChild(foot);
     back.appendChild(modal);
     document.body.appendChild(back);
   }
   const b = back;
+  const nameIn = b.querySelector('#psLayoutName') as HTMLInputElement;
+  const msg = b.querySelector('#psLayoutNameMsg') as HTMLElement;
+  nameIn.value = (M.job.prospect.trim() || M.job.jobType.trim()).slice(0, LAYOUT_NAME_MAX);
+  msg.textContent = '';
   (b.querySelector('#psCfgCoords') as HTMLInputElement).checked = false;
   (b.querySelector('#psCfgJob') as HTMLInputElement).checked = false;
   b.classList.add('open');
   return new Promise((resolve) => {
-    const done = (v: ConfigOptions | null) => {
-      b.classList.remove('open');
-      okBtn.removeEventListener('click', onOk); cancelBtn.removeEventListener('click', onCancel); b.removeEventListener('keydown', onKey);
-      resolve(v);
-    };
     const okBtn = b.querySelector('#psCfgOk') as HTMLButtonElement;
+    const expBtn = b.querySelector('#psCfgExport') as HTMLButtonElement;
     const cancelBtn = b.querySelector('#psCfgCancel') as HTMLButtonElement;
-    const onOk = () => done({
+    const opts = (): ConfigOptions => ({
       coords: (b.querySelector('#psCfgCoords') as HTMLInputElement).checked,
       jobDetails: (b.querySelector('#psCfgJob') as HTMLInputElement).checked,
     });
+    const done = (v: { action: 'save' | 'export'; name: string; opts: ConfigOptions } | null) => {
+      b.classList.remove('open');
+      okBtn.removeEventListener('click', onOk); expBtn.removeEventListener('click', onExport);
+      cancelBtn.removeEventListener('click', onCancel); b.removeEventListener('keydown', onKey);
+      resolve(v);
+    };
+    const onOk = () => {
+      const name = cleanLayoutName(nameIn.value);
+      if (!name) { msg.textContent = 'Give the layout a name.'; nameIn.focus(); return; }
+      done({ action: 'save', name, opts: opts() });
+    };
+    const onExport = () => done({ action: 'export', name: cleanLayoutName(nameIn.value) ?? '', opts: opts() });
     const onCancel = () => done(null);
-    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') done(null); };
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') done(null);
+      else if (e.key === 'Enter' && e.target === nameIn) { e.preventDefault(); onOk(); }
+    };
     okBtn.addEventListener('click', onOk);
+    expBtn.addEventListener('click', onExport);
     cancelBtn.addEventListener('click', onCancel);
     b.addEventListener('keydown', onKey);
-    okBtn.focus();
+    nameIn.focus(); nameIn.select();
   });
 }
 
-async function saveConfig(): Promise<void> {
-  const opts = await askConfigOptions();
-  if (!opts) return;
+function configText(opts: ConfigOptions): string {
   const now = new Date();
-  const text = buildConfig(M, opts, { version: D.version, savedAt: `${todayIso()} ${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}` });
-  const stem = (M.job.jobType || 'parameters').replace(/[^A-Za-z0-9_.-]+/g, '_').replace(/^_+|_+$/g, '').slice(0, 60) || 'parameters';
+  return buildConfig(M, opts, { version: D.version, savedAt: `${todayIso()} ${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}` });
+}
+const fileStem = (s: string) => s.replace(/[^A-Za-z0-9_.-]+/g, '_').replace(/^_+|_+$/g, '').slice(0, 60) || 'parameters';
+
+/** Review step: "Save as layout..." (in the app) or, from the same dialog, export a file. */
+async function saveLayout(): Promise<void> {
+  const r = await askSaveLayout();
+  if (!r) return;
+  if (r.action === 'export') { await exportConfigFile(r.opts, r.name); return; }
+  const text = configText(r.opts);
+  await refreshLayouts();
+  let replaceId: string | undefined;
+  const clash = findLayoutByName(layouts, r.name);
+  if (clash) {
+    if (!(await D.confirm(`A layout named ${clash.name} exists. Replace it?`, 'Replace'))) return;
+    replaceId = clash.id;
+  }
+  try {
+    let res = await D.api.paramSheetLayoutSave({ name: r.name, text, replaceId });
+    if (!res.ok && res.exists && res.id) {            // appeared meanwhile (another window)
+      if (!(await D.confirm(`A layout named ${res.name ?? r.name} exists. Replace it?`, 'Replace'))) return;
+      res = await D.api.paramSheetLayoutSave({ name: r.name, text, replaceId: res.id });
+    }
+    if (!res.ok) { D.infoToast(res.error || 'The layout could not be saved.'); return; }
+    await refreshLayouts();
+    setStatus(`Saved layout ${res.name ?? r.name}`);
+    D.infoToast(`Saved layout: ${res.name ?? r.name}`);
+    D.audit('save', `parameter layout "${res.name ?? r.name}" (coords ${r.opts.coords ? 'in' : 'out'}, job details ${r.opts.jobDetails ? 'in' : 'out'})`, 'paramsheet');
+  } catch (e) {
+    D.infoToast('Could not save the layout: ' + D.errMsg(e));
+  }
+}
+
+/** Write the configuration to a .seisparams file (the "Export as file" path). */
+async function exportConfigFile(opts: ConfigOptions, name: string): Promise<void> {
+  const text = configText(opts);
+  const stem = fileStem(name || M.job.jobType || 'parameters');
   try {
     const r = await D.api.exportText(`${stem}.${CONFIG_EXT}`, text);
     if (r?.ok) {
@@ -373,27 +444,217 @@ async function loadConfig(): Promise<void> {
   const res = parseConfig(r.text);
   if (!res.ok) { D.infoToast(res.error); return; }
   if (sheetHasData() && !(await D.confirm('Replace the current sheet with the configuration?', 'Replace'))) return;
+  const what = applyConfig(res);
+  D.audit('import', `parameter configuration ${r.name ?? ''}: ${what}`, 'paramsheet');
+  D.infoToast(`Loaded configuration: ${what}`);
+}
+
+/** Put a parsed configuration into the sheet; returns its one-line description. */
+function applyConfig(res: Extract<ReturnType<typeof parseConfig>, { ok: true }>): string {
   M = res.model;
   lastPresetFor = M.job.jobType;
   sniff = null; coordText = ''; coordFile = ''; previewBasemap = null;
   D.crsPickerSet('psCrsSearch', M.coords.crsCode, M.coords.crsName);
-  const what = describeConfig(res.info);
-  D.audit('import', `parameter configuration ${r.name ?? ''}: ${what}`, 'paramsheet');
   setStatus('');
   go('job');
-  D.infoToast(`Loaded configuration: ${what}`);
+  return describeConfig(res.info);
 }
 
 function configButton(kind: 'save' | 'load', id: string): HTMLButtonElement {
-  // Save sits beside the large primary XLSX button, so it matches its size; Load is a
-  // normal secondary button at the top of the Job step.
+  // Save sits beside the large primary XLSX button, so it matches its size; Import is
+  // a normal secondary button in the saved-layout row at the top of the Job step.
   const b = el('button', { class: kind === 'save' ? 'btn lg' : 'btn', type: 'button', id },
-    kind === 'save' ? 'Save as configuration...' : 'Load configuration...');
+    kind === 'save' ? 'Save as layout...' : 'Import file');
   b.title = kind === 'save'
-    ? 'Save the parameters, lines and logo to a .seisparams file to load next time there is a similar job'
-    : 'Fill the sheet from a saved .seisparams configuration';
-  b.addEventListener('click', () => void (kind === 'save' ? saveConfig() : loadConfig()));
+    ? 'Keep the parameters, lines and logo as a layout for the next similar job (or export them to a .seisparams file)'
+    : 'Fill the sheet from a .seisparams configuration file';
+  b.addEventListener('click', () => void (kind === 'save' ? saveLayout() : loadConfig()));
   return b;
+}
+
+// -- saved layouts (kept by the main process under userData) -------------------------
+// The list is cached here so the Job step renders synchronously; it is refreshed at
+// start, when the tab is shown and after every change.
+
+let layouts: PsLayoutItem[] = [];
+let layoutsSkipped = 0;
+let selectedLayoutId = '';
+
+async function refreshLayouts(): Promise<void> {
+  try {
+    const r = await D.api.paramSheetLayoutList();
+    layouts = Array.isArray(r?.layouts) ? r.layouts : [];
+    const skipped = typeof r?.skipped === 'number' ? r.skipped : 0;
+    if (skipped > 0 && skipped !== layoutsSkipped) {
+      D.infoToast(`${skipped} saved layout${skipped === 1 ? '' : 's'} could not be read and ${skipped === 1 ? 'was' : 'were'} skipped.`);
+    }
+    layoutsSkipped = skipped;
+  } catch {
+    layouts = [];
+  }
+  if (selectedLayoutId && !layouts.some((l) => l.id === selectedLayoutId)) selectedLayoutId = '';
+  fillLayoutSelect();
+  renderManageList();
+}
+
+function fillLayoutSelect(): void {
+  const sel = $('psLayoutSel') as HTMLSelectElement | null;
+  if (!sel) return;
+  sel.innerHTML = '';
+  if (!layouts.length) {
+    sel.appendChild(el('option', { value: '' }, 'No saved layouts yet'));
+    return;
+  }
+  sel.appendChild(el('option', { value: '' }, 'Choose a saved layout'));
+  for (const l of layouts) sel.appendChild(el('option', { value: l.id }, l.name));
+  sel.value = selectedLayoutId;
+}
+
+function renderLayoutRow(form: HTMLElement): void {
+  const cfg = el('div', { class: 'olog-field wide', id: 'psCfgField' });
+  cfg.appendChild(el('label', { for: 'psLayoutSel' }, 'Start from a saved layout (optional)'));
+  const row = el('div', { class: 'ps-in', style: 'justify-content:flex-start;gap:8px;flex-wrap:wrap;' });
+  const sel = el('select', { class: 'ctl', id: 'psLayoutSel', style: 'flex:1 1 260px;max-width:420px;' });
+  sel.addEventListener('change', () => { selectedLayoutId = sel.value; });
+  row.appendChild(sel);
+  const use = el('button', { class: 'btn', type: 'button', id: 'psLayoutUseBtn' }, 'Use layout');
+  use.title = 'Fill the sheet from the chosen layout';
+  use.addEventListener('click', () => void useLayout());
+  const man = el('button', { class: 'btn', type: 'button', id: 'psLayoutManageBtn' }, 'Manage');
+  man.title = 'Rename, delete or export your saved layouts';
+  man.addEventListener('click', () => void openManage());
+  const imp = configButton('load', 'psCfgLoadBtn');
+  for (const b of [use, man, imp]) { b.style.flex = 'none'; row.appendChild(b); }
+  cfg.appendChild(row);
+  cfg.appendChild(el('span', { class: 'ps-note' }, 'Your layouts are kept on this computer. The sheet itself still starts empty every time the app opens.'));
+  form.appendChild(cfg);
+  fillLayoutSelect();
+}
+
+async function useLayout(): Promise<void> {
+  const sel = $('psLayoutSel') as HTMLSelectElement | null;
+  const id = sel?.value || '';
+  if (!id) {
+    D.infoToast(layouts.length
+      ? 'Choose a saved layout from the list first.'
+      : 'No saved layouts yet. Fill a sheet, then use Save as layout... on the Review step.');
+    return;
+  }
+  let r: Awaited<ReturnType<PsDeps['api']['paramSheetLayoutLoad']>>;
+  try { r = await D.api.paramSheetLayoutLoad(id); } catch (e) { D.infoToast('Could not open the layout: ' + D.errMsg(e)); return; }
+  if (!r?.ok || typeof r.text !== 'string') { D.infoToast(r?.error || 'This layout could not be read.'); void refreshLayouts(); return; }
+  const res = parseConfig(r.text);
+  if (!res.ok) { D.infoToast(res.error); return; }
+  const name = r.name ?? '';
+  if (sheetHasData() && !(await D.confirm(`Replace the current sheet with the layout ${name}?`, 'Replace'))) return;
+  selectedLayoutId = id;
+  const what = applyConfig(res);
+  D.audit('import', `parameter layout "${name}": ${what}`, 'paramsheet');
+  D.infoToast(`Loaded layout: ${name} (${what})`);
+}
+
+/** The Manage dialog: every layout with Rename, Export and Delete. */
+async function openManage(): Promise<void> {
+  let back = $('psLayoutsBack');
+  if (!back) {
+    back = el('div', { class: 'modal-back', id: 'psLayoutsBack', role: 'dialog', 'aria-modal': 'true', 'aria-labelledby': 'psLayoutsTitle' });
+    const modal = el('div', { class: 'modal', style: 'width:min(640px,100%);' });
+    const head = el('div', { class: 'mh' });
+    head.appendChild(el('h2', { id: 'psLayoutsTitle' }, 'Saved layouts'));
+    modal.appendChild(head);
+    const body = el('div', { class: 'mbody', style: 'overflow:auto;' });
+    body.appendChild(el('p', { style: 'margin:0 0 8px;' }, 'Kept on this computer only. Export writes a layout to a .seisparams file.'));
+    body.appendChild(el('div', { id: 'psLayoutsList' }));
+    modal.appendChild(body);
+    const foot = el('div', { class: 'mh confirm-foot' });
+    foot.appendChild(el('span', { style: 'flex:1' }));
+    const close = el('button', { class: 'btn sm btn-primary', type: 'button', id: 'psLayoutsClose' }, 'Close');
+    foot.appendChild(close);
+    modal.appendChild(foot);
+    back.appendChild(modal);
+    document.body.appendChild(back);
+    const b = back;
+    const hide = () => { b.classList.remove('open'); fillLayoutSelect(); };
+    close.addEventListener('click', hide);
+    b.addEventListener('keydown', (e) => {
+      // Escape closes Manage only when no confirm / prompt is open over it.
+      if ((e as KeyboardEvent).key === 'Escape' && !$('confirmBack')?.classList.contains('open') && !$('promptBack')?.classList.contains('open')) hide();
+    });
+  }
+  renderManageList();
+  back.classList.add('open');
+  ($('psLayoutsClose') as HTMLButtonElement | null)?.focus();
+  await refreshLayouts();
+}
+
+function renderManageList(): void {
+  const list = $('psLayoutsList');
+  if (!list) return;
+  list.innerHTML = '';
+  if (!layouts.length) {
+    list.appendChild(el('p', { id: 'psLayoutsEmpty', style: 'color:var(--ink-3);margin:10px 0;' }, 'No saved layouts yet. Use Save as layout... on the Review step.'));
+    return;
+  }
+  for (const l of layouts) {
+    const row = el('div', { class: 'ps-layout-row', 'data-id': l.id, style: 'display:flex;align-items:center;gap:8px;padding:7px 0;border-bottom:1px solid var(--hair);' });
+    const txt = el('div', { style: 'flex:1;min-width:0;' });
+    txt.appendChild(el('div', { class: 'ps-layout-name', style: 'font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;' }, l.name));
+    txt.appendChild(el('div', { style: 'font-size:11.5px;color:var(--ink-3);' }, `${describeConfig(l.info)}${l.savedAt ? `; saved ${l.savedAt}` : ''}`));
+    row.appendChild(txt);
+    const btn = (label: string, act: string, fn: () => void) => {
+      const b = el('button', { class: 'btn sm', type: 'button', 'data-act': act }, label);
+      b.addEventListener('click', fn);
+      row.appendChild(b);
+    };
+    btn('Rename', 'rename', () => void renameLayout(l));
+    btn('Export', 'export', () => void exportLayout(l));
+    btn('Delete', 'delete', () => void deleteLayout(l));
+    list.appendChild(row);
+  }
+}
+
+async function renameLayout(l: PsLayoutItem): Promise<void> {
+  const raw = await D.prompt('Layout name', l.name, 'Rename layout');
+  if (raw == null) return;
+  const name = cleanLayoutName(raw);
+  if (!name) { D.infoToast('A layout needs a name.'); return; }
+  if (name === l.name) return;
+  try {
+    const r = await D.api.paramSheetLayoutRename({ id: l.id, name });
+    if (!r.ok) { D.infoToast(r.error || 'The layout could not be renamed.'); return; }
+    D.audit('save', `renamed parameter layout "${l.name}" to "${name}"`, 'paramsheet');
+    D.infoToast(`Renamed layout: ${name}`);
+  } catch (e) {
+    D.infoToast('Could not rename the layout: ' + D.errMsg(e));
+  }
+  await refreshLayouts();
+}
+
+async function deleteLayout(l: PsLayoutItem): Promise<void> {
+  if (!(await D.confirm(`Delete the layout ${l.name}? This cannot be undone.`, 'Delete layout'))) return;
+  try {
+    const r = await D.api.paramSheetLayoutDelete(l.id);
+    if (!r.ok) { D.infoToast(r.error || 'The layout could not be deleted.'); return; }
+    D.audit('delete', `deleted parameter layout "${l.name}"`, 'paramsheet');
+    D.infoToast(`Deleted layout: ${l.name}`);
+  } catch (e) {
+    D.infoToast('Could not delete the layout: ' + D.errMsg(e));
+  }
+  await refreshLayouts();
+}
+
+async function exportLayout(l: PsLayoutItem): Promise<void> {
+  try {
+    const r = await D.api.paramSheetLayoutLoad(l.id);
+    if (!r?.ok || typeof r.text !== 'string') { D.infoToast(r?.error || 'This layout could not be read.'); return; }
+    const w = await D.api.exportText(`${fileStem(l.name)}.${CONFIG_EXT}`, r.text);
+    if (w?.ok) {
+      D.infoToast(`Exported layout: ${l.name}`);
+      D.audit('export', `parameter layout "${l.name}" -> ${w.path}`, 'paramsheet');
+    } else if (!w?.canceled) D.infoToast('Export failed: ' + (w?.error || 'unknown'));
+  } catch (e) {
+    D.infoToast('Could not export the layout: ' + D.errMsg(e));
+  }
 }
 
 // -- rendering ------------------------------------------------------------------------
@@ -1283,18 +1544,9 @@ function renderStep(): void {
   if (step === 'coords') renderCoords(form);
   else if (step === 'review') renderReview(form);
   else {
-    // Loading a saved configuration starts a job, so it sits at the top of the Job step.
-    if (step === 'job') {
-      const cfg = el('div', { class: 'olog-field wide', id: 'psCfgField' });
-      cfg.appendChild(el('label', {}, 'Saved configuration (optional)'));
-      const row = el('div', { class: 'ps-in', style: 'justify-content:flex-start;gap:10px;' });
-      const lb = configButton('load', 'psCfgLoadBtn');
-      lb.style.flex = 'none';
-      row.appendChild(lb);
-      row.appendChild(el('span', { class: 'ps-note' }, 'Fill this sheet from a .seisparams file saved on the Review step of an earlier, similar job.'));
-      cfg.appendChild(row);
-      form.appendChild(cfg);
-    }
+    // Starting from a saved layout (or an imported file) starts a job, so it sits at
+    // the top of the Job step.
+    if (step === 'job') renderLayoutRow(form);
     for (const f of SPECS[step]) if (!f.show || f.show()) form.appendChild(renderField(f));
     if (step === 'geometry') renderLines(form);
     const dv = derivedFor(step);
@@ -1335,6 +1587,7 @@ export async function paramSheetNew(): Promise<void> {
   if (!ok) return;
   M = emptySheet();
   lastPresetFor = '';
+  selectedLayoutId = '';
   sniff = null; coordText = ''; coordFile = ''; previewBasemap = null;
   D.audit('clear', 'cleared the parameter sheet', 'paramsheet');
   setStatus('');
@@ -1344,6 +1597,7 @@ export async function paramSheetNew(): Promise<void> {
 /** Called by switchTab when the tab is shown. */
 export function paramSheetShown(): void {
   renderStep();
+  void refreshLayouts();
 }
 
 /** Wire the tab once at start. */
@@ -1375,4 +1629,5 @@ export function initParamSheet(deps: PsDeps): void {
     if (step !== 'review') { (t as HTMLInputElement).blur?.(); window.setTimeout(next, 0); }
   });
   renderStep();
+  void refreshLayouts();
 }

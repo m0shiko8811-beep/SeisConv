@@ -29,7 +29,7 @@ import { amplitudeSpectrum, fft, nextPow2 } from '../../core/dsp/fft';
 import { crossCorrelate, difference } from '../../core/dsp/correlate';
 import { resampleLinear } from '../../core/dsp/interpolate';
 import { MANUAL } from './manual';
-import { initParamSheet, paramSheetShown, paramSheetNew } from './paramsheet';
+import { initParamSheet, paramSheetShown, paramSheetNew, type PsLayoutListResult, type PsLayoutResult } from './paramsheet';
 import {
   classifyTrace, thresholdsForSensitivity, readEvidence, DETECTOR_IDS, NOISE_GUARD_MS,
   type DetectorId, type DetectorResult, type TraceFinding, type HealthThresholds, type Sensitivity,
@@ -485,6 +485,12 @@ declare global {
       }>;
       paramSheetPickLogo(): Promise<{ ok: boolean; error?: string; data?: Uint8Array; format?: 'png' | 'jpeg'; w?: number; h?: number; name?: string } | null>;
       paramSheetOpenConfig(): Promise<{ ok: boolean; error?: string; text?: string; name?: string } | null>;
+      // Parameters Sheet saved layouts (stored by main under userData; see paramsheet.ts).
+      paramSheetLayoutList(): Promise<PsLayoutListResult>;
+      paramSheetLayoutSave(args: { name: string; text: string; replaceId?: string }): Promise<PsLayoutResult>;
+      paramSheetLayoutLoad(id: string): Promise<PsLayoutResult & { text?: string }>;
+      paramSheetLayoutRename(args: { id: string; name: string }): Promise<PsLayoutResult>;
+      paramSheetLayoutDelete(id: string): Promise<{ ok: boolean; error?: string }>;
       semblance(opts: { velMin: number; velMax: number; velStep: number }): Promise<SemblanceData>;
       // -- Spectrum-analysis tab --
       // Mean amplitude spectrum of the open file (or a [traceStart,traceEnd) window).
@@ -23012,7 +23018,7 @@ function init() {
   // Parameters Sheet tab: its DOM lives in renderer/src/paramsheet.ts; app.ts only
   // hands over the shared helpers (modals, toasts, progress, audit, CRS picker).
   initParamSheet({
-    api, showProgress, hideProgress, infoToast, confirm: confirmDelete, audit,
+    api, showProgress, hideProgress, infoToast, confirm: confirmDelete, prompt: promptInput, audit,
     initCrsPicker, crsPickerSet, errMsg, version: APP_VERSION,
   });
   $opt('spsExpShpBtn')?.addEventListener('click', () => void exportShapefile());

@@ -22,6 +22,9 @@ same files) - never anywhere else, never on a server:
   and reopening the app.
 - An in-progress SPS survey-plan draft, autosaved so it isn't lost switching
   tabs.
+- Parameters Sheet layouts you choose to save ("Save as layout..."), one file
+  each in a `paramsheet-layouts` folder inside that data folder, until you
+  delete them under Manage; they are never sent anywhere.
 - WiFiSync settings - the shared folder path, the peers you've approved, and
   the hotspot name and password if you set one - stored as plain JSON in that
   folder.

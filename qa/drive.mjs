@@ -709,7 +709,7 @@ const globalPageErrors = [];
       const boxesOff = await win.evaluate(() => !document.getElementById('psCfgCoords')?.checked && !document.getElementById('psCfgJob')?.checked);
       if (!boxesOff) fails.push('the configuration checkboxes are not off by default');
       await win.screenshot({ path: join(SHOTS, '_ps_cfg_save_dialog.png') }).catch(() => {});
-      await win.click('#psCfgOk');
+      await win.click('#psCfgExport');                   // "Export as file" = the .seisparams file
       await win.waitForFunction(() => /Saved configuration|failed|Could not/.test(document.getElementById('psStatus')?.textContent || ''), null, { timeout: 10000 })
         .catch(() => fails.push('saving the configuration did not report'));
       if (!existsSync(cfgPath)) fails.push('no .seisparams file was written');
@@ -753,6 +753,93 @@ const globalPageErrors = [];
       await win.click('#psStep-coords');
       if (await win.evaluate(() => !!document.getElementById('psPtsTbl'))) fails.push('configuration restored coordinates that were left out');
       notes.push(`config load: lines=${lineRows} logo=${restored.logo}`);
+      // Saved layouts (kept by main under userData): save two (+ a same-name replace),
+      // New sheet, pick one from the list, Use, restored; Manage: rename, delete; the
+      // list ends as it started. Only the layouts made here are touched.
+      const lay = async () => win.evaluate(async () => (await window.seisconvAPI.paramSheetLayoutList()).layouts.map((l) => ({ id: l.id, name: l.name })));
+      const before = await lay();
+      const toastIs = async (re, what) => {
+        await win.waitForFunction((src) => new RegExp(src).test(document.getElementById('undoToastMsg')?.textContent || ''), re.source, { timeout: 10000 })
+          .catch(() => fails.push(`no "${what}" toast`));
+      };
+      const saveLayoutAs = async (name, shot) => {
+        await win.click('#psStep-review');
+        await win.click('#psCfgSaveBtn');
+        await win.waitForSelector('#psCfgBack.open', { timeout: 5000 }).catch(() => fails.push('the save-layout dialog did not open'));
+        if (shot) {
+          const pre = await win.inputValue('#psLayoutName').catch(() => '');
+          if (pre !== 'Vibroseis 2D Reflection') fails.push(`the layout name is prefilled with "${pre}", not the job type`);
+          const off = await win.evaluate(() => !document.getElementById('psCfgCoords')?.checked && !document.getElementById('psCfgJob')?.checked);
+          if (!off) fails.push('the layout checkboxes are not off by default');
+        }
+        await win.fill('#psLayoutName', name);
+        if (shot) await win.screenshot({ path: join(SHOTS, shot) }).catch(() => {});
+        await win.click('#psCfgOk');
+      };
+      await saveLayoutAs('QA layout B', '_ps_layouts_save.png');
+      await toastIs(/Saved layout: QA layout B/, 'Saved layout');
+      await saveLayoutAs('QA layout A');
+      await toastIs(/Saved layout: QA layout A/, 'Saved layout');
+      await saveLayoutAs('qa LAYOUT a');                // same name: asks, "Replace"
+      await win.waitForSelector('#confirmBack.open', { timeout: 5000 }).catch(() => fails.push('a same-name layout save did not ask first'));
+      const repl = ((await win.textContent('#confirmOk').catch(() => '')) || '').trim();
+      const replMsg = ((await win.textContent('#confirmMsg').catch(() => '')) || '').trim();
+      if (repl !== 'Replace' || !/A layout named QA layout A exists\. Replace it\?/.test(replMsg)) fails.push(`same-name confirm: "${replMsg}" / "${repl}"`);
+      await win.click('#confirmOk');
+      await toastIs(/Saved layout: qa LAYOUT a/, 'Saved layout (replace)');
+      const mine = (await lay()).filter((l) => !before.some((b) => b.id === l.id));
+      if (mine.length !== 2) fails.push(`expected 2 new layouts, found ${mine.length}: ${mine.map((l) => l.name).join(', ')}`);
+      await newSheet();
+      await win.click('#psStep-job');
+      const opts = await win.evaluate(() => [...document.querySelectorAll('#psLayoutSel option')].map((o) => o.textContent));
+      const ia = opts.indexOf('qa LAYOUT a'), ib = opts.indexOf('QA layout B');
+      if (opts[0] !== 'Choose a saved layout' || ia < 0 || ib < 0 || ia > ib) fails.push(`layout dropdown not A-Z: ${opts.join(' | ')}`);
+      if ((await win.inputValue('#psLayoutSel').catch(() => '?')) !== '') fails.push('a new sheet starts with a layout already chosen');
+      await win.click('#psLayoutUseBtn');                // nothing chosen: a hint, nothing else
+      await toastIs(/Choose a saved layout/, 'choose a layout hint');
+      const aId = mine.find((l) => /^qa layout a$/i.test(l.name))?.id || '';
+      await win.selectOption('#psLayoutSel', aId);
+      // A native <select> popup is not in a page screenshot; show the list expanded instead.
+      await win.evaluate(() => { const s = document.getElementById('psLayoutSel'); s.size = Math.min(6, s.options.length); s.style.height = 'auto'; });
+      await win.screenshot({ path: join(SHOTS, '_ps_layouts_job.png') }).catch(() => {});
+      await win.evaluate(() => { const s = document.getElementById('psLayoutSel'); s.size = 0; s.style.height = ''; });
+      await win.click('#psLayoutUseBtn');
+      await toastIs(/Loaded layout: qa LAYOUT a \(3 lines, logo, no coordinates\)/, 'Loaded layout');
+      notes.push(`layout toast: ${((await win.textContent('#undoToastMsg').catch(() => '')) || '').trim()}`);
+      await win.screenshot({ path: join(SHOTS, '_ps_layouts_loaded.png') }).catch(() => {});
+      const lr = await win.evaluate(() => ({ jt: document.getElementById('ps-job-jobType')?.value, logo: !!document.getElementById('psLogoThumb') }));
+      if (lr.jt !== 'Vibroseis 2D Reflection' || !lr.logo) fails.push(`the layout did not restore the job type / logo (${JSON.stringify(lr)})`);
+      await win.click('#psStep-geometry');
+      const lRows = await win.evaluate(() => document.querySelectorAll('#psLines tr[data-path]').length);
+      if (lRows !== 3) fails.push(`the layout restored ${lRows} lines, not 3`);
+      await win.click('#psStep-job');
+      // Manage: rename one, then delete both of ours.
+      await win.click('#psLayoutManageBtn');
+      await win.waitForSelector('#psLayoutsBack.open', { timeout: 5000 }).catch(() => fails.push('the Manage dialog did not open'));
+      await sleep(250);
+      await win.screenshot({ path: join(SHOTS, '_ps_layouts_manage.png') }).catch(() => {});
+      await win.click(`#psLayoutsList [data-id="${aId}"] [data-act=rename]`);
+      await win.waitForSelector('#promptBack.open', { timeout: 5000 }).catch(() => fails.push('Rename did not ask for the name'));
+      await win.fill('#promptInput', 'QA layout Renamed');
+      await win.click('#promptOk');
+      await win.waitForFunction((id) => document.querySelector(`#psLayoutsList [data-id="${id}"] .ps-layout-name`)?.textContent === 'QA layout Renamed', aId, { timeout: 5000 })
+        .catch(() => fails.push('the rename did not show in the list'));
+      if (!(await lay()).some((l) => l.id === aId && l.name === 'QA layout Renamed')) fails.push('the rename was not stored');
+      for (const l of mine) {
+        await win.click(`#psLayoutsList [data-id="${l.id}"] [data-act=delete]`);
+        await win.waitForSelector('#confirmBack.open', { timeout: 5000 }).catch(() => fails.push('Delete did not ask first'));
+        const dl = ((await win.textContent('#confirmOk').catch(() => '')) || '').trim();
+        if (dl !== 'Delete layout') fails.push(`the delete confirm button says "${dl}"`);
+        await win.click('#confirmOk');
+        await win.waitForFunction((id) => !document.querySelector(`#psLayoutsList [data-id="${id}"]`), l.id, { timeout: 5000 })
+          .catch(() => fails.push(`layout ${l.name} still listed after Delete`));
+      }
+      await win.click('#psLayoutsClose');
+      const after = await lay();
+      if (JSON.stringify(after.map((l) => l.id)) !== JSON.stringify(before.map((l) => l.id))) fails.push('the layout list did not return to its starting state');
+      const firstOpt = await win.evaluate(() => document.querySelector('#psLayoutSel option')?.textContent || '');
+      if (!before.length && firstOpt !== 'No saved layouts yet') fails.push(`empty layout list shows "${firstOpt}"`);
+      notes.push(`layouts: before=${before.length} made=${mine.length} after=${after.length} empty="${firstOpt}"`);
       // Within the session, another tab and back keeps everything.
       await gotoTab(win, 'tab-conv', 'panel-conv');
       await gotoTab(win, 'tab-paramsheet', 'panel-paramsheet');

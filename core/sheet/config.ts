@@ -2,8 +2,8 @@
 //
 // A configuration is a portable JSON file the user saves from the Review step
 // and loads into a later, similar job (or sends to a colleague). It does not
-// break the "the sheet starts empty on every launch" rule: nothing is stored by
-// the app, only the file the user chose to write.
+// break the "the sheet starts empty on every launch" rule: only what the user chose
+// to save is kept, as a file or as a named layout (core/sheet/layouts.ts).
 //
 //   { format: "seisconv-paramsheet-config", version: 1, savedWith, savedAt, model }
 //

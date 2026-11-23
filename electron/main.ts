@@ -17,6 +17,10 @@ import { epsgCount, getEpsg, searchEpsgRegistry } from '../core/sps/epsgdb';
 import type { CRS } from '../core/sps/reproject';
 import { projToLatLon, latLonToProj, type Projection } from '../core/coords';
 import { suggestGridCode } from '../core/sheet/coordsniff';
+import {
+  LAYOUT_DIR, LAYOUT_MAX_COUNT, LAYOUT_MAX_BYTES, isLayoutId, layoutFileName, layoutIdFromFile, cleanLayoutName,
+  findLayoutByName, sortLayouts, newLayoutId, buildLayoutText, readLayoutText, type LayoutEntry,
+} from '../core/sheet/layouts';
 import { writeGeoTIFF } from '../core/gis/geotiff';
 import { fitZoom, resampleMosaic, zoomForResolution, TILE_SIZE } from '../core/gis/tilemosaic';
 import * as dns from 'node:dns';
@@ -2608,6 +2612,126 @@ ipcMain.handle('seisconv:paramSheetOpenConfig', async () => {
     return { ok: true, text: await readFile(p, 'utf8'), name: path.basename(p).slice(0, 120) };
   } catch (e) {
     return { ok: false, error: `The configuration could not be read: ${e instanceof Error ? e.message : String(e)}` };
+  }
+});
+
+// Parameters Sheet SAVED LAYOUTS: one JSON file per layout (a .seisparams
+// configuration plus its display name) in <userData>/paramsheet-layouts/. File names
+// are generated ids, never the user's name text; every id is checked against
+// LAYOUT_ID_RE and the resolved path must sit directly inside that folder. At most
+// 200 layouts, 5 MB each; files that do not parse are skipped (counted), never fatal.
+// Rules + parsing: core/sheet/layouts.ts.
+function psLayoutDir(): string {
+  return path.join(app.getPath('userData'), LAYOUT_DIR);
+}
+function psLayoutPath(id: unknown): string | null {
+  const file = layoutFileName(id);
+  if (!file) return null;
+  const dir = path.resolve(psLayoutDir());
+  const p = path.resolve(dir, file);
+  return path.dirname(p) === dir && path.basename(p) === file ? p : null;
+}
+async function psLayoutRead(id: string): Promise<{ entry: LayoutEntry; text: string } | null> {
+  const p = psLayoutPath(id);
+  if (!p) return null;
+  try {
+    const st = await lstat(p);
+    if (!st.isFile() || st.size > LAYOUT_MAX_BYTES) return null;
+    const text = await readFile(p, 'utf8');
+    const entry = readLayoutText(id, text);
+    return entry ? { entry, text } : null;
+  } catch { return null; }
+}
+async function psLayoutList(): Promise<{ list: LayoutEntry[]; skipped: number }> {
+  let files: string[] = [];
+  try { files = await readdir(psLayoutDir()); } catch { return { list: [], skipped: 0 }; }
+  const list: LayoutEntry[] = [];
+  let skipped = 0;
+  for (const f of files.slice(0, LAYOUT_MAX_COUNT * 4)) {
+    const id = layoutIdFromFile(f);
+    if (!id) continue;
+    if (list.length >= LAYOUT_MAX_COUNT) { skipped++; continue; }
+    const r = await psLayoutRead(id);
+    if (r) list.push(r.entry); else skipped++;
+  }
+  return { list: sortLayouts(list), skipped };
+}
+async function psLayoutWrite(id: string, text: string): Promise<void> {
+  const p = psLayoutPath(id);
+  if (!p) throw new Error('invalid layout id');
+  await mkdir(psLayoutDir(), { recursive: true });
+  const tmp = `${p}.${randomBytes(4).toString('hex')}.tmp`;   // never matches <id>.json
+  await writeFile(tmp, text, 'utf8');
+  try { await rename(tmp, p); } catch (e) { await unlink(tmp).catch(() => {}); throw e; }
+}
+const psLayoutView = (e: LayoutEntry) => ({ id: e.id, name: e.name, savedAt: e.savedAt, info: e.info });
+
+ipcMain.handle('seisconv:paramSheetLayoutList', async () => {
+  const { list, skipped } = await psLayoutList();
+  return { ok: true, layouts: list.map(psLayoutView), skipped };
+});
+// replaceId: the id of the same-named layout the user agreed to replace (in-app confirm).
+ipcMain.handle('seisconv:paramSheetLayoutSave', async (_e, args: unknown) => {
+  const a = (args && typeof args === 'object' ? args : {}) as Record<string, unknown>;
+  const name = cleanLayoutName(a.name);
+  if (!name) return { ok: false, error: 'Give the layout a name.' };
+  if (typeof a.text !== 'string' || Buffer.byteLength(a.text, 'utf8') > LAYOUT_MAX_BYTES) return { ok: false, error: 'The layout is larger than 5 MB.' };
+  const text = buildLayoutText(name, a.text);
+  if (!text) return { ok: false, error: 'The layout could not be built from this sheet.' };
+  try {
+    const { list } = await psLayoutList();
+    const clash = findLayoutByName(list, name);
+    let id: string;
+    if (clash) {
+      if (a.replaceId !== clash.id) return { ok: false, exists: true, id: clash.id, name: clash.name, error: `A layout named ${clash.name} exists.` };
+      id = clash.id;
+    } else {
+      if (list.length >= LAYOUT_MAX_COUNT) return { ok: false, error: `There are already ${LAYOUT_MAX_COUNT} saved layouts; delete some under Manage first.` };
+      id = newLayoutId(randomBytes(16));
+    }
+    await psLayoutWrite(id, text);
+    return { ok: true, id, name };
+  } catch (e) {
+    return { ok: false, error: `The layout could not be saved: ${e instanceof Error ? e.message : String(e)}` };
+  }
+});
+ipcMain.handle('seisconv:paramSheetLayoutLoad', async (_e, id: unknown) => {
+  if (!isLayoutId(id)) return { ok: false, error: 'Unknown layout.' };
+  const r = await psLayoutRead(id);
+  if (!r) return { ok: false, error: 'This layout could not be read (it was deleted or is damaged).' };
+  return { ok: true, id, name: r.entry.name, text: r.text };
+});
+// A rename onto a name another layout already has is refused (no silent merge).
+ipcMain.handle('seisconv:paramSheetLayoutRename', async (_e, args: unknown) => {
+  const a = (args && typeof args === 'object' ? args : {}) as Record<string, unknown>;
+  const id = a.id;
+  if (!isLayoutId(id)) return { ok: false, error: 'Unknown layout.' };
+  const name = cleanLayoutName(a.name);
+  if (!name) return { ok: false, error: 'Give the layout a name.' };
+  try {
+    const r = await psLayoutRead(id);
+    if (!r) return { ok: false, error: 'This layout could not be read (it was deleted or is damaged).' };
+    const { list } = await psLayoutList();
+    const clash = findLayoutByName(list, name, id);
+    if (clash) return { ok: false, exists: true, error: `A layout named ${clash.name} already exists; choose another name.` };
+    const text = buildLayoutText(name, r.text);
+    if (!text) return { ok: false, error: 'This layout could not be renamed.' };
+    await psLayoutWrite(id, text);
+    return { ok: true, id, name };
+  } catch (e) {
+    return { ok: false, error: `The layout could not be renamed: ${e instanceof Error ? e.message : String(e)}` };
+  }
+});
+ipcMain.handle('seisconv:paramSheetLayoutDelete', async (_e, id: unknown) => {
+  const p = psLayoutPath(id);
+  if (!p) return { ok: false, error: 'Unknown layout.' };
+  try {
+    const st = await lstat(p);
+    if (!st.isFile()) return { ok: false, error: 'Unknown layout.' };
+    await unlink(p);
+    return { ok: true };
+  } catch (e) {
+    return { ok: false, error: `The layout could not be deleted: ${e instanceof Error ? e.message : String(e)}` };
   }
 });
 

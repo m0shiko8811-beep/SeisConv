@@ -192,6 +192,10 @@ import { buildSheetWorkbook, excelDateSerial, titleLogo } from '../sheet/layout'
 import { fitMapGrid, toPx, niceStep, scaleBarMetres, ticks, fmtDistance } from '../sheet/mapframe';
 import { coordLines, lineMismatch, linesFromCoords, roundToInterval } from '../sheet/reconcile';
 import { buildConfig, parseConfig, sanitizeSheet, describeConfig, CONFIG_FORMAT, CONFIG_MAX_BYTES } from '../sheet/config';
+import {
+  isLayoutId, layoutFileName, layoutIdFromFile, newLayoutId, cleanLayoutName, sameLayoutName, sortLayouts, findLayoutByName,
+  buildLayoutText, readLayoutText, LAYOUT_NAME_MAX, LAYOUT_MAX_COUNT, LAYOUT_MAX_BYTES,
+} from '../sheet/layouts';
 import type { ParsedFile, SPSData, SPSPoint, Trace, TraceGeom } from '../index';
 import type { RGB } from '../render/colormaps';
 import {
@@ -8328,6 +8332,53 @@ async function paramSheetTests(): Promise<void> {
     assert.deepEqual(r.model.coords.points, [{ id: 'q', x: 1, y: 2 }]);
     assert.equal(r.model.logo, null);
     assert.deepEqual(sanitizeSheet(null), emptySheet());
+  });
+  // -- saved layouts (main stores them under userData; rules in core/sheet/layouts.ts) --
+  test('sheet layouts: ids, file names and paths never come from the user text', () => {
+    for (const ok of ['a', 'l-0123abcd', 'x'.repeat(64)]) assert.ok(isLayoutId(ok), ok);
+    for (const bad of ['', 'A', '../x', 'a/b', 'a\\b', 'a.json', 'x'.repeat(65), 'a b', '__proto__', 7, null, undefined]) assert.ok(!isLayoutId(bad), String(bad));
+    assert.equal(layoutFileName('l-1'), 'l-1.json');
+    assert.equal(layoutFileName('../etc'), null);
+    assert.equal(layoutIdFromFile('l-1.json'), 'l-1');
+    for (const f of ['l-1.json.ab12.tmp', 'L-1.json', 'x.seisparams', '.json', 'a..json', 7]) assert.equal(layoutIdFromFile(f), null, String(f));
+    const id = newLayoutId(new Uint8Array(16).fill(171));
+    assert.ok(isLayoutId(id) && id === 'l-' + 'ab'.repeat(16));
+  });
+  test('sheet layouts: names are trimmed, 1..80 chars, control characters stripped', () => {
+    assert.equal(cleanLayoutName('  Vibroseis   2D  '), 'Vibroseis 2D');
+    assert.equal(cleanLayoutName('a' + String.fromCharCode(0) + 'b' + String.fromCharCode(7) + String.fromCharCode(0x2028) + 'c\n\td'), 'a b c d');
+    for (const bad of ['', '   ', String.fromCharCode(1, 2, 0x9f), 5, null]) assert.equal(cleanLayoutName(bad), null);
+    assert.equal(cleanLayoutName('x'.repeat(200))!.length, LAYOUT_NAME_MAX);
+    assert.equal(LAYOUT_NAME_MAX, 80);
+    assert.ok(sameLayoutName('Block 9', ' block  9 '));
+  });
+  test('sheet layouts: the list is A-Z (case-insensitive, natural numbers), ties by id', () => {
+    const l = [{ id: 'c', name: 'beta' }, { id: 'b', name: 'Alpha 10' }, { id: 'a', name: 'alpha 2' }, { id: 'e', name: 'Beta' }, { id: 'd', name: 'Zulu' }];
+    assert.deepEqual(sortLayouts(l).map((x) => x.id), ['a', 'b', 'c', 'e', 'd']);
+    assert.equal(l[0].id, 'c', 'input not mutated');
+    assert.equal(findLayoutByName(l, 'ZULU')?.id, 'd');
+    assert.equal(findLayoutByName(l, 'zulu', 'd'), undefined);
+    assert.equal(LAYOUT_MAX_COUNT, 200); assert.equal(LAYOUT_MAX_BYTES, 5 * 1024 * 1024);
+  });
+  test('sheet layouts: stored text is a .seisparams file with a name; junk is rejected, never thrown', () => {
+    const cfg = buildConfig(cfgModel(), { coords: false, jobDetails: false }, META);
+    const text = buildLayoutText('  My layout ', cfg)!;
+    assert.ok(text);
+    assert.equal(JSON.parse(text).name, 'My layout');
+    const r = parseConfig(text);                                     // still a normal configuration
+    assert.ok(r.ok);
+    const e = readLayoutText('l-1', text)!;
+    assert.equal(e.name, 'My layout'); assert.equal(e.id, 'l-1'); assert.equal(e.info.lines, 3); assert.equal(e.savedAt, META.savedAt);
+    assert.equal(JSON.parse(buildLayoutText('Renamed', text)!).name, 'Renamed');
+    assert.equal(buildLayoutText('', cfg), null);
+    assert.equal(buildLayoutText('x', 'not json'), null);
+    assert.equal(buildLayoutText('x', '{"format":"other"}'), null);
+    assert.equal(readLayoutText('../x', text), null);
+    assert.equal(readLayoutText('l-1', cfg), null, 'a layout needs a name');
+    for (const bad of ['', '{', '[]', '{"name":"x"}', 7, null]) assert.equal(readLayoutText('l-1', bad), null);
+    const polluted = text.replace('"name": "My layout"', '"name": "P", "__proto__": {"polluted": 1}');
+    assert.equal(readLayoutText('l-2', polluted)?.name, 'P');
+    assert.equal(({} as Record<string, unknown>).polluted, undefined);
   });
   await atest('styled xlsx: a logo and a map on one sheet share one drawing (png + jpeg together)', async () => {
     const bytes = await buildStyledXlsx([{

@@ -12,6 +12,14 @@ function clampZoom(factor: number): number {
   return Math.min(2.5, Math.max(0.5, factor));
 }
 
+/** One saved Parameters Sheet layout as listed (see core/sheet/layouts.ts). */
+export interface PsLayoutItem {
+  id: string; name: string; savedAt: string;
+  info: { lines: number; logo: boolean; points: number; jobDetails: boolean; savedWith: string; savedAt: string };
+}
+export interface PsLayoutListResult { ok: boolean; layouts: PsLayoutItem[]; skipped: number }
+export interface PsLayoutResult { ok: boolean; error?: string; exists?: boolean; id?: string; name?: string }
+
 export interface ParseSummary {
   path: string;
   name: string;
@@ -1157,6 +1165,16 @@ const api = {
    *  its raw text (parsed + sanitised in core by the renderer), or null if cancelled. */
   paramSheetOpenConfig: (): Promise<{ ok: boolean; error?: string; text?: string; name?: string } | null> =>
     ipcRenderer.invoke('seisconv:paramSheetOpenConfig'),
+  /** Parameters Sheet saved layouts, kept in main under <userData>/paramsheet-layouts/
+   *  (one file per layout, generated ids). List is A-Z; `skipped` counts damaged files. */
+  paramSheetLayoutList: (): Promise<PsLayoutListResult> => ipcRenderer.invoke('seisconv:paramSheetLayoutList'),
+  /** Save `text` (a .seisparams configuration) as layout `name`. A same-named layout is
+   *  replaced only when `replaceId` is its id; otherwise { ok:false, exists:true, id }. */
+  paramSheetLayoutSave: (args: { name: string; text: string; replaceId?: string }): Promise<PsLayoutResult> =>
+    ipcRenderer.invoke('seisconv:paramSheetLayoutSave', args),
+  paramSheetLayoutLoad: (id: string): Promise<PsLayoutResult & { text?: string }> => ipcRenderer.invoke('seisconv:paramSheetLayoutLoad', id),
+  paramSheetLayoutRename: (args: { id: string; name: string }): Promise<PsLayoutResult> => ipcRenderer.invoke('seisconv:paramSheetLayoutRename', args),
+  paramSheetLayoutDelete: (id: string): Promise<{ ok: boolean; error?: string }> => ipcRenderer.invoke('seisconv:paramSheetLayoutDelete', id),
   /** Compute an NMO semblance panel for the open file. */
   semblance: (opts: { velMin: number; velMax: number; velStep: number }): Promise<SemblanceData> => ipcRenderer.invoke('seisconv:semblance', opts),
   /** Spectrum Analysis: mean amplitude spectrum over the open file (or the
