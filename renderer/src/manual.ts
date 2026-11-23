@@ -647,7 +647,7 @@ export const MANUAL: Record<string, HelpTopic> = {
       '<b>Review and export</b> - everything on one page with an <b>Edit</b> link per step, the area map preview (<b>Preview with basemap</b> downloads the tiles), and <b>Save parameter sheet (XLSX)...</b>.',
       '<b>Logo (optional)</b> (Job step) - <b>Choose logo file...</b> picks a PNG or JPEG (up to 5 MB); it is shown at the right of the sheet title and at the top right of the area map. <b>Remove logo</b> takes it out. There is no default logo.',
       '<b>Save as configuration...</b> (Review and export) - saves the parameters, the lines and the logo to a <b>.seisparams</b> file, so the next similar job (or a colleague) can start from it. Two boxes, both off unless you tick them, add the coordinate list and the job-specific details (job number, dates, client, prospect, prepared by, revision, notes).',
-      '<b>Load configuration...</b> (Job step, and on Review) - fills the sheet from a saved .seisparams file. If the sheet already holds something, you are asked before it is replaced; a note then says what was loaded. A file that is not a configuration, or one from a newer SeisConv, is refused with a message and changes nothing.',
+      '<b>Load configuration...</b> (top of the Job step) - fills the sheet from a saved .seisparams file. If the sheet already holds something, you are asked before it is replaced (<b>Replace</b> or Cancel); a note then says what was loaded. A file that is not a configuration, or one from a newer SeisConv, is refused with a message and changes nothing.',
       '<b>New sheet</b> - starts over (asks first).',
     ],
     steps: [

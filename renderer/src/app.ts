@@ -20671,13 +20671,15 @@ function closeConfirm(ok: boolean) {
   if (r) r(ok);
 }
 /** In-app confirm dialog (Cancel / Delete). Resolves true on Delete, false otherwise.
+ *  `okLabel` renames the OK button for a confirm that is not a delete (default "Delete").
  *  Replaces window.confirm, which is unreliable in a sandboxed Electron renderer. */
-function confirmDelete(message: string): Promise<boolean> {
+function confirmDelete(message: string, okLabel = 'Delete'): Promise<boolean> {
   // If a previous confirm is somehow still open, resolve it false first.
   if (confirmResolve) closeConfirm(false);
   return new Promise<boolean>((resolve) => {
     confirmResolve = resolve;
     setText('confirmMsg', message);
+    setText('confirmOk', okLabel);
     $opt('confirmBack')?.classList.add('open');
     ($opt('confirmOk') as HTMLButtonElement | null)?.focus();
   });

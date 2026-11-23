@@ -694,8 +694,16 @@ const globalPageErrors = [];
       const cfgPath = join(SHOTS, '_ps_cfg_example.seisparams');
       rmSync(cfgPath, { force: true });
       await app.evaluate(async ({ dialog }, p) => { dialog.showSaveDialog = async () => ({ canceled: false, filePath: p }); }, cfgPath);
-      await win.locator('#psCfgSaveBtn').scrollIntoViewIfNeeded().catch(() => {});
+      await win.locator('#psStatus').scrollIntoViewIfNeeded().catch(() => {});
       await win.screenshot({ path: join(SHOTS, '_ps_cfg_review.png') }).catch(() => {});
+      // The long "Saved ..." status wraps inside the card: no horizontal scroll on the panel.
+      const overflow = await win.evaluate(() => {
+        const p = document.getElementById('panel-paramsheet');
+        const els = [p, p?.parentElement, document.scrollingElement].filter(Boolean);
+        return els.filter((e) => e.scrollWidth > e.clientWidth).map((e) => `${e.id || e.tagName} ${e.scrollWidth}>${e.clientWidth}`);
+      });
+      if (overflow.length) fails.push(`the Review step overflows horizontally: ${overflow.join(', ')}`);
+      if (await win.evaluate(() => !!document.querySelector('#psForm button[id^=psCfgLoad]'))) fails.push('Review still offers Load configuration (it belongs on the Job step)');
       await win.click('#psCfgSaveBtn');
       await win.waitForSelector('#psCfgBack.open', { timeout: 5000 }).catch(() => fails.push('the save-configuration dialog did not open'));
       const boxesOff = await win.evaluate(() => !document.getElementById('psCfgCoords')?.checked && !document.getElementById('psCfgJob')?.checked);
@@ -714,6 +722,8 @@ const globalPageErrors = [];
       }
       await newSheet();
       await mockDialogs(app, [cfgPath]);
+      const loadFirst = await win.evaluate(() => document.getElementById('psForm')?.firstElementChild?.id === 'psCfgField');
+      if (!loadFirst) fails.push('Load configuration is not at the top of the Job step');
       await win.click('#psCfgLoadBtn');
       await win.waitForFunction(() => /Loaded configuration/.test(document.getElementById('undoToastMsg')?.textContent || ''), null, { timeout: 10000 })
         .catch(() => fails.push('no "Loaded configuration" toast'));
@@ -726,6 +736,16 @@ const globalPageErrors = [];
       }));
       if (restored.jt !== 'Vibroseis 2D Reflection' || !restored.logo) fails.push(`configuration did not restore the job type / logo (${JSON.stringify(restored)})`);
       if (restored.prospect || restored.start) fails.push('configuration restored job details that were left out');
+      // Loading over a filled sheet asks first, and the OK button says what it does.
+      await mockDialogs(app, [cfgPath]);
+      await win.click('#psCfgLoadBtn');
+      await win.waitForSelector('#confirmBack.open', { timeout: 5000 }).catch(() => fails.push('loading over a filled sheet did not ask first'));
+      const replaceLabel = ((await win.textContent('#confirmOk').catch(() => '')) || '').trim();
+      await win.screenshot({ path: join(SHOTS, '_ps_cfg_replace_confirm.png') }).catch(() => {});
+      if (replaceLabel !== 'Replace') fails.push(`the replace confirm button says "${replaceLabel}", not "Replace"`);
+      await win.click('#confirmOk').catch(() => {});
+      await sleep(250);
+      notes.push(`replace confirm: ${replaceLabel}`);
       await win.click('#psStep-geometry');
       const lineRows = await win.evaluate(() => document.querySelectorAll('#psLines tr[data-path]').length);
       const lineLen = await win.inputValue('#ps-geom-lineLengthM').catch(() => '');

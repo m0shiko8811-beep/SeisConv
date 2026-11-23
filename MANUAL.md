@@ -714,7 +714,7 @@ Plan one seismic job step by step and save a single Excel workbook for the field
 - **Review and export** - everything on one page with an **Edit** link per step, the area map preview (**Preview with basemap** downloads the tiles), and **Save parameter sheet (XLSX)...**.
 - **Logo (optional)** (Job step) - **Choose logo file...** picks a PNG or JPEG (up to 5 MB); it is shown at the right of the sheet title and at the top right of the area map. **Remove logo** takes it out. There is no default logo.
 - **Save as configuration...** (Review and export) - saves the parameters, the lines and the logo to a **.seisparams** file, so the next similar job (or a colleague) can start from it. Two boxes, both off unless you tick them, add the coordinate list and the job-specific details (job number, dates, client, prospect, prepared by, revision, notes).
-- **Load configuration...** (Job step, and on Review) - fills the sheet from a saved .seisparams file. If the sheet already holds something, you are asked before it is replaced; a note then says what was loaded. A file that is not a configuration, or one from a newer SeisConv, is refused with a message and changes nothing.
+- **Load configuration...** (top of the Job step) - fills the sheet from a saved .seisparams file. If the sheet already holds something, you are asked before it is replaced (**Replace** or Cancel); a note then says what was loaded. A file that is not a configuration, or one from a newer SeisConv, is refused with a message and changes nothing.
 - **New sheet** - starts over (asks first).
 
 ### What is derived (nominal, planned)

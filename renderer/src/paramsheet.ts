@@ -55,7 +55,8 @@ export interface PsDeps {
   showProgress(label: string, onCancel?: () => void, delayMs?: number): void;
   hideProgress(): void;
   infoToast(message: string): void;
-  confirm(message: string): Promise<boolean>;
+  /** In-app confirm; `okLabel` names the OK button (defaults to "Delete"). */
+  confirm(message: string, okLabel?: string): Promise<boolean>;
   audit(action: string, detail: string, tab?: string): void;
   initCrsPicker(inputId: string, resultsId: string, pickedId: string, emptyLabel: string, onPick?: (code: string, name: string) => void): void;
   crsPickerSet(inputId: string, code: string, name: string): void;
@@ -371,7 +372,7 @@ async function loadConfig(): Promise<void> {
   if (!r.ok) { D.infoToast(r.error || 'This file is not a SeisConv parameter configuration.'); return; }
   const res = parseConfig(r.text);
   if (!res.ok) { D.infoToast(res.error); return; }
-  if (sheetHasData() && !(await D.confirm('Replace the current sheet with the configuration?'))) return;
+  if (sheetHasData() && !(await D.confirm('Replace the current sheet with the configuration?', 'Replace'))) return;
   M = res.model;
   lastPresetFor = M.job.jobType;
   sniff = null; coordText = ''; coordFile = ''; previewBasemap = null;
@@ -384,7 +385,9 @@ async function loadConfig(): Promise<void> {
 }
 
 function configButton(kind: 'save' | 'load', id: string): HTMLButtonElement {
-  const b = el('button', { class: kind === 'save' ? 'btn lg' : 'btn sm', type: 'button', id },
+  // Save sits beside the large primary XLSX button, so it matches its size; Load is a
+  // normal secondary button at the top of the Job step.
+  const b = el('button', { class: kind === 'save' ? 'btn lg' : 'btn', type: 'button', id },
     kind === 'save' ? 'Save as configuration...' : 'Load configuration...');
   b.title = kind === 'save'
     ? 'Save the parameters, lines and logo to a .seisparams file to load next time there is a similar job'
@@ -1140,7 +1143,6 @@ function renderReview(form: HTMLElement): void {
   btn.addEventListener('click', () => void exportSheet());
   exp.appendChild(btn);
   exp.appendChild(configButton('save', 'psCfgSaveBtn'));
-  exp.appendChild(configButton('load', 'psCfgLoadBtnReview'));
   form.appendChild(exp);
 }
 
@@ -1281,6 +1283,18 @@ function renderStep(): void {
   if (step === 'coords') renderCoords(form);
   else if (step === 'review') renderReview(form);
   else {
+    // Loading a saved configuration starts a job, so it sits at the top of the Job step.
+    if (step === 'job') {
+      const cfg = el('div', { class: 'olog-field wide', id: 'psCfgField' });
+      cfg.appendChild(el('label', {}, 'Saved configuration (optional)'));
+      const row = el('div', { class: 'ps-in', style: 'justify-content:flex-start;gap:10px;' });
+      const lb = configButton('load', 'psCfgLoadBtn');
+      lb.style.flex = 'none';
+      row.appendChild(lb);
+      row.appendChild(el('span', { class: 'ps-note' }, 'Fill this sheet from a .seisparams file saved on the Review step of an earlier, similar job.'));
+      cfg.appendChild(row);
+      form.appendChild(cfg);
+    }
     for (const f of SPECS[step]) if (!f.show || f.show()) form.appendChild(renderField(f));
     if (step === 'geometry') renderLines(form);
     const dv = derivedFor(step);
@@ -1291,15 +1305,6 @@ function renderStep(): void {
     }
     if (step === 'job') {
       renderLogoField(form);
-      const cfg = el('div', { class: 'olog-field wide', id: 'psCfgField' });
-      cfg.appendChild(el('label', {}, 'Saved configuration (optional)'));
-      const row = el('div', { class: 'ps-in', style: 'justify-content:flex-start;gap:10px;' });
-      const lb = configButton('load', 'psCfgLoadBtn');
-      lb.style.flex = 'none';
-      row.appendChild(lb);
-      cfg.appendChild(row);
-      cfg.appendChild(el('span', { class: 'ps-note' }, 'Fill this sheet from a .seisparams file saved on the Review step of an earlier, similar job.'));
-      form.appendChild(cfg);
       const p = presetFor(M.job.jobType);
       if (p) form.appendChild(el('div', { class: 'ps-box', style: 'grid-column:1 / -1;' }, `Planning note for ${p.jobType}: ${p.note}`));
     }
@@ -1326,7 +1331,7 @@ function back(): void {
 
 /** Start over (asks first). Also the tab's Clear. */
 export async function paramSheetNew(): Promise<void> {
-  const ok = await D.confirm('Start a new, empty parameter sheet? Everything typed in this sheet, the coordinates and the logo are cleared.');
+  const ok = await D.confirm('Start a new, empty parameter sheet? Everything typed in this sheet, the coordinates and the logo are cleared.', 'Clear sheet');
   if (!ok) return;
   M = emptySheet();
   lastPresetFor = '';
