@@ -52,15 +52,15 @@
 
 SeisConv is a Windows desktop application built on Electron, with a platform-agnostic TypeScript core, for working with seismic data files. Drop in any file and SeisConv identifies the format revision, sample encoding (IBM float or IEEE), and byte order automatically, before you choose an output format. All parsing runs on a worker thread; the UI stays responsive on multi-gigabyte files.
 
-It **runs offline** - no account, no cloud, no licence server - and nothing you open is uploaded anywhere. Four optional features touch the internet: the real-map basemap on the SPS tabs, which fetches map tiles; the optional basemap band in a GeoTIFF export, which downloads the tiles it resamples; Sync clock in the Observer's Log, which queries an NTP time server; and Check for updates in Help, which asks GitHub once whether a newer release has been published and downloads nothing; on Windows its Update now button, only when you click and confirm it, downloads that release's installer from GitHub, verifies its SHA-256 fingerprint and installs it. None of the four is required to use the app, none of them is contacted unless you ask for it, and everything else, the roughly 7,000-CRS EPSG registry included, works with no connection at all.
+It **runs offline** - no account, no cloud, no licence server - and nothing you open is uploaded anywhere. Five optional features touch the internet: the real-map basemap on the SPS tabs, which fetches map tiles; the optional basemap band in a GeoTIFF export, which downloads the tiles it resamples; the area-map basemap of the Parameters Sheet, which downloads the tiles for the map picture only when you save the sheet or ask for a preview; Sync clock in the Observer's Log, which queries an NTP time server; and Check for updates in Help, which asks GitHub once whether a newer release has been published and downloads nothing; on Windows its Update now button, only when you click and confirm it, downloads that release's installer from GitHub, verifies its SHA-256 fingerprint and installs it. None of the five is required to use the app, none of them is contacted unless you ask for it, and everything else, the roughly 7,000-CRS EPSG registry included, works with no connection at all.
 
 **Who it is for:** field crews, party chiefs and observers who need to check and convert a record on the spot, and processing geophysicists who need geometry and headers to be right before the data reaches a processing system.
 
-Twelve tabs cover the full office-and-field workflow: format conversion including batch to single tape-image combine (Converter), per-trace inspection with FFT QC (Trace Inspector), section visualization with first-break picking and trace-health QC (File Viewer), multi-format survey-geometry QC (SPS), survey design from a map (SPS Creation), NMO velocity analysis (Velocity), frequency and wavenumber analysis (Spectrum Analysis), multi-trace comparison and correlation (Trace Workbench), a configurable field-log grid (Observer's Log), SEG-Y to SPS cross-validation (Geometry QC), a vibroseis sweep designer and sweep QC (Sweeps), and built-in peer-to-peer file sharing over local WiFi with no router or configuration (WiFiSync). Multi-gigabyte files open through a streaming trace index, and any operation that can take more than a few seconds shows a progress bar.
+Thirteen tabs cover the full office-and-field workflow: format conversion including batch to single tape-image combine (Converter), per-trace inspection with FFT QC (Trace Inspector), section visualization with first-break picking and trace-health QC (File Viewer), multi-format survey-geometry QC (SPS), survey design from a map (SPS Creation), NMO velocity analysis (Velocity), frequency and wavenumber analysis (Spectrum Analysis), multi-trace comparison and correlation (Trace Workbench), a configurable field-log grid (Observer's Log), SEG-Y to SPS cross-validation (Geometry QC), a vibroseis sweep designer and sweep QC (Sweeps), built-in peer-to-peer file sharing over local WiFi with no router or configuration (WiFiSync), and a step-by-step job planner that saves one Excel parameter sheet for the field crew (Parameters Sheet). Multi-gigabyte files open through a streaming trace index, and any operation that can take more than a few seconds shows a progress bar.
 
 If you are looking for an **open source alternative** to a commercial format converter or SEG-Y viewer, SeisConv is meant to complement rather than replace the established toolchain: it **complements Seismic Unix, OpendTect and ObsPy** for the specific jobs of format conversion, header and geometry QC, and survey positioning, and it puts those jobs in a graphical Windows application that needs no scripting environment to run.
 
-<p align="center"><b>Seven more of the twelve tabs.</b></p>
+<p align="center"><b>Seven more of the thirteen tabs.</b></p>
 
 <table align="center">
   <tr>
@@ -99,6 +99,7 @@ If you are looking for an **open source alternative** to a commercial format con
   - [Observer's Log](#observers-log)
   - [WiFiSync](#wifisync)
   - [Spectrum Analysis](#spectrum-analysis)
+  - [Parameters Sheet](#parameters-sheet)
   - [Viewer controls](#viewer-controls)
 - [Format support](#format-support)
 - [The argument in pictures](#the-argument-in-pictures)
@@ -316,6 +317,19 @@ All three views share the manual X/Y axis range boxes (with Auto reset) and supp
 
 ---
 
+### Parameters Sheet
+
+Plan one seismic job before the crew goes out, and hand them a single Excel workbook. An eight-step wizard (Job, Geometry, Source, Receiver, Recording, Totals and conditions, Coordinates, Review and export) collects the planned values: typed, picked from a list or derived from what you typed, never measured. **Nothing is mandatory**: fill in what you know, skip any step, open the steps in any order, and the saved sheet lists only what was filled.
+
+- **Job type first.** Picking a job type fills recommended defaults (intervals, sample rate, record length, low cut, source, stack, geophone frequency and type, spread type, channels) and shows the recommended range under each field. Every value stays editable, and free typing is always allowed.
+- **Derived for you.** The named lines and their lengths give the line count, stations and shots per line, total shots and files, Nyquist, samples per trace and the nominal fold (2D or 3D).
+- **Hints, never blocks.** A high cut or sweep above Nyquist, typed totals that disagree with the plan, an MASW array shorter than about twice the target depth, SH work planned with vertical geophones: each is pointed out, none stops you.
+- **Coordinates.** Paste a list or load TXT, CSV, KML or GeoJSON. The delimiter, the columns, degrees or metres and a proposed coordinate system are detected and shown, and nothing is applied until you press Confirm; when the numbers cannot tell, it asks. If the point names describe different lines from the Geometry step, it says so and offers to take the line names and lengths from the coordinates. No area yet is a valid answer.
+- **The workbook.** A one-page Parameters sheet (label, value, unit, with real numbers and real dates), an Area sheet with every point's Easting, Northing, latitude and longitude, a Map sheet with the area map (named lines, extent, coordinate grid, scale bar, north arrow), and an About sheet. An optional company logo (PNG or JPEG) goes beside the sheet title and on the map. The map basemap is downloaded only when you save or ask for a preview, and choosing No basemap fetches nothing; with no connection the sheet is still saved, the map drawn on grey with a note, and the coordinates are exact.
+- **Reuse it.** Save as layout keeps the parameters, the lines and the logo as a named layout on this computer; the coordinate list and the job-specific details are added only if you tick them. Start the next similar job from the saved-layouts list at the top of the Job step, where Manage renames, exports or deletes layouts. The same configuration can be exported to, or imported from, a `.seisparams` file to keep elsewhere or send to a colleague. The sheet itself starts empty every time the app opens.
+
+---
+
 ### Viewer controls
 
 Every seismic viewer (File Viewer, Trace Inspector, Spectrum Analysis, Velocity, Trace Workbench) provides manual X-axis and Y-axis range boxes (min / max numeric inputs) plus an **Auto** button that clears the overrides and reverts to auto-fit. This makes it straightforward to compare the same time window across tabs or to zoom into a specific frequency band in the Spectrum views.
@@ -427,10 +441,10 @@ the panel exactly as it stands as a red, green or blue deficient viewer would se
 Zoom, gain, colour map, AGC, the scale basis and the trace window all survive the page turn, so what changes
 on screen is the data and not the framing.
 
-### Twelve tabs, one application
+### Thirteen tabs, one application
 
 <p align="center">
-  <img src="design/promo/tabs.png" width="98%" alt="Contact sheet of all twelve SeisConv tabs"/>
+  <img src="design/promo/tabs.png" width="98%" alt="Contact sheet of all thirteen SeisConv tabs"/>
 </p>
 
 <details>
@@ -441,8 +455,8 @@ will give you different figures.
 
 | What | Measured |
 |---|---|
-| Core unit tests | **513 passed, 0 failed, 4 skipped** without local sample data (`npm run test:core`) |
-| Pixel render oracle | **197 display states** hashed and compared, so a refactor cannot silently change a drawing |
+| Core unit tests | **561 passed, 0 failed, 4 skipped** without local sample data (`npm run test:core`) |
+| Pixel render oracle | **200 display states** hashed and compared, so a refactor cannot silently change a drawing |
 | File Viewer section redraw | **234 ms down to 43 ms** after the display rework, on the same record |
 | Near-trace gather | **116 records** of a real field folder read and drawn in about **2 seconds** |
 
@@ -454,8 +468,15 @@ will give you different figures.
 
 **Windows 10 / 11, 64-bit.** Download the installer from the
 [latest release](https://github.com/m0shiko8811-beep/SeisConv/releases/latest)
-and run it. The installer lets you choose the installation directory (per-user
-by default, with an option to elevate and install for all users).
+and run it: the file is `SeisConv-Setup-<version>.exe`. The installer lets you
+choose the installation directory (per-user by default, with an option to
+elevate and install for all users).
+
+Or install it from the
+[Microsoft Store](https://apps.microsoft.com/detail/9N0XMXJKZ16R). The Store
+build updates through the Store, so it has no Check for updates button, and a
+new version reaches it only after Microsoft's certification, which can take a
+few days after the GitHub release.
 
 > **The installer is not code-signed.** On first run Windows SmartScreen will
 > show *"Windows protected your PC"*. Click **More info**, then **Run anyway**.
@@ -468,13 +489,13 @@ but are **not built or distributed** - on those platforms, build from source
 
 ### The manual
 
-A **102 page user manual** is attached to every release, in
+A **108 page user manual** is attached to every release, in
 [A4](https://github.com/m0shiko8811-beep/SeisConv/releases/latest/download/SeisConv-Manual-A4.pdf)
 and
 [US Letter](https://github.com/m0shiko8811-beep/SeisConv/releases/latest/download/SeisConv-Manual-Letter.pdf).
 
 It is written to be useful whether this is your first day on a crew or your
-twentieth year: Part I assumes no seismic background at all, Part II is ten
+twentieth year: Part I assumes no seismic background at all, Part II is eleven
 worked jobs in the form "I need to ...", Part III is a control by control
 reference generated from the application itself so it cannot drift, and Part IV
 covers the byte layouts, the coordinate handling and what is lossy where.
@@ -502,6 +523,9 @@ The same reference is inside the application under **Help**, and in
 |   |               tracehealth · robuststats
 |   +-- render/     Colormaps and display model
 |   +-- export/     xlsx · ods hand-rolled writers (no runtime deps)
+|   +-- sheet/      Parameters Sheet model · job-type presets · coordinate
+|   |               sniffer · line reconcile · map frame · workbook layout ·
+|   |               saved layouts and .seisparams configuration
 |   +-- sps/        SPS 2.1 parse · QC · reproject ·
 |   |               formats/ (segp1 · p111 · p611 · coordcsv + bingrid)
 |   +-- gis/        GeoTIFF · ESRI Shapefile · WKT (.prj) writers ·
@@ -521,8 +545,9 @@ The same reference is inside the application under **Help**, and in
 |   |               window navigation blocked; CSP default-src 'none')
 |   +-- field/      WiFiSync host process - engine · UDP discovery · TCP transport ·
 |                   fs watcher · file utils · Windows Mobile-Hotspot control
-+-- renderer/       esbuild-bundled TypeScript UI (12-tab shell) - one
-                    ~1.13 MB app.ts plus a separate manual.ts module
++-- renderer/       esbuild-bundled TypeScript UI (13-tab shell) - one
+                    ~1.14 MB app.ts plus separate manual.ts and
+                    paramsheet.ts modules
 ```
 
 The `core/` package has no Electron or DOM imports - it can run in Node, a worker thread, or a browser. The WiFiSync protocol lives in `core/field` as pure, testable algorithms; the OS-facing sockets, file-watching, and hotspot control live in `electron/field`.
