@@ -475,8 +475,8 @@ elevate and install for all users).
 Or install it from the
 [Microsoft Store](https://apps.microsoft.com/detail/9N0XMXJKZ16R). The Store
 build updates through the Store, so it has no Check for updates button, and a
-new version reaches it only after Microsoft's certification, which can take a
-few days after the GitHub release.
+new version reaches it only after Microsoft's certification, so the Store can
+trail the GitHub release for a while.
 
 > **The installer is not code-signed.** On first run Windows SmartScreen will
 > show *"Windows protected your PC"*. Click **More info**, then **Run anyway**.
