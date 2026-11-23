@@ -190,6 +190,7 @@ import { sniffCoords, parseCoordField, suggestGridCode, utmCodeFor, SNIFF_MAX_PO
 import { loadDraft, hasPollutionKey, PS_DRAFT_MAX_CHARS } from '../sheet/draft';
 import { buildSheetWorkbook, excelDateSerial } from '../sheet/layout';
 import { fitMapGrid, toPx, niceStep, scaleBarMetres, ticks, fmtDistance } from '../sheet/mapframe';
+import { coordLines, lineMismatch, linesFromCoords, roundToInterval } from '../sheet/reconcile';
 import type { ParsedFile, SPSData, SPSPoint, Trace, TraceGeom } from '../index';
 import type { RGB } from '../render/colormaps';
 import {
@@ -8282,7 +8283,7 @@ async function paramSheetTests(): Promise<void> {
       points: [{ id: 'A', x: 200000, y: 600000, e: 200000, n: 600000, lat: 31.73, lon: 35.21 }, { id: 'B', x: 201000, y: 600000, e: 201000, n: 600000, lat: 31.73, lon: 35.22 }],
       closed: false, areaM2: 0, lengthM: 1000, extent: { minE: 200000, minN: 600000, maxE: 201000, maxN: 600000 },
     };
-    const sheets = buildSheetWorkbook(m, area, { png: PNG1, widthPx: 1600, heightPx: 1130, attribution: 'Test tiles', note: '' }, meta);
+    const sheets = buildSheetWorkbook(m, area, { data: PNG1, format: 'png', widthPx: 1600, heightPx: 1130, attribution: 'Test tiles', note: '' }, meta);
     assert.deepEqual(sheets.map((s) => s.name), ['Parameters', 'Area', 'Map', 'About']);
     const { zip, get } = await readSheets(await buildStyledXlsx(sheets, new JSZip()));
     const img = await zip.file('xl/media/image1.png')!.async('uint8array');
@@ -8301,6 +8302,54 @@ async function paramSheetTests(): Promise<void> {
     assert.ok(about.includes('Test tiles') && about.includes('PLANNED'));
     const wbRels = (await get('xl/_rels/workbook.xml.rels'))!;
     assert.ok(/Id="rId5"[^>]*styles/.test(wbRels));
+    // Parameters prints on one A4 page, with a print area on the used range.
+    const s1 = (await get('xl/worksheets/sheet1.xml'))!;
+    assert.ok(/fitToWidth="1" fitToHeight="1"/.test(s1) && /orientation="landscape"/.test(s1));
+    const wb = (await get('xl/workbook.xml'))!;
+    assert.ok(/<definedName name="_xlnm\.Print_Area" localSheetId="0">'Parameters'!\$A\$1:\$K\$\d+<\/definedName>/.test(wb), wb);
+    assert.ok(wb.indexOf('</sheets>') < wb.indexOf('<definedNames>'));
+    // The Geometry lines (A-01..A-03) differ from the coordinate list (no named lines here): no check line.
+    assert.ok(!s1.includes('Lines do not match'));
+  });
+  await atest('styled xlsx: a photo map is embedded as JPEG with its own content type and rel', async () => {
+    const JPG1 = new Uint8Array([0xff, 0xd8, 0xff, 0xe0, 0, 16, 0x4a, 0x46, 0x49, 0x46, 0, 1, 0xff, 0xd9]);
+    const m = vib();
+    const area = {
+      crsCode: 'EPSG:2039', crsName: 'ITM', gridCode: 'EPSG:2039', gridName: 'ITM',
+      points: [{ id: 'L9-S', group: 'L9', x: 0, y: 0, e: 200000, n: 600000, lat: 31.7, lon: 35.2 }, { id: 'L9-E', group: 'L9', x: 0, y: 0, e: 200100, n: 600000, lat: 31.7, lon: 35.2 }],
+      closed: false, areaM2: 0, lengthM: 100, extent: { minE: 200000, minN: 600000, maxE: 200100, maxN: 600000 },
+    };
+    const sheets = buildSheetWorkbook(m, area, { data: JPG1, format: 'jpeg', widthPx: 1600, heightPx: 1130, attribution: 'Test tiles', note: '' }, meta);
+    const { zip, get } = await readSheets(await buildStyledXlsx(sheets, new JSZip()));
+    assert.ok(zip.file('xl/media/image1.jpeg') && !zip.file('xl/media/image1.png'));
+    const ct = (await get('[Content_Types].xml'))!;
+    assert.ok(/Extension="jpeg" ContentType="image\/jpeg"/.test(ct) && !/Extension="png"/.test(ct));
+    assert.ok(/Target="\.\.\/media\/image1\.jpeg"/.test((await get('xl/drawings/_rels/drawing1.xml.rels'))!));
+    // The coordinate list names line L9, Geometry has A-01..A-03: the plan check says so.
+    assert.ok((await get('xl/worksheets/sheet1.xml'))!.includes('Lines do not match the coordinates'));
+    // Bytes that are not what they claim to be are left out, never embedded.
+    const bad = await readSheets(await buildStyledXlsx([{ name: 'M', rows: [], image: { data: PNG1, format: 'jpeg', widthPx: 1, heightPx: 1, col: 0, row: 0 } }], new JSZip()));
+    assert.ok(!bad.zip.file('xl/media/image1.jpeg') && !bad.zip.file('xl/drawings/drawing1.xml'));
+  });
+  test('sheet reconcile: coordinate lines, mismatch, names and lengths rounded to the interval', () => {
+    const pts = [
+      { group: 'A-01', e: 200000, n: 600000 }, { group: 'A-01', e: 211998, n: 600000 },
+      { group: 'A-02', e: 200000, n: 600500 }, { group: 'A-02', e: 200003, n: 600504 },
+      { group: '', e: 1, n: 1 }, { group: 'A-03', e: NaN, n: 1 },
+    ];
+    const cl = coordLines(pts);
+    assert.deepEqual(cl.map((l) => l.name), ['A-01', 'A-02']);
+    assert.equal(cl[0].lengthM, 11998);
+    assert.equal(cl[1].lengthM, 5);
+    const geom = [{ name: 'Line 1', lengthM: 12000 }, { name: 'Line 2', lengthM: 12000 }];
+    assert.ok(/Geometry has 2 lines \(Line 1, Line 2\) but the coordinates name 2 \(A-01, A-02\)/.test(lineMismatch(geom, cl)!));
+    assert.equal(lineMismatch([{ name: 'a-02', lengthM: 1 }, { name: ' A-01 ', lengthM: 1 }], cl), null);
+    assert.equal(lineMismatch(geom, []), null);
+    assert.ok(/Geometry has 1 line/.test(lineMismatch([{ name: 'A-01', lengthM: 1 }], cl)!));
+    assert.deepEqual(linesFromCoords(cl, 10), [{ name: 'A-01', lengthM: 12000 }, { name: 'A-02', lengthM: 10 }]);
+    assert.deepEqual(linesFromCoords(cl, null), [{ name: 'A-01', lengthM: 11998 }, { name: 'A-02', lengthM: 5 }]);
+    assert.equal(roundToInterval(2.4, 2.5), 2.5);
+    assert.equal(roundToInterval(NaN, 2.5), 0);
   });
   await atest('styled xlsx: text is escaped and XML-illegal characters are stripped', async () => {
     const bytes = await buildStyledXlsx([{ name: 'a/b:c', rows: [['<x>&"y"\u0001\u0007', 3.25, null, { v: 'z'.repeat(40000) }]] }, { name: 'a b c', rows: [] }], new JSZip());

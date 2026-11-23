@@ -28,6 +28,7 @@ import { loadDraft, PS_DRAFT_KEY } from '../../core/sheet/draft';
 import { buildSheetWorkbook, type AreaInfo, type AreaPoint, type MapInfo } from '../../core/sheet/layout';
 import { fitMapGrid, toPx, niceStep, scaleBarMetres, ticks, fmtDistance, type MapGrid } from '../../core/sheet/mapframe';
 import { ringArea, ringPerimeter, pathLength, convexHull, isClosed, type XY } from '../../core/gis/polygon';
+import { coordLines, lineMismatch, linesFromCoords } from '../../core/sheet/reconcile';
 
 export interface PsDeps {
   api: {
@@ -532,6 +533,7 @@ function renderCoords(form: HTMLElement): void {
     });
     form.appendChild(t);
     if (c.points.length > 30) form.appendChild(el('div', { class: 'trace-label' }, `... and ${c.points.length - 30} more.`));
+    if (c.confirmed) appendLineCheck(form);
   }
 
   form.appendChild(el('div', { class: 'ps-sub' }, 'Map basemap'));
@@ -546,6 +548,39 @@ function renderCoords(form: HTMLElement): void {
   form.appendChild(el('div', { class: 'ps-note', style: 'margin-top:4px;' },
     'Tiles are downloaded only when the sheet is saved (or on "Preview with basemap"). Offline, the map is still made, on grey, with a note.'));
 }
+
+// -- Geometry lines vs coordinate lines ---------------------------------------------------
+
+/** Add a placeholder that fills (async: the coordinates may need converting in
+ *  main) with a warning and a fix button when the coordinate list names other
+ *  lines than the Geometry step. Nothing is shown when they agree. */
+function appendLineCheck(form: HTMLElement): void {
+  const box = el('div', { class: 'ps-box', id: 'psLineCheck', style: 'display:none;margin-top:10px;border-color:var(--amber);' });
+  form.appendChild(box);
+  const mine = ++lineCheckToken;
+  void (async () => {
+    let area: AreaInfo | null = null;
+    try { area = await computeArea(); } catch { return; }
+    if (mine !== lineCheckToken || !area) return;
+    const cl = coordLines(area.points);
+    const diff = lineMismatch(M.geom.lines, cl);
+    if (!diff) return;
+    box.innerHTML = '';
+    box.appendChild(el('div', { id: 'psLineCheckMsg', style: 'color:var(--amber);' }, `Check: ${diff}`));
+    const ul = el('div', { class: 'trace-label', style: 'margin-top:4px;white-space:normal;' },
+      'From the coordinates: ' + cl.slice(0, 8).map((l) => `${l.name} ${fmtNum(linesFromCoords([l], M.geom.rxIntervalM)[0].lengthM, 2)} m`).join(', ') + (cl.length > 8 ? ', ...' : ''));
+    box.appendChild(ul);
+    const b = el('button', { class: 'btn sm', type: 'button', id: 'psUseCoordLines', style: 'margin-top:8px;' }, 'Use the line names and lengths from the coordinates');
+    b.addEventListener('click', () => {
+      M.geom.lines = linesFromCoords(cl, M.geom.rxIntervalM);
+      D.infoToast(`Geometry now has ${M.geom.lines.length} line${M.geom.lines.length === 1 ? '' : 's'} from the coordinates (lengths rounded to the receiver interval).`);
+      changed(true);
+    });
+    box.appendChild(b);
+    box.style.display = '';
+  })();
+}
+let lineCheckToken = 0;
 
 // -- area + map ---------------------------------------------------------------------------
 
@@ -898,12 +933,13 @@ function renderReview(form: HTMLElement): void {
       }
     } else {
       for (const f of SPECS[s]) if (!f.show || f.show()) add(f.label, valueText(f));
-      if (s === 'geometry') M.geom.lines.forEach((l) => add(`Line ${l.name}`, l.lengthM != null ? `${l.lengthM} m` : ''));
+      if (s === 'geometry') M.geom.lines.forEach((l) => add(`Line: ${l.name}`, l.lengthM != null ? `${l.lengthM} m` : ''));
       for (const [k, v] of derivedFor(s)) add(`${k} (derived)`, v);
     }
     wrap.appendChild(dl);
   }
   form.appendChild(wrap);
+  if (!M.coords.skip && M.coords.confirmed && M.coords.points.length) appendLineCheck(form);
 
   if (!M.coords.skip && M.coords.points.length && M.coords.confirmed) {
     form.appendChild(el('div', { class: 'ps-sub' }, 'Area map (goes into the XLSX)'));
@@ -932,8 +968,10 @@ function todayIso(): string {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
 }
 
-async function pngOf(cv: HTMLCanvasElement): Promise<Uint8Array> {
-  const blob = await new Promise<Blob | null>((res) => cv.toBlob(res, 'image/png'));
+/** Encode the map: JPEG (quality 0.85) over a photo basemap keeps the workbook
+ *  near 1 MB; a grey / no-basemap map stays a lossless PNG. */
+async function encodeMap(cv: HTMLCanvasElement, jpeg: boolean): Promise<Uint8Array> {
+  const blob = await new Promise<Blob | null>((res) => (jpeg ? cv.toBlob(res, 'image/jpeg', 0.85) : cv.toBlob(res, 'image/png')));
   if (!blob) throw new Error('could not encode the map image');
   return new Uint8Array(await blob.arrayBuffer());
 }
@@ -955,7 +993,8 @@ async function exportSheet(): Promise<void> {
         const bm = await fetchBasemap(area, grid);
         const cv = document.createElement('canvas');
         drawAreaMap(cv, area, grid, bm.rgb, bm.attribution, bm.note);
-        map = { png: await pngOf(cv), widthPx: grid.width, heightPx: grid.height, attribution: bm.attribution, note: bm.note };
+        const jpeg = !!bm.rgb;
+        map = { data: await encodeMap(cv, jpeg), format: jpeg ? 'jpeg' : 'png', widthPx: grid.width, heightPx: grid.height, attribution: bm.attribution, note: bm.note };
       }
     }
     const now = new Date();

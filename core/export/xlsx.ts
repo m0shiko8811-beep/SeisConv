@@ -189,7 +189,10 @@ export interface StyledCell { v: StyledValue; s?: CellStyle }
 export type StyledCellLike = StyledValue | StyledCell;
 
 export interface StyledImage {
-  png: Uint8Array;
+  /** Encoded picture bytes, PNG or JPEG (see `format`). */
+  data: Uint8Array;
+  /** Default 'png'. A photo basemap is far smaller as JPEG. */
+  format?: 'png' | 'jpeg';
   /** Pixel size of the PNG (aspect ratio of the placed picture). */
   widthPx: number;
   heightPx: number;
@@ -217,6 +220,10 @@ export interface StyledSheet {
   landscape?: boolean;
   /** Fit the printout to one page wide. */
   fitWidth?: boolean;
+  /** Fit the printout to ONE page (wide and tall); implies fitWidth. */
+  fitPage?: boolean;
+  /** Set the print area to the used range (A1 to the last used cell). */
+  printArea?: boolean;
 }
 
 /** Excel's limit for one cell's text. */
@@ -321,7 +328,7 @@ function styledSheetXml(t: StyledSheet, book: StyleBook, first: boolean, drawing
   let maxCol = 0;
   for (const r of rows) maxCol = Math.max(maxCol, r.length);
   const parts: string[] = [];
-  if (t.fitWidth) parts.push('<sheetPr><pageSetUpPr fitToPage="1"/></sheetPr>');
+  if (t.fitWidth || t.fitPage) parts.push('<sheetPr><pageSetUpPr fitToPage="1"/></sheetPr>');
   parts.push(`<dimension ref="A1:${colLetter(Math.max(0, maxCol - 1))}${Math.max(1, rows.length)}"/>`);
   const fr = Math.max(0, Math.min(1000, Math.floor(t.freezeRows || 0)));
   const pane = fr > 0 ? `<pane ySplit="${fr}" topLeftCell="A${fr + 1}" activePane="bottomLeft" state="frozen"/>` : '';
@@ -345,7 +352,8 @@ function styledSheetXml(t: StyledSheet, book: StyleBook, first: boolean, drawing
   const merges = (t.merges || []).filter((m) => A1_RANGE.test(m)).slice(0, 1000);
   if (merges.length) parts.push(`<mergeCells count="${merges.length}">${merges.map((m) => `<mergeCell ref="${m}"/>`).join('')}</mergeCells>`);
   parts.push('<pageMargins left="0.5" right="0.5" top="0.6" bottom="0.6" header="0.3" footer="0.3"/>');
-  parts.push(`<pageSetup paperSize="9" orientation="${t.landscape ? 'landscape' : 'portrait'}"${t.fitWidth ? ' fitToWidth="1" fitToHeight="0"' : ''}/>`);
+  const fit = t.fitPage ? ' fitToWidth="1" fitToHeight="1"' : t.fitWidth ? ' fitToWidth="1" fitToHeight="0"' : '';
+  parts.push(`<pageSetup paperSize="9" orientation="${t.landscape ? 'landscape' : 'portrait'}"${fit}/>`);
   if (drawingRid) parts.push(`<drawing r:id="${drawingRid}"/>`);
   return (
     '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>' +
@@ -387,6 +395,27 @@ const REL_NS = 'http://schemas.openxmlformats.org/package/2006/relationships';
 const relsXml = (rels: string[]) =>
   `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="${REL_NS}">${rels.join('')}</Relationships>`;
 
+/** True for bytes that start with the JPEG SOI marker. */
+export function isJpeg(b: Uint8Array): boolean {
+  return b.length > 3 && b[0] === 0xff && b[1] === 0xd8 && b[2] === 0xff;
+}
+
+/** The used range of a sheet as an absolute A1 reference, for a print area. */
+function usedRangeRef(t: StyledSheet): string {
+  let maxCol = 0;
+  for (const r of t.rows) maxCol = Math.max(maxCol, r.length);
+  const rows = Math.max(1, Math.min(t.rows.length, 100000));
+  return `$A$1:$${colLetter(Math.max(0, maxCol - 1))}$${rows}`;
+}
+
+/** <definedNames> with one _xlnm.Print_Area per sheet that asks for it. */
+function printAreas(sheets: StyledSheet[], names: string[]): string {
+  const defs = sheets
+    .map((s, i) => (s.printArea ? `<definedName name="_xlnm.Print_Area" localSheetId="${i}">'${xmlEscape(names[i].replace(/'/g, "''"))}'!${usedRangeRef(s)}</definedName>` : ''))
+    .filter(Boolean);
+  return defs.length ? `<definedNames>${defs.join('')}</definedNames>` : '';
+}
+
 /** True for bytes that start with the PNG signature. */
 export function isPng(b: Uint8Array): boolean {
   return b.length > 8 && b[0] === 0x89 && b[1] === 0x50 && b[2] === 0x4e && b[3] === 0x47 && b[4] === 0x0d && b[5] === 0x0a && b[6] === 0x1a && b[7] === 0x0a;
@@ -408,17 +437,21 @@ export async function buildStyledXlsx(sheetsIn: StyledSheet[], zip: ZipLike): Pr
     return n;
   });
   let drawings = 0;
+  let hasPng = false, hasJpeg = false;
   const sheetXmls: string[] = [];
   sheets.forEach((s, i) => {
-    const img = s.image && s.image.png instanceof Uint8Array && isPng(s.image.png) ? s.image : null;
+    const im = s.image;
+    const ext = im?.format === 'jpeg' ? 'jpeg' : 'png';
+    const img = im && im.data instanceof Uint8Array && (ext === 'jpeg' ? isJpeg(im.data) : isPng(im.data)) ? im : null;
     let rid: string | null = null;
     if (img) {
       drawings++;
       rid = 'rId1';
-      zip.file(`xl/media/image${drawings}.png`, img.png);
+      if (ext === 'jpeg') hasJpeg = true; else hasPng = true;
+      zip.file(`xl/media/image${drawings}.${ext}`, img.data);
       zip.file(`xl/drawings/drawing${drawings}.xml`, drawingXml(img));
       zip.file(`xl/drawings/_rels/drawing${drawings}.xml.rels`, relsXml([
-        `<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/image" Target="../media/image${drawings}.png"/>`,
+        `<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/image" Target="../media/image${drawings}.${ext}"/>`,
       ]));
       zip.file(`xl/worksheets/_rels/sheet${i + 1}.xml.rels`, relsXml([
         `<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/drawing" Target="../drawings/drawing${drawings}.xml"/>`,
@@ -438,7 +471,8 @@ export async function buildStyledXlsx(sheetsIn: StyledSheet[], zip: ZipLike): Pr
     '<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">' +
     '<Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>' +
     '<Default Extension="xml" ContentType="application/xml"/>' +
-    (drawings ? '<Default Extension="png" ContentType="image/png"/>' : '') +
+    (hasPng ? '<Default Extension="png" ContentType="image/png"/>' : '') +
+    (hasJpeg ? '<Default Extension="jpeg" ContentType="image/jpeg"/>' : '') +
     overrides.join('') +
     '</Types>');
   zip.file('_rels/.rels', rootRelsXml());
@@ -448,6 +482,7 @@ export async function buildStyledXlsx(sheetsIn: StyledSheet[], zip: ZipLike): Pr
     'xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">' +
     '<bookViews><workbookView activeTab="0"/></bookViews>' +
     `<sheets>${names.map((n, i) => `<sheet name="${xmlEscape(n)}" sheetId="${i + 1}" r:id="rId${i + 1}"/>`).join('')}</sheets>` +
+    printAreas(sheets, names) +
     '</workbook>');
   const wbRels: string[] = [];
   for (let i = 1; i <= sheets.length; i++) wbRels.push(`<Relationship Id="rId${i}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet${i}.xml"/>`);

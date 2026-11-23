@@ -12,6 +12,7 @@
 import type { StyledCellLike, StyledSheet, CellStyle } from '../export/xlsx';
 import { deriveSheet, crossChecks, fmtNum, type ParamSheet } from './model';
 import { SURVEY_GEOMETRIES, sourceKind } from './lists';
+import { coordLines, lineMismatch } from './reconcile';
 
 export interface AreaPoint {
   id: string;
@@ -42,7 +43,9 @@ export interface AreaInfo {
 }
 
 export interface MapInfo {
-  png: Uint8Array;
+  /** Encoded map picture: JPEG over a photo basemap, PNG otherwise. */
+  data: Uint8Array;
+  format: 'png' | 'jpeg';
   widthPx: number;
   heightPx: number;
   /** Basemap attribution, '' for no basemap. */
@@ -312,11 +315,16 @@ export function parametersSheet(m: ParamSheet, area: AreaInfo | null, meta: Layo
     ]);
     G.line('Every point with Easting, Northing, latitude and longitude is on the Area sheet; the map is on the Map sheet.');
   }
-  const cc = crossChecks(m);
-  if (cc.warnings.length) {
+  const checks = crossChecks(m).warnings.map((w) => w.msg);
+  // The Geometry lines and the coordinate list must describe the same lines.
+  if (area) {
+    const diff = lineMismatch(m.geom.lines, coordLines(area.points));
+    if (diff) checks.push(`Lines do not match the coordinates: ${diff}`);
+  }
+  if (checks.length) {
     G.blank();
     G.section('Plan checks');
-    for (const w of cc.warnings.slice(0, 30)) G.line(`Check: ${w.msg}`, S_WARN);
+    for (const w of checks.slice(0, 30)) G.line(`Check: ${w}`, S_WARN);
   }
 
   return {
@@ -326,7 +334,9 @@ export function parametersSheet(m: ParamSheet, area: AreaInfo | null, meta: Layo
     merges: G.merges,
     rowHeights: G.heights,
     landscape: true,
-    fitWidth: true,
+    // One printed A4 page, like the hand-kept Template sheet.
+    fitPage: true,
+    printArea: true,
   };
 }
 
@@ -364,6 +374,7 @@ export function areaSheet(area: AreaInfo): StyledSheet {
     freezeRows: headerRow,
     rowHeights: { 0: 22 },
     fitWidth: true,
+    printArea: true,
   };
 }
 
@@ -380,7 +391,7 @@ export function mapSheet(map: MapInfo, title: string): StyledSheet {
     cols: [14, 14, 14, 14, 14, 14, 14, 14, 14, 14, 14, 14],
     merges: ['A1:L1', 'A2:L2', 'A3:L3'],
     rowHeights: { 0: 22 },
-    image: { png: map.png, widthPx: map.widthPx, heightPx: map.heightPx, displayWidthPx: 1040, col: 0, row: 4, name: 'Survey area map' },
+    image: { data: map.data, format: map.format, widthPx: map.widthPx, heightPx: map.heightPx, displayWidthPx: 1040, col: 0, row: 4, name: 'Survey area map' },
     landscape: true,
     fitWidth: true,
   };

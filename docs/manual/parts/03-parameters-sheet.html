@@ -1,0 +1,47 @@
+<section class="chapter" id="rec-11">
+  <h2>11. Plan a job and hand the crew one parameter sheet</h2>
+  <p><b>For:</b> whoever prepares a survey - a processor, a planner, a party chief.<br>
+  <b>Assumes:</b> nothing beyond Part I. No seismic file is opened; this is planning, before
+  anything is recorded.</p>
+
+  <p><b>The job.</b> The field crew needs one file that says what to lay out and how to record
+  it: the job, the geometry, the source, the receivers, the recording settings, and where the
+  lines are. The <b>Parameters Sheet</b> tab (the last icon on the rail) walks you through it
+  and saves a single Excel workbook. Every value in it is <i>planned</i>: typed, picked from a
+  list or derived from what you typed, never measured.</p>
+
+  <h3>1. Start with the job type</h3>
+  <p>Pick the <b>Job type</b> first. It fills the recommended values for that kind of job - the
+  intervals, sample rate, record length, low cut, source, stack, geophone frequency and type,
+  spread type and channel count - and shows the recommended <i>range</i> under each field.
+  Everything stays editable, and you can always type a value that is not in a list.</p>
+  <!--FIG:21-paramsheet-job-->
+
+  <h3>2. Lines, source, receivers, recording</h3>
+  <p>On <b>Geometry</b>, set the intervals and channels and add each line with its name and
+  length; the number of lines, stations, shots and the nominal fold are worked out for you. The
+  Source, Receiver and Recording steps follow. Anything in red stops you from going on until it
+  is fixed (a high cut above Nyquist, a line without a name); anything marked <b>Check</b> is
+  worth reading but does not stop you (typed total shots that do not match the plan, an MASW
+  array shorter than twice the target depth, SH work planned with vertical geophones).</p>
+
+  <h3>3. The coordinates</h3>
+  <p>Paste the points, or load a TXT, CSV, KML or GeoJSON file. SeisConv works out the
+  delimiter, the columns, whether the numbers are degrees or metres, and proposes a coordinate
+  system - and <i>shows</i> you what it found. Press <b>Confirm</b> when it is right, or correct
+  it with the CRS search. When the numbers cannot tell (which UTM zone, which column is
+  latitude) it asks. If the point names describe different lines from the Geometry step, it
+  says so and offers to take the line names and lengths from the coordinates. No area yet?
+  Tick <b>No area yet</b>; the sheet then says "Survey area: not provided".</p>
+
+  <h3>4. Review and save</h3>
+  <p>The last step shows everything on one page with an <b>Edit</b> link per step, and the area
+  map exactly as it will go into the workbook. Press <b>Save parameter sheet (XLSX)...</b>.</p>
+  <!--FIG:22-paramsheet-review-->
+
+  <p>The workbook has a one-page <b>Parameters</b> sheet (label, value, unit; numbers are real
+  numbers and dates real dates), an <b>Area</b> sheet with every point's Easting, Northing,
+  latitude and longitude, a <b>Map</b> sheet with the area map, and an <b>About</b> sheet. The
+  map basemap is downloaded only when you save (or ask for a preview); with no connection the
+  sheet is still saved, the map drawn on grey with a note, and the coordinates are exact.</p>
+</section>

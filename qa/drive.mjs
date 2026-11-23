@@ -623,6 +623,9 @@ const globalPageErrors = [];
       notes.push(`detected: ${detected}`);
       if (!/EPSG:2039/.test(detected) || !/4 points on 2 lines/.test(detected)) fails.push(`detection said "${detected}"`);
       await win.click('#psCoordConfirm');
+      // Geometry says Line 1..3, the coordinates say L1, L2: the step must say so and offer the fix.
+      await win.waitForSelector('#psUseCoordLines', { state: 'visible', timeout: 10000 })
+        .catch(() => fails.push('no line-name mismatch warning on the Coordinates step'));
       await win.selectOption('#psBasemap', 'satellite');
       await win.click('#psNextBtn');
       await win.waitForFunction(() => /Preview/.test(document.getElementById('psMapMsg')?.textContent || ''), null, { timeout: 15000 })
@@ -643,7 +646,7 @@ const globalPageErrors = [];
         notes.push(`sheets: ${names.join(', ')}`);
         if (names.join('|') !== 'Parameters|Area|Map|About') fails.push(`sheets were ${names.join('|')}`);
         const s1 = await part('xl/worksheets/sheet1.xml');
-        for (const want of ['Vibroseis 2D Reflection', '<v>480</v>', '<v>1803</v>', '<v>120</v>', '<v>46392</v>']) {
+        for (const want of ['Vibroseis 2D Reflection', '<v>480</v>', '<v>1803</v>', '<v>120</v>', '<v>46392</v>', 'Lines do not match the coordinates']) {
           if (!s1.includes(want)) fails.push(`Parameters sheet lacks ${want}`);
         }
         const s2 = await part('xl/worksheets/sheet2.xml');

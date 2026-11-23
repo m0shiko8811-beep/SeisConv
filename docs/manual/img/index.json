@@ -137,18 +137,18 @@
       "bytes": 787129
     },
     {
-      "name": "09d-sps-real-map",
-      "image": "img/09d-sps-real-map.png",
-      "caption": "The same survey on the real basemap: satellite imagery, with the layer picker and the bearing control",
-      "callouts": 4,
-      "bytes": 1920780
-    },
-    {
       "name": "09c-sps-export",
       "image": "img/09c-sps-export.png",
       "caption": "The SPS tab scrolled to the export row",
       "callouts": 4,
       "bytes": 659402
+    },
+    {
+      "name": "09d-sps-real-map",
+      "image": "img/09d-sps-real-map.png",
+      "caption": "The same survey on the real basemap: satellite imagery, with the layer picker and the bearing control",
+      "callouts": 4,
+      "bytes": 1920780
     },
     {
       "name": "10a-sps-headers-view",
@@ -261,6 +261,20 @@
       "caption": "The in-app Help: the same source this manual's reference chapter is generated from",
       "callouts": 3,
       "bytes": 276990
+    },
+    {
+      "name": "21-paramsheet-job",
+      "image": "img/21-paramsheet-job.png",
+      "caption": "Parameters Sheet: the job type fills the recommended values, every one still editable",
+      "callouts": 4,
+      "bytes": 132723
+    },
+    {
+      "name": "22-paramsheet-review",
+      "image": "img/22-paramsheet-review.png",
+      "caption": "Parameters Sheet: review every step and the area map, then save one XLSX",
+      "callouts": 1,
+      "bytes": 113938
     }
   ]
 }

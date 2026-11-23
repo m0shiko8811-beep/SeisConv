@@ -1,0 +1,54 @@
+{
+  "image": "img/21-paramsheet-job.png",
+  "name": "21-paramsheet-job",
+  "caption": "Parameters Sheet: the job type fills the recommended values, every one still editable",
+  "callouts": [
+    {
+      "n": 1,
+      "label": "The eight steps; click any of them",
+      "selector": "#psStep-job",
+      "rect": {
+        "x": 109,
+        "y": 217,
+        "w": 212,
+        "h": 56
+      }
+    },
+    {
+      "n": 2,
+      "label": "Job type first: it fills the presets",
+      "selector": "#ps-job-jobType",
+      "rect": {
+        "x": 373,
+        "y": 226,
+        "w": 381,
+        "h": 30
+      }
+    },
+    {
+      "n": 3,
+      "label": "Survey geometry: 2D, 3D, borehole or point",
+      "selector": "#ps-job-geometry",
+      "rect": {
+        "x": 770,
+        "y": 226,
+        "w": 381,
+        "h": 32
+      }
+    },
+    {
+      "n": 4,
+      "label": "Next is enabled only when the step checks out",
+      "selector": "#psNextBtn",
+      "rect": {
+        "x": 443,
+        "y": 640,
+        "w": 59,
+        "h": 35
+      }
+    }
+  ],
+  "missingCallouts": [],
+  "frameLeaks": [],
+  "bytes": 132723
+}

@@ -762,6 +762,54 @@ async function main() {
     ]);
   });
 
+  // =================================================================== PARAMETERS SHEET
+  // A synthetic job at the fixture origin (500000E 4000000N, UTM 36N - not a real site).
+  // "No basemap" so no tile is fetched while the manual is rendered. The sheet is reset
+  // first and reset again after, so the shots never depend on (or leave) a draft.
+  await step('paramsheet', async () => {
+    await gotoTab(win, 'tab-paramsheet', 'panel-paramsheet');
+    const reset = async () => {
+      await win.click('#psNewBtn');
+      await waitFor(win, () => document.getElementById('confirmBack')?.classList.contains('open'), null, 5000);
+      await win.click('#confirmOk').catch(() => {});
+      await sleep(400);
+    };
+    const fill = async (id, v) => { await win.fill('#' + id, String(v)); await win.locator('#' + id).dispatchEvent('change'); };
+    await reset();
+    await fill('ps-job-jobType', 'Refraction Tomography');
+    await fill('ps-job-prospect', 'SYNTH block');
+    await fill('ps-job-jobNumber', 'SYNTH-011');
+    await fill('ps-job-targetDepthM', 30);
+    await fill('ps-job-startDate', '2027-03-01');
+    await fill('ps-job-endDate', '2027-03-03');
+    await sleep(500);
+    await capture(win, '21-paramsheet-job', 'Parameters Sheet: the job type fills the recommended values, every one still editable', [
+      { sel: '#psStep-job', label: 'The eight steps; click any of them' },
+      { sel: '#ps-job-jobType', label: 'Job type first: it fills the presets' },
+      { sel: '#ps-job-geometry', label: 'Survey geometry: 2D, 3D, borehole or point', at: 'tr' },
+      { sel: '#psNextBtn', label: 'Next is enabled only when the step checks out' },
+    ]);
+    await win.click('#psStep-geometry');
+    await fill('ps-geom-lineLengthM', 235);
+    await win.click('#psAddLineBtn');
+    await win.click('#psAddLineBtn');
+    await win.fill('#psLineName-0', 'SYNTH-01');
+    await win.fill('#psLineName-1', 'SYNTH-02');
+    await win.click('#psStep-recording');
+    await fill('ps-recording-coordSystem', 'UTM 36N (WGS84)');
+    await win.click('#psStep-coords');
+    await win.fill('#psCoordText', 'id,E,N\nSYNTH-01-S,500000,4000000\nSYNTH-01-E,500235,4000000\nSYNTH-02-S,500000,4000060\nSYNTH-02-E,500235,4000060\n');
+    await win.click('#psCoordRead');
+    await win.click('#psCoordConfirm');
+    await win.selectOption('#psBasemap', '');
+    await win.click('#psStep-review');
+    await waitFor(win, () => /^Preview/.test(document.getElementById('psMapMsg')?.textContent || ''), null, 15000);
+    await capture(win, '22-paramsheet-review', 'Parameters Sheet: review every step and the area map, then save one XLSX', [
+      { sel: '#psMapCanvas', label: 'The area map exactly as it goes into the workbook; Save is just below it', at: 'tr' },
+    ], { scrollTo: '#psMapCanvas' });
+    await reset();
+  });
+
   // =================================================================== HELP
   await step('help', async () => {
     await win.click('#railHelp');

@@ -1,0 +1,21 @@
+{
+  "image": "img/22-paramsheet-review.png",
+  "name": "22-paramsheet-review",
+  "caption": "Parameters Sheet: review every step and the area map, then save one XLSX",
+  "callouts": [
+    {
+      "n": 1,
+      "label": "The area map exactly as it goes into the workbook; Save is just below it",
+      "selector": "#psMapCanvas",
+      "rect": {
+        "x": 373,
+        "y": 148,
+        "w": 1176,
+        "h": 831
+      }
+    }
+  ],
+  "missingCallouts": [],
+  "frameLeaks": [],
+  "bytes": 113938
+}

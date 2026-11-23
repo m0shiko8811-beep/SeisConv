@@ -229,6 +229,7 @@ body.push(include('01-getting-started.html'));
 
 body.push(part('II', 'Task recipes', 'One page per real job, in the form "I need to …" rather than "the Converter tab". This is the part most people will actually read.'));
 body.push(include('02-recipes.html'));
+body.push(include('03-parameters-sheet.html'));
 
 body.push(part('III', 'Tab-by-tab reference', 'Generated from the app itself (renderer/src/manual.ts). Every control, every option, every state - the same text the in-app Help shows.'));
 const seen = new Set<string>();
