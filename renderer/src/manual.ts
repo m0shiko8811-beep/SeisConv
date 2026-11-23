@@ -646,6 +646,8 @@ export const MANUAL: Record<string, HelpTopic> = {
       '<b>Map basemap</b> - Satellite, Streets, Light or Dark grey, or <b>No basemap</b> (works offline).',
       '<b>Review and export</b> - everything on one page with an <b>Edit</b> link per step, the area map preview (<b>Preview with basemap</b> downloads the tiles), and <b>Save parameter sheet (XLSX)...</b>.',
       '<b>Logo (optional)</b> (Job step) - <b>Choose logo file...</b> picks a PNG or JPEG (up to 5 MB); it is shown at the right of the sheet title and at the top right of the area map. <b>Remove logo</b> takes it out. There is no default logo.',
+      '<b>Save as configuration...</b> (Review and export) - saves the parameters, the lines and the logo to a <b>.seisparams</b> file, so the next similar job (or a colleague) can start from it. Two boxes, both off unless you tick them, add the coordinate list and the job-specific details (job number, dates, client, prospect, prepared by, revision, notes).',
+      '<b>Load configuration...</b> (Job step, and on Review) - fills the sheet from a saved .seisparams file. If the sheet already holds something, you are asked before it is replaced; a note then says what was loaded. A file that is not a configuration, or one from a newer SeisConv, is refused with a message and changes nothing.',
       '<b>New sheet</b> - starts over (asks first).',
     ],
     steps: [
@@ -690,7 +692,7 @@ export const MANUAL: Record<string, HelpTopic> = {
       'The map tiles come from the same servers as the SPS basemap, and only when the sheet is saved or you ask for a preview. Offline, or when tiles fail, the workbook is still saved: the map is drawn on grey with a visible note, and its coordinates are exact.',
       'The basemap attribution is burned into the map picture and repeated on the About sheet.',
       'A list in degrees gets its Easting / Northing in ITM inside Israel, otherwise in the UTM zone of the points.',
-      'Nothing on this tab is saved: every launch starts with an empty sheet. Within one session, switching to another tab and back keeps what you typed; closing the app clears it, logo included. Save the XLSX to keep the sheet.',
+      'Nothing on this tab is saved: every launch starts with an empty sheet. Within one session, switching to another tab and back keeps what you typed; closing the app clears it, logo included. Save the XLSX to keep the sheet, or <b>Save as configuration...</b> to reuse its parameters next time; the configuration is only the file you chose to save.',
     ],
   },
 };

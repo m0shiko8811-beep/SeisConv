@@ -184,13 +184,14 @@ import { createHash } from 'node:crypto';
 import { buildStyledXlsx, xlsxCleanText } from '../export/xlsx';
 import { JOB_TYPES, SOURCE_TYPES, MANUFACTURER_MODELS, modelsFor, sourceKind, isHorizontalPhone } from '../sheet/lists';
 import { JOB_PRESETS, presetFor } from '../sheet/presets';
-import { emptySheet, applyPreset, deriveSheet, pointsAlong, validateStep, crossChecks, allHints, isIsoDate, stepFilled, PS_STEPS, type ParamSheet } from '../sheet/model';
+import { emptySheet, applyPreset, deriveSheet, pointsAlong, validateStep, crossChecks, allHints, isIsoDate, stepFilled, PS_STEPS, PS_MAX_LINES, type ParamSheet } from '../sheet/model';
 import { ringArea, ringPerimeter, cleanRing, isClosed, pathLength, bbox, selfIntersects, convexHull } from '../gis/polygon';
 import { sniffCoords, parseCoordField, suggestGridCode, utmCodeFor, SNIFF_MAX_POINTS } from '../sheet/coordsniff';
 import { sanitizeLogo, logoBytes, fitInside, fitToHeight, LOGO_MAX_BYTES } from '../sheet/logo';
 import { buildSheetWorkbook, excelDateSerial, titleLogo } from '../sheet/layout';
 import { fitMapGrid, toPx, niceStep, scaleBarMetres, ticks, fmtDistance } from '../sheet/mapframe';
 import { coordLines, lineMismatch, linesFromCoords, roundToInterval } from '../sheet/reconcile';
+import { buildConfig, parseConfig, sanitizeSheet, describeConfig, CONFIG_FORMAT, CONFIG_MAX_BYTES } from '../sheet/config';
 import type { ParsedFile, SPSData, SPSPoint, Trace, TraceGeom } from '../index';
 import type { RGB } from '../render/colormaps';
 import {
@@ -8251,6 +8252,82 @@ async function paramSheetTests(): Promise<void> {
     assert.deepEqual(fitToHeight(200, 100, 37, 220), { w: 74, h: 37 });
     assert.deepEqual(fitToHeight(1000, 100, 37, 220), { w: 220, h: 22 });
     assert.equal(emptySheet().logo, null);
+  });
+
+  // -- saved configurations (.seisparams) --
+  const cfgModel = (): ParamSheet => {
+    const m = applyPreset(emptySheet(), 'Vibroseis 2D Reflection');
+    m.logo = sanitizeLogo({ data: bytesToBase64(PNG_LOGO), format: 'png', w: 120, h: 60 });
+    Object.assign(m.job, { jobNumber: 'J-77', client: 'Client A', prospect: 'Block 9', startDate: '2027-01-05', endDate: '2027-02-01', preparedBy: 'QA', revision: 'B', notes: 'secret note', crew: 'Crew 4' });
+    m.geom.lines = [{ name: 'L1', lengthM: 12000 }, { name: 'L2', lengthM: 9000 }, { name: 'L3', lengthM: null }];
+    m.recording.aux = ['TB', 'Pilot', '', ''];
+    m.coords = { skip: false, crsCode: 'EPSG:2039', crsName: 'ITM', confirmed: true, points: [{ id: 'a', x: 200000, y: 600000, group: 'L1' }, { id: 'b', x: 212000, y: 600000 }], basemap: 'streets' };
+    return m;
+  };
+  const META = { version: '0.8.8', savedAt: '2026-11-23 16:30' };
+  test('sheet config: full round trip restores every field', () => {
+    const m = cfgModel();
+    const r = parseConfig(buildConfig(m, { coords: true, jobDetails: true }, META));
+    assert.ok(r.ok);
+    if (!r.ok) return;
+    assert.deepEqual(r.model, m);
+    assert.equal(r.info.lines, 3); assert.equal(r.info.points, 2); assert.ok(r.info.logo); assert.ok(r.info.jobDetails);
+    assert.equal(r.info.savedWith, '0.8.8');
+    assert.equal(describeConfig(r.info), '3 lines, logo, 2 coordinate points, job details');
+  });
+  test('sheet config: unticked groups are left out of the file', () => {
+    const m = cfgModel();
+    const text = buildConfig(m, { coords: false, jobDetails: false }, META);
+    for (const s of ['J-77', 'Client A', 'Block 9', '2027-01-05', 'secret note', '"preparedBy"', '"revision"', '200000', '"points"']) assert.ok(!text.includes(s), `file holds ${s}`);
+    const o = JSON.parse(text);
+    assert.equal(o.format, CONFIG_FORMAT); assert.equal(o.version, 1);
+    const r = parseConfig(text);
+    assert.ok(r.ok);
+    if (!r.ok) return;
+    assert.equal(r.model.job.jobNumber, ''); assert.equal(r.model.job.client, ''); assert.equal(r.model.job.notes, '');
+    assert.equal(r.model.job.crew, 'Crew 4');                         // not a job-specific detail
+    assert.equal(r.model.coords.points.length, 0); assert.equal(r.model.coords.confirmed, false);
+    assert.equal(r.model.coords.crsCode, 'EPSG:2039');
+    assert.deepEqual(r.model.geom.lines, m.geom.lines);
+    assert.ok(r.model.logo);
+    assert.equal(describeConfig(r.info), '3 lines, logo, no coordinates');
+    const only = parseConfig(buildConfig(m, { coords: true, jobDetails: false }, META));
+    assert.ok(only.ok && only.model.coords.points.length === 2 && only.model.job.jobNumber === '');
+  });
+  test('sheet config: wrong format, newer version, junk and oversized never throw', () => {
+    const bad: unknown[] = ['', '   ', 'not json', '[]', '{"format":"other","version":1,"model":{}}', '{"format":"seisconv-paramsheet-config","version":"1","model":{}}',
+      '{"format":"seisconv-paramsheet-config","version":1}', '{"format":"seisconv-paramsheet-config","version":1,"model":[]}', 42, null, ' '.repeat(CONFIG_MAX_BYTES + 1) + '{}'];
+    for (const b of bad) { const r = parseConfig(b); assert.ok(!r.ok, `accepted ${String(b).slice(0, 40)}`); }
+    const newer = parseConfig('{"format":"seisconv-paramsheet-config","version":2,"model":{}}');
+    assert.ok(!newer.ok && /newer SeisConv/.test(newer.error));
+    const wrong = parseConfig('{"format":"x"}');
+    assert.ok(!wrong.ok && wrong.error === 'This file is not a SeisConv parameter configuration.');
+  });
+  test('sheet config: the sanitiser bounds values and drops pollution keys and unknown fields', () => {
+    const text = '{"format":"seisconv-paramsheet-config","version":1,"model":{"__proto__":{"polluted":1},"constructor":{"x":1},"extra":5,' +
+      '"job":{"__proto__":{"polluted":2},"jobType":"' + 'x'.repeat(500) + '","geometry":"4D","targetDepthM":"12","notes":7,"evil":"y"},' +
+      '"geom":{"rxIntervalM":1e400,"activeChannels":480,"lines":[' + Array.from({ length: PS_MAX_LINES + 20 }, (_, i) => `{"name":"L${i}","lengthM":${i}}`).join(',') + ',7]},' +
+      '"source":{"unitWeightUnit":"lb","stack":-1},"recording":{"aux":["a",5],"highCutAntiAlias":"yes"},' +
+      '"coords":{"points":[{"id":"p","x":"1","y":2},{"id":"q","x":1,"y":2,"constructor":1}],"confirmed":true},"logo":{"data":"x","format":"png","w":1,"h":1}}}';
+    const r = parseConfig(text);
+    assert.ok(r.ok);
+    if (!r.ok) return;
+    assert.equal(({} as Record<string, unknown>).polluted, undefined);
+    assert.equal(r.model.job.jobType.length, 200);
+    assert.equal(r.model.job.geometry, '2D');
+    assert.equal(r.model.job.targetDepthM, null);
+    assert.equal(r.model.job.notes, '');
+    assert.ok(!('evil' in r.model.job) && !('extra' in r.model));
+    assert.equal(r.model.geom.rxIntervalM, null);
+    assert.equal(r.model.geom.activeChannels, 480);
+    assert.equal(r.model.geom.lines.length, PS_MAX_LINES);
+    assert.equal(r.model.source.unitWeightUnit, 'kg');
+    assert.equal(r.model.source.stack, -1);
+    assert.deepEqual(r.model.recording.aux, ['a', '', '', '']);
+    assert.equal(r.model.recording.highCutAntiAlias, false);
+    assert.deepEqual(r.model.coords.points, [{ id: 'q', x: 1, y: 2 }]);
+    assert.equal(r.model.logo, null);
+    assert.deepEqual(sanitizeSheet(null), emptySheet());
   });
   await atest('styled xlsx: a logo and a map on one sheet share one drawing (png + jpeg together)', async () => {
     const bytes = await buildStyledXlsx([{

@@ -484,6 +484,7 @@ declare global {
         tilesTotal?: number; tilesFailed?: number; tilesBlank?: number; notes?: string[];
       }>;
       paramSheetPickLogo(): Promise<{ ok: boolean; error?: string; data?: Uint8Array; format?: 'png' | 'jpeg'; w?: number; h?: number; name?: string } | null>;
+      paramSheetOpenConfig(): Promise<{ ok: boolean; error?: string; text?: string; name?: string } | null>;
       semblance(opts: { velMin: number; velMax: number; velStep: number }): Promise<SemblanceData>;
       // -- Spectrum-analysis tab --
       // Mean amplitude spectrum of the open file (or a [traceStart,traceEnd) window).

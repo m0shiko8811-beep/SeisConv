@@ -689,6 +689,50 @@ const globalPageErrors = [];
       }
       await win.locator('#psMapCanvas').scrollIntoViewIfNeeded().catch(() => {});
       await win.screenshot({ path: join(SHOTS, '9b-paramsheet-map.png') }).catch(() => {});
+      // Save as configuration (both opt-in groups left OFF), New sheet, load it back:
+      // the parameters, lines and logo return; the coordinates and job details do not.
+      const cfgPath = join(SHOTS, '_ps_cfg_example.seisparams');
+      rmSync(cfgPath, { force: true });
+      await app.evaluate(async ({ dialog }, p) => { dialog.showSaveDialog = async () => ({ canceled: false, filePath: p }); }, cfgPath);
+      await win.locator('#psCfgSaveBtn').scrollIntoViewIfNeeded().catch(() => {});
+      await win.screenshot({ path: join(SHOTS, '_ps_cfg_review.png') }).catch(() => {});
+      await win.click('#psCfgSaveBtn');
+      await win.waitForSelector('#psCfgBack.open', { timeout: 5000 }).catch(() => fails.push('the save-configuration dialog did not open'));
+      const boxesOff = await win.evaluate(() => !document.getElementById('psCfgCoords')?.checked && !document.getElementById('psCfgJob')?.checked);
+      if (!boxesOff) fails.push('the configuration checkboxes are not off by default');
+      await win.screenshot({ path: join(SHOTS, '_ps_cfg_save_dialog.png') }).catch(() => {});
+      await win.click('#psCfgOk');
+      await win.waitForFunction(() => /Saved configuration|failed|Could not/.test(document.getElementById('psStatus')?.textContent || ''), null, { timeout: 10000 })
+        .catch(() => fails.push('saving the configuration did not report'));
+      if (!existsSync(cfgPath)) fails.push('no .seisparams file was written');
+      else {
+        const cfgText = readFileSync(cfgPath, 'utf8');
+        const cfg = JSON.parse(cfgText);
+        if (cfg.format !== 'seisconv-paramsheet-config' || cfg.version !== 1) fails.push('the configuration header is wrong');
+        if (/212000|QA block|2027-01-05/.test(cfgText)) fails.push('the configuration holds coordinates or job details it was told to leave out');
+        notes.push(`config ${cfgText.length} bytes`);
+      }
+      await newSheet();
+      await mockDialogs(app, [cfgPath]);
+      await win.click('#psCfgLoadBtn');
+      await win.waitForFunction(() => /Loaded configuration/.test(document.getElementById('undoToastMsg')?.textContent || ''), null, { timeout: 10000 })
+        .catch(() => fails.push('no "Loaded configuration" toast'));
+      const toast = ((await win.textContent('#undoToastMsg').catch(() => '')) || '').trim();
+      notes.push(`load toast: ${toast}`);
+      await win.screenshot({ path: join(SHOTS, '_ps_cfg_loaded.png') }).catch(() => {});
+      const restored = await win.evaluate(() => ({
+        jt: document.getElementById('ps-job-jobType')?.value, prospect: document.getElementById('ps-job-prospect')?.value,
+        start: document.getElementById('ps-job-startDate')?.value, logo: !!document.getElementById('psLogoThumb'),
+      }));
+      if (restored.jt !== 'Vibroseis 2D Reflection' || !restored.logo) fails.push(`configuration did not restore the job type / logo (${JSON.stringify(restored)})`);
+      if (restored.prospect || restored.start) fails.push('configuration restored job details that were left out');
+      await win.click('#psStep-geometry');
+      const lineRows = await win.evaluate(() => document.querySelectorAll('#psLines tr[data-path]').length);
+      const lineLen = await win.inputValue('#ps-geom-lineLengthM').catch(() => '');
+      if (lineRows !== 3 || lineLen !== '12000') fails.push(`configuration lines: ${lineRows} rows, length ${lineLen}`);
+      await win.click('#psStep-coords');
+      if (await win.evaluate(() => !!document.getElementById('psPtsTbl'))) fails.push('configuration restored coordinates that were left out');
+      notes.push(`config load: lines=${lineRows} logo=${restored.logo}`);
       // Within the session, another tab and back keeps everything.
       await gotoTab(win, 'tab-conv', 'panel-conv');
       await gotoTab(win, 'tab-paramsheet', 'panel-paramsheet');

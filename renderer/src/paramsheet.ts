@@ -34,6 +34,7 @@ import { buildSheetWorkbook, type AreaInfo, type AreaPoint, type MapInfo } from 
 import { fitMapGrid, toPx, niceStep, scaleBarMetres, ticks, fmtDistance, type MapGrid } from '../../core/sheet/mapframe';
 import { ringArea, ringPerimeter, pathLength, convexHull, isClosed, type XY } from '../../core/gis/polygon';
 import { coordLines, lineMismatch, linesFromCoords } from '../../core/sheet/reconcile';
+import { buildConfig, parseConfig, describeConfig, CONFIG_EXT, type ConfigOptions } from '../../core/sheet/config';
 
 export interface PsDeps {
   api: {
@@ -48,6 +49,8 @@ export interface PsDeps {
     exportBinary(name: string, bytes: Uint8Array): Promise<{ ok: boolean; path?: string; canceled?: boolean; error?: string }>;
     openPlanText(opts?: { coords?: boolean }): Promise<{ name: string; text: string } | null>;
     paramSheetPickLogo(): Promise<{ ok: boolean; error?: string; data?: Uint8Array; format?: 'png' | 'jpeg'; w?: number; h?: number; name?: string } | null>;
+    paramSheetOpenConfig(): Promise<{ ok: boolean; error?: string; text?: string; name?: string } | null>;
+    exportText(name: string, text: string): Promise<{ ok: boolean; path?: string; canceled?: boolean; error?: string }>;
   };
   showProgress(label: string, onCancel?: () => void, delayMs?: number): void;
   hideProgress(): void;
@@ -277,6 +280,117 @@ function renderLogoField(form: HTMLElement): void {
   wrap.appendChild(row);
   wrap.appendChild(el('span', { class: 'ps-note' }, 'PNG or JPEG, up to 5 MB. Shown at the right of the sheet title and on the map. Not kept after the app closes.'));
   form.appendChild(wrap);
+}
+
+// -- saved configurations (.seisparams) -----------------------------------------------
+// A configuration is a FILE the user chooses to write (Review step) and load into a
+// later, similar job. The app itself still stores nothing; the format and the
+// sanitiser are in core/sheet/config.ts.
+
+/** True when anything at all is filled in the current sheet. */
+function sheetHasData(): boolean {
+  return !!M.logo || M.coords.points.length > 0 || PS_STEPS.some((s) => stepFilled(M, s));
+}
+
+/** The in-app "Save as configuration" dialog: two opt-in groups, both off. */
+function askConfigOptions(): Promise<ConfigOptions | null> {
+  let back = $('psCfgBack');
+  if (!back) {
+    back = el('div', { class: 'modal-back', id: 'psCfgBack', role: 'dialog', 'aria-modal': 'true', 'aria-labelledby': 'psCfgTitle' });
+    const modal = el('div', { class: 'modal confirm-modal' });
+    const head = el('div', { class: 'mh' });
+    head.appendChild(el('h2', { id: 'psCfgTitle' }, 'Save as configuration'));
+    modal.appendChild(head);
+    const body = el('div', { class: 'mbody' });
+    body.appendChild(el('p', {}, 'Saves every parameter, the lines and the logo to a .seisparams file you can load next time there is a similar job (or send to a colleague).'));
+    const box = (id: string, text: string) => {
+      const lab = el('label', { style: 'display:flex;gap:8px;align-items:flex-start;margin:8px 0;cursor:pointer;' });
+      const cb = el('input', { type: 'checkbox', id, style: 'margin-top:3px;accent-color:var(--teal);' });
+      lab.appendChild(cb);
+      lab.appendChild(el('span', {}, text));
+      body.appendChild(lab);
+    };
+    box('psCfgCoords', 'Include the coordinate list');
+    box('psCfgJob', 'Include job-specific details (job number, dates, client, prospect, prepared by, revision, notes)');
+    modal.appendChild(body);
+    const foot = el('div', { class: 'mh confirm-foot' });
+    foot.appendChild(el('span', { style: 'flex:1' }));
+    foot.appendChild(el('button', { class: 'btn sm', type: 'button', id: 'psCfgCancel' }, 'Cancel'));
+    foot.appendChild(el('button', { class: 'btn sm btn-primary', type: 'button', id: 'psCfgOk' }, 'Save...'));
+    modal.appendChild(foot);
+    back.appendChild(modal);
+    document.body.appendChild(back);
+  }
+  const b = back;
+  (b.querySelector('#psCfgCoords') as HTMLInputElement).checked = false;
+  (b.querySelector('#psCfgJob') as HTMLInputElement).checked = false;
+  b.classList.add('open');
+  return new Promise((resolve) => {
+    const done = (v: ConfigOptions | null) => {
+      b.classList.remove('open');
+      okBtn.removeEventListener('click', onOk); cancelBtn.removeEventListener('click', onCancel); b.removeEventListener('keydown', onKey);
+      resolve(v);
+    };
+    const okBtn = b.querySelector('#psCfgOk') as HTMLButtonElement;
+    const cancelBtn = b.querySelector('#psCfgCancel') as HTMLButtonElement;
+    const onOk = () => done({
+      coords: (b.querySelector('#psCfgCoords') as HTMLInputElement).checked,
+      jobDetails: (b.querySelector('#psCfgJob') as HTMLInputElement).checked,
+    });
+    const onCancel = () => done(null);
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') done(null); };
+    okBtn.addEventListener('click', onOk);
+    cancelBtn.addEventListener('click', onCancel);
+    b.addEventListener('keydown', onKey);
+    okBtn.focus();
+  });
+}
+
+async function saveConfig(): Promise<void> {
+  const opts = await askConfigOptions();
+  if (!opts) return;
+  const now = new Date();
+  const text = buildConfig(M, opts, { version: D.version, savedAt: `${todayIso()} ${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}` });
+  const stem = (M.job.jobType || 'parameters').replace(/[^A-Za-z0-9_.-]+/g, '_').replace(/^_+|_+$/g, '').slice(0, 60) || 'parameters';
+  try {
+    const r = await D.api.exportText(`${stem}.${CONFIG_EXT}`, text);
+    if (r?.ok) {
+      setStatus(`Saved configuration ${r.path ?? ''}`);
+      D.infoToast('Configuration saved.');
+      D.audit('export', `parameter configuration (coords ${opts.coords ? 'in' : 'out'}, job details ${opts.jobDetails ? 'in' : 'out'}) -> ${r.path}`, 'paramsheet');
+    } else if (!r?.canceled) setStatus('Save failed: ' + (r?.error || 'unknown'));
+  } catch (e) {
+    setStatus('Could not save the configuration: ' + D.errMsg(e));
+  }
+}
+
+async function loadConfig(): Promise<void> {
+  let r: Awaited<ReturnType<PsDeps['api']['paramSheetOpenConfig']>>;
+  try { r = await D.api.paramSheetOpenConfig(); } catch (e) { D.infoToast('Could not open the configuration: ' + D.errMsg(e)); return; }
+  if (!r) return;                                   // cancelled
+  if (!r.ok) { D.infoToast(r.error || 'This file is not a SeisConv parameter configuration.'); return; }
+  const res = parseConfig(r.text);
+  if (!res.ok) { D.infoToast(res.error); return; }
+  if (sheetHasData() && !(await D.confirm('Replace the current sheet with the configuration?'))) return;
+  M = res.model;
+  lastPresetFor = M.job.jobType;
+  sniff = null; coordText = ''; coordFile = ''; previewBasemap = null;
+  D.crsPickerSet('psCrsSearch', M.coords.crsCode, M.coords.crsName);
+  const what = describeConfig(res.info);
+  D.audit('import', `parameter configuration ${r.name ?? ''}: ${what}`, 'paramsheet');
+  setStatus('');
+  go('job');
+  D.infoToast(`Loaded configuration: ${what}`);
+}
+
+function configButton(kind: 'save' | 'load', id: string): HTMLButtonElement {
+  const b = el('button', { class: kind === 'save' ? 'btn lg' : 'btn sm', type: 'button', id },
+    kind === 'save' ? 'Save as configuration...' : 'Load configuration...');
+  b.title = kind === 'save'
+    ? 'Save the parameters, lines and logo to a .seisparams file to load next time there is a similar job'
+    : 'Fill the sheet from a saved .seisparams configuration';
+  b.addEventListener('click', () => void (kind === 'save' ? saveConfig() : loadConfig()));
+  return b;
 }
 
 // -- rendering ------------------------------------------------------------------------
@@ -511,7 +625,7 @@ function renderCoords(form: HTMLElement): void {
     const box = el('div', { class: 'ps-box', id: 'psDetect', style: 'margin-top:10px;' });
     const s = sniff;
     const head = el('div');
-    head.appendChild(document.createTextNode(s ? 'Detected: ' : 'Restored from the draft: '));
+    head.appendChild(document.createTextNode(s ? 'Detected: ' : 'Loaded from the configuration: '));
     head.appendChild(el('b', { id: 'psDetectText' }, s ? s.summary : `${c.points.length} points`));
     box.appendChild(head);
     if (s && s.orderAmbiguous) {
@@ -1025,6 +1139,8 @@ function renderReview(form: HTMLElement): void {
   const btn = el('button', { class: 'btn btn-primary lg', type: 'button', id: 'psExportBtn' }, 'Save parameter sheet (XLSX)...');
   btn.addEventListener('click', () => void exportSheet());
   exp.appendChild(btn);
+  exp.appendChild(configButton('save', 'psCfgSaveBtn'));
+  exp.appendChild(configButton('load', 'psCfgLoadBtnReview'));
   form.appendChild(exp);
 }
 
@@ -1175,6 +1291,15 @@ function renderStep(): void {
     }
     if (step === 'job') {
       renderLogoField(form);
+      const cfg = el('div', { class: 'olog-field wide', id: 'psCfgField' });
+      cfg.appendChild(el('label', {}, 'Saved configuration (optional)'));
+      const row = el('div', { class: 'ps-in', style: 'justify-content:flex-start;gap:10px;' });
+      const lb = configButton('load', 'psCfgLoadBtn');
+      lb.style.flex = 'none';
+      row.appendChild(lb);
+      cfg.appendChild(row);
+      cfg.appendChild(el('span', { class: 'ps-note' }, 'Fill this sheet from a .seisparams file saved on the Review step of an earlier, similar job.'));
+      form.appendChild(cfg);
       const p = presetFor(M.job.jobType);
       if (p) form.appendChild(el('div', { class: 'ps-box', style: 'grid-column:1 / -1;' }, `Planning note for ${p.jobType}: ${p.note}`));
     }

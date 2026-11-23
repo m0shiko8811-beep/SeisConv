@@ -2585,6 +2585,32 @@ ipcMain.handle('seisconv:paramSheetPickLogo', async () => {
   }
 });
 
+// A saved Parameters Sheet configuration (.seisparams, JSON): open dialog, at most
+// 5 MB, returned as TEXT. The renderer parses and sanitises it in core
+// (core/sheet/config.ts); nothing is interpreted here.
+const PS_CONFIG_MAX_FILE = 5 * 1024 * 1024;
+ipcMain.handle('seisconv:paramSheetOpenConfig', async () => {
+  if (!win) return null;
+  const res = await dialog.showOpenDialog(win, {
+    title: 'Load a parameter configuration',
+    properties: ['openFile'],
+    filters: [
+      { name: 'SeisConv parameter configuration', extensions: ['seisparams'] },
+      { name: 'All files', extensions: ['*'] },
+    ],
+  });
+  if (res.canceled || !res.filePaths.length) return null;
+  const p = res.filePaths[0];
+  try {
+    const st = await stat(p);
+    if (!st.isFile()) return { ok: false, error: 'That is not a file.' };
+    if (st.size > PS_CONFIG_MAX_FILE) return { ok: false, error: `The file is ${(st.size / 1048576).toFixed(1)} MB; a configuration is at most 5 MB.` };
+    return { ok: true, text: await readFile(p, 'utf8'), name: path.basename(p).slice(0, 120) };
+  } catch (e) {
+    return { ok: false, error: `The configuration could not be read: ${e instanceof Error ? e.message : String(e)}` };
+  }
+});
+
 ipcMain.handle('seisconv:paramSheetBasemap', async (_e, args: {
   code?: string;
   grid?: { width?: number; height?: number; originX?: number; originY?: number; pixelSize?: number };
@@ -2790,6 +2816,7 @@ ipcMain.handle('seisconv:exportText', async (_e, args: { name: string; text: str
   const filters =
     ext.toLowerCase() === 'csv' ? [{ name: 'CSV file', extensions: ['csv'] }] :
     ext.toLowerCase() === 'txt' ? [{ name: 'Text file', extensions: ['txt'] }] :
+    ext.toLowerCase() === 'seisparams' ? [{ name: 'SeisConv parameter configuration', extensions: ['seisparams'] }] :
     undefined;
   const save = await dialog.showSaveDialog(
     win,

@@ -1153,6 +1153,10 @@ const api = {
    *  fit 600 x 300 px. null = cancelled; ok:false carries the reason. */
   paramSheetPickLogo: (): Promise<{ ok: boolean; error?: string; data?: Uint8Array; format?: 'png' | 'jpeg'; w?: number; h?: number; name?: string } | null> =>
     ipcRenderer.invoke('seisconv:paramSheetPickLogo'),
+  /** Parameters Sheet: pick a saved configuration (.seisparams, <= 5 MB) and return
+   *  its raw text (parsed + sanitised in core by the renderer), or null if cancelled. */
+  paramSheetOpenConfig: (): Promise<{ ok: boolean; error?: string; text?: string; name?: string } | null> =>
+    ipcRenderer.invoke('seisconv:paramSheetOpenConfig'),
   /** Compute an NMO semblance panel for the open file. */
   semblance: (opts: { velMin: number; velMax: number; velStep: number }): Promise<SemblanceData> => ipcRenderer.invoke('seisconv:semblance', opts),
   /** Spectrum Analysis: mean amplitude spectrum over the open file (or the
