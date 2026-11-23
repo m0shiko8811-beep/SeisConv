@@ -204,28 +204,49 @@ async function selfTest(scratch) {
   const endings = (t) => ({ crlf: t.split('\r\n').length - 1, lf: t.split('\n').length - 1 });
   const eol = read('CHANGELOG.md').includes('\r\n') ? '\r\n' : '\n';
 
+  // The fixtures are built from the live CHANGELOG whatever shape it is in: any [Unreleased]
+  // section in it is cut out to make the base, and each variant is inserted in front of the
+  // first released heading. The test version is one patch above the copied package.json, so
+  // the test never depends on which release the repository happens to be at.
+  const live = read('CHANGELOG.md');
+  const releasedHeading = /^## \[\d+\.\d+\.\d+\][^\r\n]*$/m;
+  const firstReleased = releasedHeading.exec(live);
+  if (!firstReleased) throw new Error('CHANGELOG.md has no released "## [X.Y.Z]" heading to build the fixtures on');
+  const unreleasedAt = live.search(/^## \[Unreleased\]/m);
+  const baseChangelog = unreleasedAt >= 0 && unreleasedAt < firstReleased.index
+    ? live.slice(0, unreleasedAt) + live.slice(firstReleased.index)
+    : live;
+  const withUnreleased = (body) => {
+    const at = releasedHeading.exec(baseChangelog).index;
+    return `${baseChangelog.slice(0, at)}## [Unreleased]${eol}${eol}${body}${baseChangelog.slice(at)}`;
+  };
+  const cur = parseSemver(readVersionFacts(dir).packageJson);
+  if (!cur) throw new Error('package.json version is not X.Y.Z');
+  const V = `${cur.major}.${cur.minor}.${cur.patch + 1}`;
+  const D = '2026-09-15';
+
   await check('a CHANGELOG without [Unreleased] is refused', () => {
-    assert(throws(() => editChangelog(read('CHANGELOG.md'), '0.8.5', '2026-09-15'), /no "## \[Unreleased\]" section/), 'did not refuse');
+    assert(!/^## \[Unreleased\]/m.test(baseChangelog), 'the base fixture still has an [Unreleased] heading');
+    assert(throws(() => editChangelog(baseChangelog, V, D), /no "## \[Unreleased\]" section/), 'did not refuse');
     return 'refused';
   });
   await check('an empty [Unreleased] is refused', () => {
-    const withEmpty = read('CHANGELOG.md').replace('## [0.8.4]', `## [Unreleased]${eol}${eol}## [0.8.4]`);
-    assert(throws(() => editChangelog(withEmpty, '0.8.5', '2026-09-15'), /is empty/), 'did not refuse');
+    assert(throws(() => editChangelog(withUnreleased(''), V, D), /is empty/), 'did not refuse');
     return 'refused';
   });
 
   const before = {};
-  await check('edits on copies: every fact says 0.8.5, dates agree, endings kept, only the intended lines changed', async () => {
-    const filled = read('CHANGELOG.md').replace('## [0.8.4]', `## [Unreleased]${eol}${eol}### Added${eol}${eol}- A self-test entry.${eol}${eol}## [0.8.4]`);
+  await check(`edits on copies: every fact says ${V}, dates agree, endings kept, only the intended lines changed`, async () => {
+    const filled = withUnreleased(`### Added${eol}${eol}- A self-test entry.${eol}${eol}`);
     writeFileSync(join(dir, 'CHANGELOG.md'), filled);
     for (const f of VERSION_FILES) before[f] = read(f);
-    await npm(['version', '0.8.5', '--no-git-tag-version', '--ignore-scripts'], { cwd: dir });
-    applyEdits(dir, '0.8.5', '2026-09-15');
+    await npm(['version', V, '--no-git-tag-version', '--ignore-scripts'], { cwd: dir });
+    applyEdits(dir, V, D);
     const f = readVersionFacts(dir);
     for (const [k, v] of Object.entries({ packageJson: f.packageJson, packageLock: f.packageLock, packageLockRoot: f.packageLockRoot, citation: f.citation, privacy: f.privacy, changelog: f.changelog?.version })) {
-      assert(v === '0.8.5', `${k} is ${v}`);
+      assert(v === V, `${k} is ${v}`);
     }
-    assert(f.citationDate === '2026-09-15' && f.changelog.date === '2026-09-15', 'dates do not agree');
+    assert(f.citationDate === D && f.changelog.date === D, 'dates do not agree');
     assert(f.privacyEffectiveDate === readVersionFacts(REPO_ROOT).privacyEffectiveDate, 'PRIVACY.md effective date changed');
     const changed = {};
     for (const file of VERSION_FILES) {
@@ -238,7 +259,8 @@ async function selfTest(scratch) {
     }
     const want = { 'package.json': 1, 'package-lock.json': 2, 'CITATION.cff': 2, 'PRIVACY.md': 1, 'CHANGELOG.md': 1 };
     for (const [file, n] of Object.entries(want)) assert(changed[file] === n, `${file}: ${changed[file]} lines changed, expected ${n}`);
-    assert(/^## \[0\.8\.5\] - 2026-09-15\r?\n\r?\n### Added\r?\n\r?\n- A self-test entry\./m.test(read('CHANGELOG.md')), 'CHANGELOG heading edit is wrong');
+    const heading = new RegExp(`^## \\[${V.replace(/\./g, '\\.')}\\] - ${D}\\r?\\n\\r?\\n### Added\\r?\\n\\r?\\n- A self-test entry\\.`, 'm');
+    assert(heading.test(read('CHANGELOG.md')), 'CHANGELOG heading edit is wrong');
     return Object.entries(changed).map(([k, n]) => `${k} ${n}`).join(', ');
   });
   await check('release-check agreement passes on the edited copies', () => {
