@@ -15,7 +15,8 @@ import * as net from 'node:net';
 import * as dgram from 'node:dgram';
 import { epsgCount, getEpsg, searchEpsgRegistry } from '../core/sps/epsgdb';
 import type { CRS } from '../core/sps/reproject';
-import { projToLatLon, type Projection } from '../core/coords';
+import { projToLatLon, latLonToProj, type Projection } from '../core/coords';
+import { suggestGridCode } from '../core/sheet/coordsniff';
 import { writeGeoTIFF } from '../core/gis/geotiff';
 import { fitZoom, resampleMosaic, zoomForResolution, TILE_SIZE } from '../core/gis/tilemosaic';
 import * as dns from 'node:dns';
@@ -2283,12 +2284,17 @@ async function fetchTile(url: string): Promise<{ rgb: Uint8Array; w: number; h: 
  * Build the basemap RGB band for a grid, by fetching the covering tiles and
  * resampling them into the grid's CRS. Returns null (with a note) when the area
  * cannot be tiled - no CRS to invert, or every tile failed.
+ *
+ * `opts` is optional and additive: `fill` is the grey level (0-255) a missing
+ * tile leaves behind (default white, as before), and `stats` is filled in with
+ * the tile counts so a caller can report them without parsing the notes.
  */
 async function buildBasemapBand(
   grid: { width: number; height: number; originX: number; originY: number; pixelSize: number },
   outCrs: CRS | null,
   sourceKey: string,
   notes: string[],
+  opts?: { fill?: number; stats?: { total: number; failed: number; blank: number } },
 ): Promise<{ rgb: Uint8Array; attribution: string; label: string } | null> {
   const src = BASEMAP_SOURCES[sourceKey] || BASEMAP_SOURCES.satellite;
   if (!outCrs) {
@@ -2357,7 +2363,7 @@ async function buildBasemapBand(
   const mosaicW = (r.maxX - r.minX + 1) * TILE_SIZE;
   const mosaicH = (r.maxY - r.minY + 1) * TILE_SIZE;
   const mosaic = {
-    rgb: new Uint8Array(mosaicW * mosaicH * 3).fill(255),
+    rgb: new Uint8Array(mosaicW * mosaicH * 3).fill(opts?.fill ?? 255),
     width: mosaicW, height: mosaicH, zoom: fit.zoom,
     originPx: r.minX * TILE_SIZE, originPy: r.minY * TILE_SIZE,
   };
@@ -2445,6 +2451,7 @@ async function buildBasemapBand(
     label: 'Resampling basemap into the survey CRS…',
     bytes: doneBytes, bytesTotalEst: doneBytes, bytesPerSec: 0, tilesFailed: failed, downloadDone: true,
   });
+  if (opts?.stats) { opts.stats.total = jobs.length; opts.stats.failed = failed; opts.stats.blank = blank; }
 
   if (failed >= jobs.length) {
     notes.push('Basemap skipped: no map tiles could be downloaded (no internet, or the tile server refused).');
@@ -2467,8 +2474,113 @@ async function buildBasemapBand(
   }
   notes.push(`Basemap: ${src.label}, zoom ${fit.zoom}, ${fetched} tiles${blank ? `, ${blank} with no imagery` : ''}. Attribution is embedded in the file and in ATTRIBUTION.txt.`);
 
-  return { rgb: resampleMosaic(mosaic, grid, toLatLon), attribution: src.attribution, label: src.label };
+  const fillRgb: [number, number, number] | undefined = opts?.fill != null ? [opts.fill, opts.fill, opts.fill] : undefined;
+  return { rgb: resampleMosaic(mosaic, grid, toLatLon, fillRgb), attribution: src.attribution, label: src.label };
 }
+
+// -- Parameters Sheet: point coordinates and the area-map basemap --
+//
+// The renderer holds no projection parameters for the full EPSG registry, so the
+// conversions for the Area sheet (lat/lon of every point, a metric grid for a
+// list typed in degrees) happen here. The map basemap reuses the GeoTIFF basemap
+// path above: same sources, timeouts, retries, tile cap and attribution, and the
+// same "a failed tile leaves a hole, never a failed export" rule.
+
+const PS_MAX_POINTS = 2000;
+/** Picture-size cap for the area map (pixels per side and in total). */
+const PS_MAP_MAX_SIDE = 4096;
+const PS_MAP_MAX_PIXELS = 2400 * 1800;
+/** Paper-section grey left where no tile could be fetched. */
+const PS_MAP_FILL = 236;
+
+function crsProjection(c: CRS): Projection {
+  return {
+    subtype: c.subtype, method: c.method, zone: c.zone, hemi: c.hemi,
+    a: c.a, f: c.f, lon0: c.lon0, lat0: c.lat0, lat1: c.lat1, lat2: c.lat2,
+    latTs: c.latTs, k0: c.k0, FE: c.FE, FN: c.FN, helmert: c.helmert,
+    pmOffset: c.pmOffset, unitFactor: c.unitFactor,
+  };
+}
+const isMetricGrid = (c: CRS) => c.subtype !== 'GEO' && (!c.unitFactor || Math.abs(c.unitFactor - 1) < 1e-12);
+
+ipcMain.handle('seisconv:paramSheetCoords', async (_e, args: { code?: string; points?: unknown; gridCode?: string }) => {
+  const src = resolveTargetCRS(typeof args?.code === 'string' ? args.code.slice(0, 20) : '');
+  if (!src.ok) return { ok: false, error: src.error };
+  if (!src.crs) return { ok: false, error: 'No coordinate system chosen.' };
+  const crs = src.crs;
+  const fin = (v: unknown): v is number => typeof v === 'number' && Number.isFinite(v);
+  const raw = Array.isArray(args?.points) ? (args!.points as unknown[]).slice(0, PS_MAX_POINTS) : [];
+  const pts: ([number, number] | null)[] = raw.map((p) => (Array.isArray(p) && fin(p[0]) && fin(p[1]) ? [p[0], p[1]] : null));
+  const okLL = (ll: { lat: number; lon: number }) => fin(ll.lat) && fin(ll.lon) && Math.abs(ll.lat) <= 90 && Math.abs(ll.lon) <= 180;
+  const proj = crs.subtype === 'GEO' ? null : crsProjection(crs);
+  const latlon: ([number, number] | null)[] = pts.map((p) => {
+    if (!p) return null;
+    let ll: { lat: number; lon: number };
+    try { ll = proj ? projToLatLon(p[0], p[1], proj, 0) : { lat: p[1], lon: p[0] }; } catch { return null; }
+    return okLL(ll) ? [ll.lat, ll.lon] : null;
+  });
+  // Metric grid for E / N and the map: the list's own CRS when it is in metres,
+  // otherwise ITM inside Israel / the UTM zone (or the caller's choice).
+  let grid = crs;
+  if (!isMetricGrid(crs)) {
+    let code = typeof args?.gridCode === 'string' ? args.gridCode.slice(0, 20) : '';
+    if (!code) {
+      const good = latlon.filter((x): x is [number, number] => !!x);
+      if (!good.length) return { ok: false, error: 'None of the points could be placed on the globe.' };
+      const lat = good.reduce((s, x) => s + x[0], 0) / good.length;
+      const lon = good.reduce((s, x) => s + x[1], 0) / good.length;
+      code = suggestGridCode(lat, lon);
+    }
+    const g = resolveTargetCRS(code);
+    if (!g.ok || !g.crs || !isMetricGrid(g.crs)) return { ok: false, error: `No metric grid for the map (${code}).` };
+    grid = g.crs;
+  }
+  const gproj = crsProjection(grid);
+  const en: ([number, number] | null)[] = grid === crs
+    ? pts
+    : latlon.map((ll) => {
+      if (!ll) return null;
+      try { const r = latLonToProj(ll[0], ll[1], gproj, 0); return fin(r.E) && fin(r.N) ? [r.E, r.N] as [number, number] : null; } catch { return null; }
+    });
+  return { ok: true, crsName: crs.name, geographic: crs.subtype === 'GEO', gridCode: grid.code, gridName: grid.name, latlon, en };
+});
+
+ipcMain.handle('seisconv:paramSheetBasemap', async (_e, args: {
+  code?: string;
+  grid?: { width?: number; height?: number; originX?: number; originY?: number; pixelSize?: number };
+  source?: string;
+}) => {
+  const target = resolveTargetCRS(typeof args?.code === 'string' ? args.code.slice(0, 20) : '');
+  if (!target.ok) return { ok: false, error: target.error };
+  if (!target.crs) return { ok: false, error: 'No coordinate system for the map.' };
+  const source = typeof args?.source === 'string' && Object.prototype.hasOwnProperty.call(BASEMAP_SOURCES, args.source) ? args.source : '';
+  if (!source) return { ok: false, error: 'Unknown basemap.' };
+  const g = args?.grid;
+  const w = Number(g?.width), h = Number(g?.height);
+  const ox = Number(g?.originX), oy = Number(g?.originY), px = Number(g?.pixelSize);
+  if (!Number.isInteger(w) || !Number.isInteger(h) || w < 16 || h < 16 || w > PS_MAP_MAX_SIDE || h > PS_MAP_MAX_SIDE || w * h > PS_MAP_MAX_PIXELS) {
+    return { ok: false, error: 'Map size out of range.' };
+  }
+  if (![ox, oy, px].every(Number.isFinite) || px <= 0) return { ok: false, error: 'Map frame is not valid.' };
+  const notes: string[] = [];
+  const stats = { total: 0, failed: 0, blank: 0 };
+  let band: { rgb: Uint8Array; attribution: string; label: string } | null = null;
+  try {
+    band = await buildBasemapBand({ width: w, height: h, originX: ox, originY: oy, pixelSize: px }, target.crs, source, notes, { fill: PS_MAP_FILL, stats });
+  } catch (e) {
+    notes.push(`Basemap failed: ${e instanceof Error ? e.message : String(e)}`);
+  }
+  return {
+    ok: true,
+    rgb: band?.rgb ?? null,
+    attribution: band?.attribution ?? '',
+    label: band?.label ?? BASEMAP_SOURCES[source].label,
+    tilesTotal: stats.total,
+    tilesFailed: stats.failed,
+    tilesBlank: stats.blank,
+    notes,
+  };
+});
 
 // SPS -> GeoTIFF rasters. Always a ZIP: the wizard can produce several layers
 // over one extent, and they are only useful as a set. The target CRS is resolved
@@ -2729,12 +2841,15 @@ ipcMain.handle('seisconv:openLogJson', async () => {
 // and this handler does nothing but read bytes under the same 64 MB bound as the
 // JSON readers. The renderer cannot do this itself: its CSP has no connect-src and
 // a sandboxed <input type="file"> yields no usable path.
-ipcMain.handle('seisconv:openPlanText', async () => {
+ipcMain.handle('seisconv:openPlanText', async (_e, opts?: { coords?: boolean }) => {
   if (!win) return null;
+  // `coords` (Parameters Sheet) offers KML too; the SPS Creation importer does not read it.
   const res = await dialog.showOpenDialog(win, {
     properties: ['openFile'],
     filters: [
-      { name: 'Survey plan', extensions: ['csv', 'txt', 'tsv', 'geojson', 'json'] },
+      opts?.coords === true
+        ? { name: 'Coordinate list', extensions: ['csv', 'txt', 'tsv', 'kml', 'geojson', 'json'] }
+        : { name: 'Survey plan', extensions: ['csv', 'txt', 'tsv', 'geojson', 'json'] },
       { name: 'All files', extensions: ['*'] },
     ],
   });

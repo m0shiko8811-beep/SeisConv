@@ -1136,6 +1136,19 @@ const api = {
     total: number;
     rows: { code: string; name: string; method: string; units: string; deprecated: boolean; supported: boolean; reason?: string }[];
   }> => ipcRenderer.invoke('seisconv:epsgSearch', args),
+  /** Parameters Sheet: latitude / longitude of every point of a coordinate list,
+   *  plus Easting / Northing in a metric grid (the list's own CRS when it is in
+   *  metres, else ITM / the UTM zone, or `gridCode`). Unplaceable points are null. */
+  paramSheetCoords: (args: { code: string; points: [number, number][]; gridCode?: string }): Promise<{
+    ok: boolean; error?: string; crsName?: string; geographic?: boolean; gridCode?: string; gridName?: string;
+    latlon?: ([number, number] | null)[]; en?: ([number, number] | null)[];
+  }> => ipcRenderer.invoke('seisconv:paramSheetCoords', args),
+  /** Parameters Sheet: basemap RGB for the area-map frame (same tile path as the
+   *  GeoTIFF export). Missing tiles are left paper-section grey; never fails on tiles. */
+  paramSheetBasemap: (args: { code: string; grid: { width: number; height: number; originX: number; originY: number; pixelSize: number }; source: string }): Promise<{
+    ok: boolean; error?: string; rgb?: Uint8Array | null; attribution?: string; label?: string;
+    tilesTotal?: number; tilesFailed?: number; tilesBlank?: number; notes?: string[];
+  }> => ipcRenderer.invoke('seisconv:paramSheetBasemap', args),
   /** Compute an NMO semblance panel for the open file. */
   semblance: (opts: { velMin: number; velMax: number; velStep: number }): Promise<SemblanceData> => ipcRenderer.invoke('seisconv:semblance', opts),
   /** Spectrum Analysis: mean amplitude spectrum over the open file (or the
@@ -1184,7 +1197,7 @@ const api = {
    *  file's RAW text plus its base name (or null if cancelled). Deliberately
    *  unparsed - the SPS Creation import wizard shows the user the real columns and
    *  lets them map those columns before anything is interpreted. Bounded at 64 MB. */
-  openPlanText: (): Promise<{ name: string; text: string } | null> => ipcRenderer.invoke('seisconv:openPlanText'),
+  openPlanText: (opts?: { coords?: boolean }): Promise<{ name: string; text: string } | null> => ipcRenderer.invoke('seisconv:openPlanText', opts),
   /** Observer Log RELOAD: open a .json picker, parse it, return {meta,columns,rows} (or null). */
   openLogJson: (): Promise<LogJson | null> => ipcRenderer.invoke('seisconv:openLogJson'),
   /** Observer Log TEMPLATE import: open a .json picker, parse it, return the RAW
