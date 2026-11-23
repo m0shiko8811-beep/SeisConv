@@ -187,8 +187,8 @@ import { JOB_PRESETS, presetFor } from '../sheet/presets';
 import { emptySheet, applyPreset, deriveSheet, pointsAlong, validateStep, crossChecks, allHints, isIsoDate, PS_STEPS, type ParamSheet } from '../sheet/model';
 import { ringArea, ringPerimeter, cleanRing, isClosed, pathLength, bbox, selfIntersects, convexHull } from '../gis/polygon';
 import { sniffCoords, parseCoordField, suggestGridCode, utmCodeFor, SNIFF_MAX_POINTS } from '../sheet/coordsniff';
-import { loadDraft, hasPollutionKey, PS_DRAFT_MAX_CHARS } from '../sheet/draft';
-import { buildSheetWorkbook, excelDateSerial } from '../sheet/layout';
+import { sanitizeLogo, logoBytes, fitInside, fitToHeight, LOGO_MAX_BYTES } from '../sheet/logo';
+import { buildSheetWorkbook, excelDateSerial, titleLogo } from '../sheet/layout';
 import { fitMapGrid, toPx, niceStep, scaleBarMetres, ticks, fmtDistance } from '../sheet/mapframe';
 import { coordLines, lineMismatch, linesFromCoords, roundToInterval } from '../sheet/reconcile';
 import type { ParsedFile, SPSData, SPSPoint, Trace, TraceGeom } from '../index';
@@ -8206,39 +8206,76 @@ async function paramSheetTests(): Promise<void> {
     assert.equal(d.files, d.shots);
   });
 
-  // -- draft --
-  test('sheet draft: a saved model round-trips through loadDraft', () => {
-    const m = vib();
-    m.coords.points = [{ id: 'a', x: 200000, y: 600000 }];
-    m.coords.crsCode = 'EPSG:2039';
-    m.coords.confirmed = true;
-    const back = loadDraft(JSON.stringify(m));
-    assert.deepEqual(back, JSON.parse(JSON.stringify(m)));
-  });
-  test('sheet draft: pollution keys refused, junk clamped, unknown fields dropped', () => {
-    assert.equal(loadDraft('{"v":1,"job":{"__proto__":{"polluted":1}}}'), null);
-    assert.equal(loadDraft('{"v":1,"geom":{"lines":[{"constructor":{"x":1}}]}}'), null);
-    assert.equal(loadDraft('{"v":1,"prototype":{}}'), null);
-    assert.equal(loadDraft('{"v":2}'), null);
-    assert.equal(loadDraft('not json'), null);
-    assert.equal(loadDraft('x'.repeat(PS_DRAFT_MAX_CHARS + 1)), null);
+  // -- logo (no drafts are stored any more: the sheet starts empty on every launch) --
+  const PNG_LOGO = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0, 0, 0, 13, 0x49, 0x48, 0x44, 0x52, 0, 0, 0, 2, 0, 0, 0, 1, 8, 6, 0, 0, 0, 1, 2]);
+  const JPG_LOGO = new Uint8Array([0xff, 0xd8, 0xff, 0xe0, 0, 16, 0x4a, 0x46, 0x49, 0x46, 0, 1, 1, 0, 0xff, 0xd9]);
+  test('sheet logo: a valid PNG / JPEG logo passes, junk is dropped', () => {
+    const ok = sanitizeLogo({ data: bytesToBase64(PNG_LOGO), format: 'png', w: 120, h: 60 });
+    assert.ok(ok && ok.format === 'png' && ok.w === 120);
+    assert.deepEqual([...logoBytes(ok!)], [...PNG_LOGO]);
+    assert.ok(sanitizeLogo({ data: bytesToBase64(JPG_LOGO), format: 'jpeg', w: 600, h: 300 }));
+    const bad: unknown[] = [
+      null, 'x', [], 7,
+      { data: bytesToBase64(PNG_LOGO), format: 'svg', w: 10, h: 10 },          // wrong type
+      { data: bytesToBase64(PNG_LOGO), format: 'jpeg', w: 10, h: 10 },         // signature disagrees
+      { data: bytesToBase64(JPG_LOGO), format: 'png', w: 10, h: 10 },
+      { data: 'not base64!!', format: 'png', w: 10, h: 10 },                   // junk base64
+      { data: 'iVBORw0KGgo', format: 'png', w: 10, h: 10 },                    // length not a multiple of 4
+      { data: bytesToBase64(PNG_LOGO), format: 'png', w: 601, h: 10 },         // larger than 600 x 300
+      { data: bytesToBase64(PNG_LOGO), format: 'png', w: 10.5, h: 10 },
+      { data: bytesToBase64(PNG_LOGO), format: 'png', w: 0, h: 10 },
+      { data: 'A'.repeat(Math.ceil(LOGO_MAX_BYTES / 3) * 4 + 4), format: 'png', w: 10, h: 10 }, // oversized
+      JSON.parse('{"__proto__":{"polluted":1},"data":"x","format":"png","w":1,"h":1}'),
+    ];
+    for (const b of bad) assert.equal(sanitizeLogo(b), null, `accepted ${JSON.stringify(b).slice(0, 60)}`);
     assert.equal(({} as Record<string, unknown>).polluted, undefined);
-    const lines = Array.from({ length: 500 }, (_, i) => ({ name: `L${i}`, lengthM: 10 }));
-    const d = loadDraft(JSON.stringify({ v: 1, evil: 1, job: { jobType: 7, notes: 'n'.repeat(5000), startDate: '2026-13-40', geometry: 'cube' },
-      geom: { lines, rxIntervalM: 'ten', activeChannels: 1e12 }, coords: { crsCode: 'javascript:x', basemap: 'evil', points: [{ x: 'a', y: 1 }, { id: 'ok', x: 1, y: 2 }] } }));
-    assert.ok(d);
-    assert.equal(d!.job.jobType, '');
-    assert.equal(d!.job.notes.length, 1000);
-    assert.equal(d!.job.startDate, '');
-    assert.equal(d!.job.geometry, '2D');
-    assert.equal(d!.geom.lines.length, 200);
-    assert.equal(d!.geom.rxIntervalM, null);
-    assert.equal(d!.geom.activeChannels, 1e7);
-    assert.equal(d!.coords.crsCode, '');
-    assert.equal(d!.coords.basemap, 'satellite');
-    assert.equal(d!.coords.points.length, 1);
-    assert.ok(!('evil' in (d as unknown as Record<string, unknown>)));
-    assert.equal(hasPollutionKey(JSON.parse('{"a":[{"b":{"__proto__":1}}]}')), true);
+    assert.deepEqual(fitInside(1200, 300, 600, 300), { w: 600, h: 150 });
+    assert.deepEqual(fitInside(100, 50, 600, 300), { w: 100, h: 50 });
+    assert.equal(fitInside(NaN, 1, 1, 1), null);
+    assert.deepEqual(fitToHeight(200, 100, 37, 220), { w: 74, h: 37 });
+    assert.deepEqual(fitToHeight(1000, 100, 37, 220), { w: 220, h: 22 });
+    assert.equal(emptySheet().logo, null);
+  });
+  await atest('styled xlsx: a logo and a map on one sheet share one drawing (png + jpeg together)', async () => {
+    const bytes = await buildStyledXlsx([{
+      name: 'P', rows: [['x']],
+      image: { data: JPG_LOGO, format: 'jpeg', widthPx: 1600, heightPx: 1130, col: 0, row: 4, name: 'Map' },
+      images: [{ data: PNG_LOGO, format: 'png', widthPx: 2, heightPx: 1, displayWidthPx: 74, col: 8, row: 0, offsetXPx: 10, offsetYPx: 3, name: 'Logo' }],
+    }], new JSZip());
+    const zip = await JSZip.loadAsync(bytes);
+    const names = Object.keys(zip.files);
+    assert.ok(names.includes('xl/media/image1.jpeg') && names.includes('xl/media/image2.png'));
+    assert.ok(!names.includes('xl/drawings/drawing2.xml'), 'one drawing per sheet');
+    const ct = await zip.file('[Content_Types].xml')!.async('string');
+    assert.ok(/Extension="png" ContentType="image\/png"/.test(ct) && /Extension="jpeg" ContentType="image\/jpeg"/.test(ct));
+    const dr = await zip.file('xl/drawings/drawing1.xml')!.async('string');
+    assert.equal((dr.match(/<xdr:oneCellAnchor>/g) || []).length, 2);
+    assert.ok(/cNvPr id="2" name="Map"/.test(dr) && /cNvPr id="3" name="Logo"/.test(dr), 'unique shape ids');
+    assert.ok(/r:embed="rId1"/.test(dr) && /r:embed="rId2"/.test(dr));
+    assert.ok(/<xdr:colOff>95250<\/xdr:colOff>/.test(dr) && /<xdr:rowOff>28575<\/xdr:rowOff>/.test(dr));
+    const rels = await zip.file('xl/drawings/_rels/drawing1.xml.rels')!.async('string');
+    assert.ok(/Id="rId1"[^>]*image1\.jpeg/.test(rels) && /Id="rId2"[^>]*image2\.png/.test(rels));
+  });
+  await atest('sheet layout: a logo sits in the Parameters title band; no logo leaves the sheet as before', async () => {
+    const logoMeta = { version: 't', preparedDate: '2026-11-23', generatedAt: '' };
+    const m = vib();
+    assert.deepEqual(titleLogo(m), []);
+    const plain = await buildStyledXlsx(buildSheetWorkbook(m, null, null, logoMeta), new JSZip());
+    assert.ok(!(await JSZip.loadAsync(plain)).file('xl/drawings/drawing1.xml'));
+    m.logo = { data: bytesToBase64(PNG_LOGO), format: 'png', w: 200, h: 100 };
+    const [lg] = titleLogo(m);
+    assert.equal(lg.displayWidthPx, 74);                    // 37 px band height, aspect 2:1
+    assert.equal(lg.row, 0);
+    // Columns I, J, K are 173, 173, 47 px: the logo (74 px) ends 6 px inside K, so its
+    // left edge is in J at 393 - 80 - 173 = 140 px, an offset inside its anchor cell.
+    assert.equal(lg.col, 9);
+    assert.equal(lg.offsetXPx, 140);
+    const zip = await JSZip.loadAsync(await buildStyledXlsx(buildSheetWorkbook(m, null, null, logoMeta), new JSZip()));
+    assert.ok(zip.file('xl/media/image1.png'));
+    assert.ok(/drawing1\.xml/.test(await zip.file('xl/worksheets/_rels/sheet1.xml.rels')!.async('string')));
+    // A logo that is not one is never embedded.
+    m.logo = { data: 'junk', format: 'png', w: 1, h: 1 };
+    assert.deepEqual(titleLogo(m), []);
   });
 
   // -- map frame --

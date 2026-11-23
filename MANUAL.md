@@ -712,7 +712,8 @@ Plan one seismic job step by step and save a single Excel workbook for the field
 - **Coordinates** - paste a list or **Load file...** (TXT, CSV, KML, GeoJSON). The delimiter, header, columns, degrees vs degrees-minutes-seconds vs metres, and a proposed coordinate system are detected and SHOWN; nothing is applied until you press **Confirm**. When the numbers cannot tell (for example which UTM zone, or which column is latitude), you are asked. The CRS search box corrects the guess. **No area yet** skips the step.
 - **Map basemap** - Satellite, Streets, Light or Dark grey, or **No basemap** (works offline).
 - **Review and export** - everything on one page with an **Edit** link per step, the area map preview (**Preview with basemap** downloads the tiles), and **Save parameter sheet (XLSX)...**.
-- **New sheet** - starts over (asks first). The tab’s draft is otherwise kept automatically between sessions.
+- **Logo (optional)** (Job step) - **Choose logo file...** picks a PNG or JPEG (up to 5 MB); it is shown at the right of the sheet title and at the top right of the area map. **Remove logo** takes it out. There is no default logo.
+- **New sheet** - starts over (asks first).
 
 ### What is derived (nominal, planned)
 
@@ -750,6 +751,6 @@ Plan one seismic job step by step and save a single Excel workbook for the field
 - The map tiles come from the same servers as the SPS basemap, and only when the sheet is saved or you ask for a preview. Offline, or when tiles fail, the workbook is still saved: the map is drawn on grey with a visible note, and its coordinates are exact.
 - The basemap attribution is burned into the map picture and repeated on the About sheet.
 - A list in degrees gets its Easting / Northing in ITM inside Israel, otherwise in the UTM zone of the points.
-- The Client field remembers names you typed, on this computer only.
+- Nothing on this tab is saved: every launch starts with an empty sheet. Within one session, switching to another tab and back keeps what you typed; closing the app clears it, logo included. Save the XLSX to keep the sheet.
 
 ---

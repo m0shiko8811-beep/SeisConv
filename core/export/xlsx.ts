@@ -198,6 +198,9 @@ export interface StyledImage {
   heightPx: number;
   /** Displayed width in screen pixels (96 dpi); height follows the aspect. */
   displayWidthPx?: number;
+  /** Offset of the picture inside its anchor cell, screen pixels. */
+  offsetXPx?: number;
+  offsetYPx?: number;
   /** 0-based anchor cell. */
   col: number;
   row: number;
@@ -217,6 +220,8 @@ export interface StyledSheet {
   /** Row heights in points, keyed by 0-based row index. */
   rowHeights?: Record<number, number>;
   image?: StyledImage;
+  /** Further pictures on the same sheet (one drawing part holds them all). */
+  images?: StyledImage[];
   landscape?: boolean;
   /** Fit the printout to one page wide. */
   fitWidth?: boolean;
@@ -372,26 +377,36 @@ function styledSheetXml(t: StyledSheet, book: StyleBook, first: boolean, drawing
 /** EMU per screen pixel at 96 dpi. */
 const EMU_PER_PX = 9525;
 
-function drawingXml(img: StyledImage): string {
+const PX_EMU = (px: number) => Math.round(Math.max(0, Math.min(10000, Number.isFinite(px) ? px : 0)) * EMU_PER_PX);
+
+/** One <xdr:oneCellAnchor> picture; `n` is its 1-based index in the drawing
+ *  (shape id n + 1, relationship rId<n>). */
+function anchorXml(img: StyledImage, n: number): string {
   const w = Math.max(1, Math.round(img.widthPx)), h = Math.max(1, Math.round(img.heightPx));
   const dw = img.displayWidthPx && img.displayWidthPx > 0 ? img.displayWidthPx : w;
   const cx = Math.round(dw * EMU_PER_PX);
   const cy = Math.round(((dw * h) / w) * EMU_PER_PX);
   const col = Math.max(0, Math.floor(img.col)), row = Math.max(0, Math.floor(img.row));
   return (
-    '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>' +
-    '<xdr:wsDr xmlns:xdr="http://schemas.openxmlformats.org/drawingml/2006/spreadsheetDrawing" ' +
-    'xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main">' +
     '<xdr:oneCellAnchor>' +
-    `<xdr:from><xdr:col>${col}</xdr:col><xdr:colOff>0</xdr:colOff><xdr:row>${row}</xdr:row><xdr:rowOff>0</xdr:rowOff></xdr:from>` +
+    `<xdr:from><xdr:col>${col}</xdr:col><xdr:colOff>${PX_EMU(img.offsetXPx ?? 0)}</xdr:colOff><xdr:row>${row}</xdr:row><xdr:rowOff>${PX_EMU(img.offsetYPx ?? 0)}</xdr:rowOff></xdr:from>` +
     `<xdr:ext cx="${cx}" cy="${cy}"/>` +
     '<xdr:pic>' +
-    `<xdr:nvPicPr><xdr:cNvPr id="2" name="${xmlEscape(xlsxCleanText(img.name || 'Picture 1').slice(0, 60))}"/><xdr:cNvPicPr><a:picLocks noChangeAspect="1"/></xdr:cNvPicPr></xdr:nvPicPr>` +
-    '<xdr:blipFill><a:blip xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" r:embed="rId1"/><a:stretch><a:fillRect/></a:stretch></xdr:blipFill>' +
+    `<xdr:nvPicPr><xdr:cNvPr id="${n + 1}" name="${xmlEscape(xlsxCleanText(img.name || `Picture ${n}`).slice(0, 60))}"/><xdr:cNvPicPr><a:picLocks noChangeAspect="1"/></xdr:cNvPicPr></xdr:nvPicPr>` +
+    `<xdr:blipFill><a:blip xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" r:embed="rId${n}"/><a:stretch><a:fillRect/></a:stretch></xdr:blipFill>` +
     `<xdr:spPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="${cx}" cy="${cy}"/></a:xfrm><a:prstGeom prst="rect"><a:avLst/></a:prstGeom></xdr:spPr>` +
     '</xdr:pic>' +
     '<xdr:clientData/>' +
-    '</xdr:oneCellAnchor>' +
+    '</xdr:oneCellAnchor>'
+  );
+}
+
+function drawingXml(imgs: StyledImage[]): string {
+  return (
+    '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>' +
+    '<xdr:wsDr xmlns:xdr="http://schemas.openxmlformats.org/drawingml/2006/spreadsheetDrawing" ' +
+    'xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main">' +
+    imgs.map((im, k) => anchorXml(im, k + 1)).join('') +
     '</xdr:wsDr>'
   );
 }
@@ -442,22 +457,29 @@ export async function buildStyledXlsx(sheetsIn: StyledSheet[], zip: ZipLike): Pr
     return n;
   });
   let drawings = 0;
+  let media = 0;
   let hasPng = false, hasJpeg = false;
   const sheetXmls: string[] = [];
+  const valid = (im: StyledImage | undefined): im is StyledImage =>
+    !!im && im.data instanceof Uint8Array && (im.format === 'jpeg' ? isJpeg(im.data) : isPng(im.data));
   sheets.forEach((s, i) => {
-    const im = s.image;
-    const ext = im?.format === 'jpeg' ? 'jpeg' : 'png';
-    const img = im && im.data instanceof Uint8Array && (ext === 'jpeg' ? isJpeg(im.data) : isPng(im.data)) ? im : null;
+    // Every valid picture of the sheet goes into ONE drawing part; each gets its
+    // own media file (numbered across the workbook), shape id and rId.
+    const imgs = [s.image, ...(s.images ?? [])].filter(valid).slice(0, 20);
     let rid: string | null = null;
-    if (img) {
+    if (imgs.length) {
       drawings++;
       rid = 'rId1';
-      if (ext === 'jpeg') hasJpeg = true; else hasPng = true;
-      zip.file(`xl/media/image${drawings}.${ext}`, img.data);
-      zip.file(`xl/drawings/drawing${drawings}.xml`, drawingXml(img));
-      zip.file(`xl/drawings/_rels/drawing${drawings}.xml.rels`, relsXml([
-        `<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/image" Target="../media/image${drawings}.${ext}"/>`,
-      ]));
+      const picRels: string[] = [];
+      imgs.forEach((img, k) => {
+        const ext = img.format === 'jpeg' ? 'jpeg' : 'png';
+        if (ext === 'jpeg') hasJpeg = true; else hasPng = true;
+        media++;
+        zip.file(`xl/media/image${media}.${ext}`, img.data);
+        picRels.push(`<Relationship Id="rId${k + 1}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/image" Target="../media/image${media}.${ext}"/>`);
+      });
+      zip.file(`xl/drawings/drawing${drawings}.xml`, drawingXml(imgs));
+      zip.file(`xl/drawings/_rels/drawing${drawings}.xml.rels`, relsXml(picRels));
       zip.file(`xl/worksheets/_rels/sheet${i + 1}.xml.rels`, relsXml([
         `<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/drawing" Target="../drawings/drawing${drawings}.xml"/>`,
       ]));

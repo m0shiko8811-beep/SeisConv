@@ -24,7 +24,7 @@
 import { _electron as electron } from 'playwright';
 import { basename, join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync } from 'node:fs';
+import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import {
   sleep, mockDialogs, gotoTab, openFile,
   APP_DIR, SHOTS, SEGY, sample, qaPath, qaPaths,
@@ -578,17 +578,21 @@ const globalPageErrors = [];
     return { assertFail: fails.length ? fails.join('; ') : null };
   }, 'tab-conv-batch');
 
-  // -- 9) PARAMETERS SHEET - fill a known job, save the XLSX OFFLINE, read it back --
+  // -- 9) PARAMETERS SHEET - fill a known job + logo, save the XLSX OFFLINE, read it
+  //       back, then RELAUNCH the app and prove the sheet starts empty --
   // Every tile fetch in MAIN is made to fail (globalThis.fetch replaced for the
   // step, restored after), so this proves the "never fail the export because of
   // tiles" path: the workbook must still carry the Map sheet with a grey map and
-  // the offline note. The save dialog answers a temp path; the file is unzipped
-  // and checked cell by cell, then removed. Starts and ends with New sheet so a
-  // draft from an earlier run cannot change what is checked.
+  // the offline note. The logo is GENERATED here (a 120 x 60 PNG drawn with
+  // nativeImage in main), so no binary is committed. The save dialog answers a temp
+  // path; the file is unzipped and checked cell by cell, then removed. Last, the
+  // app is closed and reopened on the same profile: nothing typed (fields, lines,
+  // coordinates, logo) may survive a restart (Moshe, 23.11.2026).
   await step('tab-paramsheet', 'panel-paramsheet', '9-paramsheet.png', async (notes) => {
     const fails = [];
     const root = mkdtempSync(join(tmpdir(), 'seisconv_qa_ps_'));
     const out = join(root, 'qa_parameter_sheet.xlsx');
+    const logoPath = join(root, 'qa_logo.png');
     const newSheet = async () => {
       await win.click('#psNewBtn');
       await win.waitForSelector('#confirmBack.open', { timeout: 5000 }).catch(() => {});
@@ -596,10 +600,16 @@ const globalPageErrors = [];
       await sleep(250);
     };
     const fill = async (id, v) => { await win.fill('#' + id, String(v)); await win.locator('#' + id).dispatchEvent('change'); };
-    // `npm run qa` runs on the shared default profile: keep whatever draft the
-    // user has there and put it back afterwards (past the 400 ms save debounce).
-    const savedDraft = await win.evaluate(() => localStorage.getItem('seisconv.paramsheet'));
     try {
+      // A small two-colour logo, encoded by Electron itself.
+      await app.evaluate(async ({ nativeImage }) => {
+        const w = 120, h = 60, bgra = Buffer.alloc(w * h * 4);
+        for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
+          const o = (y * w + x) * 4, left = x < w / 2;
+          bgra[o] = left ? 0x99 : 0x2a; bgra[o + 1] = left ? 0x4e : 0xa0; bgra[o + 2] = left ? 0x1f : 0xe6; bgra[o + 3] = 255;
+        }
+        return nativeImage.createFromBitmap(bgra, { width: w, height: h }).toPNG().toString('base64');
+      }).then((b64) => writeFileSync(logoPath, Buffer.from(b64, 'base64')));
       await app.evaluate(async ({ dialog }, p) => { dialog.showSaveDialog = async () => ({ canceled: false, filePath: p }); }, out);
       await app.evaluate(() => {
         globalThis.__qaRealFetch = globalThis.fetch;
@@ -618,6 +628,11 @@ const globalPageErrors = [];
       await fill('ps-job-jobType', 'Vibroseis 2D Reflection');
       await fill('ps-job-prospect', 'QA block');
       await fill('ps-job-startDate', '2027-01-05');
+      // The logo, through the real button and the real main-process IPC.
+      await mockDialogs(app, [logoPath]);
+      await app.evaluate(async ({ dialog }, p) => { dialog.showSaveDialog = async () => ({ canceled: false, filePath: p }); }, out);
+      await win.click('#psLogoPick');
+      await win.waitForSelector('#psLogoThumb', { state: 'visible', timeout: 10000 }).catch(() => fails.push('the logo thumbnail did not appear'));
       await win.click('#psNextBtn');
       // Geometry: three 12 km lines -> 1803 shots, nominal fold 120.
       await fill('ps-geom-lineLengthM', 12000);
@@ -638,6 +653,7 @@ const globalPageErrors = [];
       await win.click('#psNextBtn');
       await win.waitForFunction(() => /Preview/.test(document.getElementById('psMapMsg')?.textContent || ''), null, { timeout: 15000 })
         .catch(() => fails.push('the review map preview did not draw'));
+      if (!(await win.isVisible('#psReviewLogo').catch(() => false))) fails.push('Review does not show the logo');
       const map = await canvasBlank(win, 'psMapCanvas', { r: 0xec, g: 0xec, b: 0xec });
       if (map.blank) fails.push('review map canvas is blank: ' + map.reason);
       await win.click('#psExportBtn');
@@ -657,25 +673,67 @@ const globalPageErrors = [];
         for (const want of ['Vibroseis 2D Reflection', '<v>480</v>', '<v>1803</v>', '<v>120</v>', '<v>46392</v>', 'Lines do not match the coordinates']) {
           if (!s1.includes(want)) fails.push(`Parameters sheet lacks ${want}`);
         }
+        // The logo is the Parameters sheet's picture (title band); the map is the Map sheet's.
+        const d1 = await part('xl/drawings/drawing1.xml');
+        if (!/name="Logo"/.test(d1) || !/<xdr:row>0<\/xdr:row>/.test(d1)) fails.push('no logo drawing in the Parameters title band');
+        if (!/drawing1\.xml/.test(await part('xl/worksheets/_rels/sheet1.xml.rels'))) fails.push('the Parameters sheet does not reference the logo drawing');
+        const logo = zip.file('xl/media/image1.png') ? await zip.file('xl/media/image1.png').async('uint8array') : new Uint8Array(0);
+        if (logo.length < 50 || logo[0] !== 0x89) fails.push(`embedded logo missing (${logo.length} bytes)`);
         const s2 = await part('xl/worksheets/sheet2.xml');
         if (!s2.includes('<v>212000</v>') || !s2.includes('L2-E')) fails.push('Area sheet lacks the points');
         const s3 = await part('xl/worksheets/sheet3.xml');
         if (!/Basemap not available \(offline\)/.test(s3)) fails.push('Map sheet lacks the offline note');
-        const png = zip.file('xl/media/image1.png') ? await zip.file('xl/media/image1.png').async('uint8array') : new Uint8Array(0);
+        const png = zip.file('xl/media/image2.png') ? await zip.file('xl/media/image2.png').async('uint8array') : new Uint8Array(0);
         if (png.length < 10000 || png[0] !== 0x89 || png[1] !== 0x50) fails.push(`embedded map PNG missing or tiny (${png.length} bytes)`);
-        notes.push(`xlsx ${readFileSync(out).length} bytes, map png ${png.length} bytes`);
+        notes.push(`xlsx ${readFileSync(out).length} bytes, logo ${logo.length} bytes, map png ${png.length} bytes`);
       }
       await win.locator('#psMapCanvas').scrollIntoViewIfNeeded().catch(() => {});
       await win.screenshot({ path: join(SHOTS, '9b-paramsheet-map.png') }).catch(() => {});
-      await newSheet();
+      // Within the session, another tab and back keeps everything.
+      await gotoTab(win, 'tab-conv', 'panel-conv');
+      await gotoTab(win, 'tab-paramsheet', 'panel-paramsheet');
+      await win.click('#psStep-job');
+      const kept = await win.inputValue('#ps-job-jobType').catch(() => '');
+      if (kept !== 'Vibroseis 2D Reflection' || !(await win.isVisible('#psLogoThumb').catch(() => false))) fails.push('switching tabs lost the sheet within the session');
     } finally {
       await app.evaluate(() => { if (globalThis.__qaRealFetch) { globalThis.fetch = globalThis.__qaRealFetch; delete globalThis.__qaRealFetch; } }).catch(() => {});
       await mockDialogs(app, []).catch(() => {});
-      await sleep(700);
-      await win.evaluate((d) => {
-        if (d == null) localStorage.removeItem('seisconv.paramsheet');
-        else localStorage.setItem('seisconv.paramsheet', d);
-      }, savedDraft).catch(() => {});
+    }
+
+    // Relaunch on the same profile: the sheet must start completely empty.
+    try {
+      await app.close();
+      const udd = process.env.SEISCONV_QA_USER_DATA_DIR;
+      app = await electron.launch({ args: udd ? ['.', `--user-data-dir=${udd}`] : ['.'], cwd: APP_DIR, env: launchEnv() });
+      win = await app.firstWindow();
+      win.on('console', (m) => { if (m.type() === 'error') globalConsole.push(m.text()); });
+      win.on('pageerror', (e) => globalPageErrors.push(e.message || String(e)));
+      await win.waitForLoadState('domcontentloaded');
+      await sleep(600);
+      await gotoTab(win, 'tab-paramsheet', 'panel-paramsheet');
+      const after = await win.evaluate(() => ({
+        inputs: [...document.querySelectorAll('#psForm input:not([type=checkbox]), #psForm textarea')]
+          .filter((e) => e.value !== '').map((e) => `${e.id}=${e.value}`),
+        selects: document.getElementById('ps-job-geometry')?.value,
+        logo: !!document.getElementById('psLogoThumb'),
+        stored: ['seisconv.paramsheet', 'seisconv.paramsheet.clients'].filter((k) => localStorage.getItem(k) != null),
+        steps: [...document.querySelectorAll('[id^=psSum-]')].map((e) => e.textContent).join(' | '),
+      }));
+      await win.click('#psStep-coords');
+      const coordsEmpty = await win.evaluate(() => (document.getElementById('psCoordText')?.value || '') === '' && !document.getElementById('psPtsTbl'));
+      await win.click('#psStep-geometry');
+      const linesEmpty = await win.evaluate(() => document.querySelectorAll('#psLines tr').length <= 1);
+      await win.click('#psStep-job');
+      await win.screenshot({ path: join(SHOTS, '_ps_after_restart.png') }).catch(() => {});
+      notes.push(`after restart: filled=${after.inputs.length} logo=${after.logo} stored=${after.stored.length} coordsEmpty=${coordsEmpty} linesEmpty=${linesEmpty}`);
+      if (after.inputs.length) fails.push(`fields survived a restart: ${after.inputs.join(', ')}`);
+      if (after.logo) fails.push('the logo survived a restart');
+      if (after.stored.length) fails.push(`still stored on disk: ${after.stored.join(', ')}`);
+      if (!coordsEmpty) fails.push('coordinates survived a restart');
+      if (!linesEmpty) fails.push('lines survived a restart');
+    } catch (e) {
+      fails.push('relaunch failed: ' + (e && e.message ? e.message : e));
+    } finally {
       try { rmSync(root, { recursive: true, force: true }); } catch { /* best effort */ }
     }
     return { assertFail: fails.length ? fails.join('; ') : null };

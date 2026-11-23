@@ -7,8 +7,12 @@
 //
 // Kept out of app.ts on purpose: app.ts hands in the few helpers it owns (modals,
 // toasts, progress, audit, the CRS picker, the IPC api) through `PsDeps`, so this
-// tab adds no state to the shared file. Drafts live in localStorage under
-// `seisconv.paramsheet` and are reloaded through core/sheet/draft.ts.
+// tab adds no state to the shared file.
+//
+// NOTHING IS STORED (Moshe, 23.11.2026): the sheet starts empty on every launch.
+// What was typed lives only in memory for the running session (switching tabs
+// keeps it); no draft, no remembered client names, no logo is written to disk,
+// and any draft an older build left in localStorage is deleted at startup.
 
 import JSZip from 'jszip';
 import { buildStyledXlsx } from '../../core/export/xlsx';
@@ -24,7 +28,8 @@ import {
   PS_STEPS, PS_STEP_TITLES, PS_MAX_LINES, type ParamSheet, type PsStep, type Issue,
 } from '../../core/sheet/model';
 import { sniffCoords, crsGuessName, type SniffResult } from '../../core/sheet/coordsniff';
-import { loadDraft, PS_DRAFT_KEY } from '../../core/sheet/draft';
+import { sanitizeLogo, fitInside } from '../../core/sheet/logo';
+import { bytesToBase64 } from '../../core/base64';
 import { buildSheetWorkbook, type AreaInfo, type AreaPoint, type MapInfo } from '../../core/sheet/layout';
 import { fitMapGrid, toPx, niceStep, scaleBarMetres, ticks, fmtDistance, type MapGrid } from '../../core/sheet/mapframe';
 import { ringArea, ringPerimeter, pathLength, convexHull, isClosed, type XY } from '../../core/gis/polygon';
@@ -42,6 +47,7 @@ export interface PsDeps {
     }>;
     exportBinary(name: string, bytes: Uint8Array): Promise<{ ok: boolean; path?: string; canceled?: boolean; error?: string }>;
     openPlanText(opts?: { coords?: boolean }): Promise<{ name: string; text: string } | null>;
+    paramSheetPickLogo(): Promise<{ ok: boolean; error?: string; data?: Uint8Array; format?: 'png' | 'jpeg'; w?: number; h?: number; name?: string } | null>;
   };
   showProgress(label: string, onCancel?: () => void, delayMs?: number): void;
   hideProgress(): void;
@@ -67,7 +73,8 @@ let previewBasemap: { key: string; rgb: Uint8Array | null; attribution: string; 
 let mapToken = 0;
 
 const $ = (id: string) => document.getElementById(id);
-const CLIENTS_KEY = 'seisconv.paramsheet.clients';
+/** Keys an older build used to persist drafts / client names; removed at startup. */
+const LEGACY_KEYS = ['seisconv.paramsheet', 'seisconv.paramsheet.clients'];
 const MAP_W = 1600;
 const MAP_H = 1130;
 const MAP_PLOT = { left: 120, top: 128, right: 56, bottom: 108 };
@@ -118,17 +125,13 @@ interface FSpec {
 
 const is3D = () => M.job.geometry === '3D';
 const kindNow = () => sourceKind(M.source.type);
-const clientsList = (): string[] => {
-  try {
-    const raw = JSON.parse(localStorage.getItem(CLIENTS_KEY) || '[]');
-    return Array.isArray(raw) ? raw.filter((x): x is string => typeof x === 'string').map((x) => x.slice(0, 80)).slice(0, 30) : [];
-  } catch { return []; }
-};
+/** Client names typed in THIS session (memory only, gone on restart). */
+let sessionClients: string[] = [];
+const clientsList = (): string[] => sessionClients;
 function rememberClient(name: string): void {
   const n = (name || '').trim().slice(0, 80);
   if (!n) return;
-  const list = [n, ...clientsList().filter((x) => x.toLowerCase() !== n.toLowerCase())].slice(0, 30);
-  try { localStorage.setItem(CLIENTS_KEY, JSON.stringify(list)); } catch { /* storage full: not fatal */ }
+  sessionClients = [n, ...sessionClients.filter((x) => x.toLowerCase() !== n.toLowerCase())].slice(0, 30);
 }
 
 const SPECS: Record<Exclude<PsStep, 'coords' | 'review'>, FSpec[]> = {
@@ -226,15 +229,55 @@ const SPECS: Record<Exclude<PsStep, 'coords' | 'review'>, FSpec[]> = {
   ],
 };
 
-// -- drafts -------------------------------------------------------------------------
+// -- logo ---------------------------------------------------------------------------
 
-let saveTimer: number | null = null;
-function saveDraft(): void {
-  if (saveTimer != null) window.clearTimeout(saveTimer);
-  saveTimer = window.setTimeout(() => {
-    saveTimer = null;
-    try { localStorage.setItem(PS_DRAFT_KEY, JSON.stringify(M)); } catch { /* quota: not fatal */ }
-  }, 400);
+const logoUrl = (): string => (M.logo ? `data:image/${M.logo.format};base64,${M.logo.data}` : '');
+/** The decoded logo for the map canvas, cached per logo. */
+let logoImgCache: { data: string; img: HTMLImageElement } | null = null;
+async function logoImage(): Promise<HTMLImageElement | null> {
+  if (!M.logo) return null;
+  if (logoImgCache && logoImgCache.data === M.logo.data) return logoImgCache.img;
+  const img = new Image();
+  img.src = logoUrl();
+  try { await img.decode(); } catch { return null; }
+  logoImgCache = { data: M.logo.data, img };
+  return img;
+}
+
+async function pickLogo(): Promise<void> {
+  let r: Awaited<ReturnType<PsDeps['api']['paramSheetPickLogo']>>;
+  try { r = await D.api.paramSheetPickLogo(); } catch (e) { D.infoToast('Could not open the logo: ' + D.errMsg(e)); return; }
+  if (!r) return;                                   // cancelled
+  if (!r.ok || !r.data) { D.infoToast(r.error || 'That picture cannot be used as a logo.'); return; }
+  const logo = sanitizeLogo({ data: bytesToBase64(r.data), format: r.format, w: r.w, h: r.h });
+  if (!logo) { D.infoToast('That picture cannot be used as a logo.'); return; }
+  M.logo = logo;
+
+  changed(true);
+  D.infoToast(`Logo added (${logo.w} x ${logo.h} px).`);
+}
+
+/** The "Logo (optional)" control of the Job step. */
+function renderLogoField(form: HTMLElement): void {
+  const wrap = el('div', { class: 'olog-field wide', id: 'psLogoField' });
+  wrap.appendChild(el('label', {}, 'Logo (optional)'));
+  const row = el('div', { class: 'ps-in', style: 'justify-content:flex-start;gap:10px;' });
+  if (M.logo) {
+    const fit = fitInside(M.logo.w, M.logo.h, 160, 56);
+    const img = el('img', { id: 'psLogoThumb', src: logoUrl(), alt: 'Logo', style: `width:${fit?.w ?? 80}px;height:${fit?.h ?? 40}px;border:1px solid var(--hair);border-radius:6px;background:#fff;padding:3px;flex:none;` });
+    row.appendChild(img);
+  }
+  const pick = el('button', { class: 'btn sm', type: 'button', id: 'psLogoPick', style: 'flex:none;' }, M.logo ? 'Choose another logo...' : 'Choose logo file...');
+  pick.addEventListener('click', () => void pickLogo());
+  row.appendChild(pick);
+  if (M.logo) {
+    const rm = el('button', { class: 'btn sm ghost', type: 'button', id: 'psLogoRemove', style: 'flex:none;' }, 'Remove logo');
+    rm.addEventListener('click', () => { M.logo = null; changed(true); });
+    row.appendChild(rm);
+  }
+  wrap.appendChild(row);
+  wrap.appendChild(el('span', { class: 'ps-note' }, 'PNG or JPEG, up to 5 MB. Shown at the right of the sheet title and on the map. Not kept after the app closes.'));
+  form.appendChild(wrap);
 }
 
 // -- rendering ------------------------------------------------------------------------
@@ -327,7 +370,6 @@ function onJobTypeChange(): void {
 }
 
 function changed(rerender: boolean): void {
-  saveDraft();
   if (rerender) renderStep();
   else refreshChecks();
 }
@@ -655,7 +697,7 @@ function mapDates(): string {
 }
 
 /** Draw the area map onto `cv` (MAP_W x MAP_H). Every number is finite-checked. */
-function drawAreaMap(cv: HTMLCanvasElement, area: AreaInfo, grid: MapGrid, rgb: Uint8Array | null, attribution: string, note: string): void {
+function drawAreaMap(cv: HTMLCanvasElement, area: AreaInfo, grid: MapGrid, rgb: Uint8Array | null, attribution: string, note: string, logo: HTMLImageElement | null = null): void {
   cv.width = grid.width;
   cv.height = grid.height;
   const ctx = cv.getContext('2d');
@@ -809,6 +851,11 @@ function drawAreaMap(cv: HTMLCanvasElement, area: AreaInfo, grid: MapGrid, rgb: 
   ctx.fillStyle = '#44505c';
   const crsTxt = area.gridCode ? `${area.gridName} (${area.gridCode})` : area.gridName;
   ctx.fillText(`${crsTxt}   |   ${mapDates()}   |   planned, not measured`, P.left, 94);
+  // The optional logo, right-aligned in the title block (aspect kept, never stretched).
+  if (logo && logo.naturalWidth > 0 && logo.naturalHeight > 0) {
+    const fit = fitInside(logo.naturalWidth, logo.naturalHeight, 300, P.top - 30);
+    if (fit) ctx.drawImage(logo, W - P.right - fit.w, Math.round((P.top - 8 - fit.h) / 2), fit.w, fit.h);
+  }
 
   // North arrow (grid north = up), top right inside the plot.
   const ax = W - P.right - 46, ay = P.top + 30;
@@ -895,8 +942,9 @@ async function renderMapPreview(withBasemap: boolean): Promise<void> {
   } else if (previewBasemap && previewBasemap.key === key) {
     bm = previewBasemap;
   }
+  const lg = await logoImage();
   if (mine !== mapToken) return;
-  drawAreaMap(cv, area, grid, bm.rgb, bm.attribution, bm.note);
+  drawAreaMap(cv, area, grid, bm.rgb, bm.attribution, bm.note, lg);
   if (msg) msg.textContent = bm.rgb ? 'Preview with basemap.' : 'Preview without basemap tiles (they are fetched when the sheet is saved).';
 }
 
@@ -931,6 +979,10 @@ function renderReview(form: HTMLElement): void {
     edit.addEventListener('click', () => go(s));
     h.appendChild(edit);
     wrap.appendChild(h);
+    if (s === 'job' && M.logo) {
+      const fit = fitInside(M.logo.w, M.logo.h, 200, 60);
+      wrap.appendChild(el('img', { id: 'psReviewLogo', src: logoUrl(), alt: 'Logo', style: `width:${fit?.w ?? 80}px;height:${fit?.h ?? 40}px;margin:2px 0 6px;background:#fff;border:1px solid var(--hair);border-radius:6px;padding:3px;` }));
+    }
     const dl = el('dl');
     const add = (k: string, v: string) => { if (!v) return; dl.appendChild(el('dt', {}, k)); dl.appendChild(el('dd', {}, v)); };
     if (s === 'coords') {
@@ -1000,7 +1052,7 @@ async function exportSheet(): Promise<void> {
       if (grid) {
         const bm = await fetchBasemap(area, grid);
         const cv = document.createElement('canvas');
-        drawAreaMap(cv, area, grid, bm.rgb, bm.attribution, bm.note);
+        drawAreaMap(cv, area, grid, bm.rgb, bm.attribution, bm.note, await logoImage());
         const jpeg = !!bm.rgb;
         map = { data: await encodeMap(cv, jpeg), format: jpeg ? 'jpeg' : 'png', widthPx: grid.width, heightPx: grid.height, attribution: bm.attribution, note: bm.note };
       }
@@ -1122,6 +1174,7 @@ function renderStep(): void {
       form.appendChild(box);
     }
     if (step === 'job') {
+      renderLogoField(form);
       const p = presetFor(M.job.jobType);
       if (p) form.appendChild(el('div', { class: 'ps-box', style: 'grid-column:1 / -1;' }, `Planning note for ${p.jobType}: ${p.note}`));
     }
@@ -1149,13 +1202,12 @@ function back(): void {
 
 /** Start over (asks first). Also the tab's Clear. */
 export async function paramSheetNew(): Promise<void> {
-  const ok = await D.confirm('Start a new, empty parameter sheet? The current sheet is cleared (its draft is overwritten).');
+  const ok = await D.confirm('Start a new, empty parameter sheet? Everything typed in this sheet, the coordinates and the logo are cleared.');
   if (!ok) return;
   M = emptySheet();
   lastPresetFor = '';
   sniff = null; coordText = ''; coordFile = ''; previewBasemap = null;
   visited.clear(); visited.add('job');
-  try { localStorage.removeItem(PS_DRAFT_KEY); } catch { /* ignore */ }
   D.audit('clear', 'cleared the parameter sheet', 'paramsheet');
   setStatus('');
   go('job');
@@ -1169,10 +1221,9 @@ export function paramSheetShown(): void {
 /** Wire the tab once at start. */
 export function initParamSheet(deps: PsDeps): void {
   D = deps;
-  let raw: string | null = null;
-  try { raw = localStorage.getItem(PS_DRAFT_KEY); } catch { raw = null; }
-  const loaded = loadDraft(raw);
-  if (loaded) { M = loaded; lastPresetFor = M.job.jobType; }
+  // Every launch starts with an empty sheet; delete anything an older build stored.
+  M = emptySheet();
+  for (const k of LEGACY_KEYS) { try { localStorage.removeItem(k); } catch { /* ignore */ } }
   D.initCrsPicker('psCrsSearch', 'psCrsResults', 'psCrsPicked', 'No CRS picked from the registry.', (code, name) => {
     M.coords.crsCode = code;
     M.coords.crsName = name;

@@ -14,6 +14,7 @@
 
 import { sourceKind, isHorizontalPhone, type SurveyGeometry } from './lists';
 import { presetFor, isMaswJob, isShJob } from './presets';
+import type { SheetLogo } from './logo';
 
 /** Hard caps - a model can never hold more than this (drafts are clamped too). */
 export const PS_MAX_LINES = 200;
@@ -39,6 +40,8 @@ export interface PsPoint {
 
 export interface ParamSheet {
   v: 1;
+  /** Optional company logo (title band of the sheet, map title block). */
+  logo: SheetLogo | null;
   job: {
     jobType: string;
     geometry: SurveyGeometry;
@@ -153,6 +156,7 @@ export interface ParamSheet {
 export function emptySheet(): ParamSheet {
   return {
     v: 1,
+    logo: null,
     job: {
       jobType: '', geometry: '2D', client: '', prospect: '', jobNumber: '', contractor: '', crew: '',
       manager: '', observer: '', startDate: '', endDate: '', targetDepthM: null, preparedBy: '', revision: '', notes: '',

@@ -1149,6 +1149,10 @@ const api = {
     ok: boolean; error?: string; rgb?: Uint8Array | null; attribution?: string; label?: string;
     tilesTotal?: number; tilesFailed?: number; tilesBlank?: number; notes?: string[];
   }> => ipcRenderer.invoke('seisconv:paramSheetBasemap', args),
+  /** Parameters Sheet: pick a logo (PNG / JPEG, <= 5 MB), normalised in main to
+   *  fit 600 x 300 px. null = cancelled; ok:false carries the reason. */
+  paramSheetPickLogo: (): Promise<{ ok: boolean; error?: string; data?: Uint8Array; format?: 'png' | 'jpeg'; w?: number; h?: number; name?: string } | null> =>
+    ipcRenderer.invoke('seisconv:paramSheetPickLogo'),
   /** Compute an NMO semblance panel for the open file. */
   semblance: (opts: { velMin: number; velMax: number; velStep: number }): Promise<SemblanceData> => ipcRenderer.invoke('seisconv:semblance', opts),
   /** Spectrum Analysis: mean amplitude spectrum over the open file (or the

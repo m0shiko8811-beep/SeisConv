@@ -9,7 +9,8 @@
 // Pure: no DOM / Electron. The caller supplies the date, the version, the area
 // coordinates (already converted) and the map PNG.
 
-import { colLetter, type StyledCellLike, type StyledSheet, type CellStyle } from '../export/xlsx';
+import { colLetter, type StyledCellLike, type StyledSheet, type CellStyle, type StyledImage } from '../export/xlsx';
+import { sanitizeLogo, logoBytes, fitToHeight } from './logo';
 import { deriveSheet, crossChecks, fmtNum, type ParamSheet } from './model';
 import { SURVEY_GEOMETRIES, sourceKind } from './lists';
 import { coordLines, lineMismatch } from './reconcile';
@@ -163,13 +164,40 @@ class Grid {
 
 const geomLabel = (g: string): string => SURVEY_GEOMETRIES.find((x) => x.value === g)?.label ?? g;
 
+/** Title band height (points) and the column widths of the Parameters sheet. */
+const TITLE_PT = 32;
+const PARAM_COLS = [22, 24, 6, 2, 22, 24, 6, 2, 24, 24, 6];
+/** Excel's pixel width of a column of `chars` characters (Calibri 11, 96 dpi). */
+const colPx = (chars: number) => Math.floor(chars * 7 + 5);
+
+/** The logo at the right end of the title band: scaled to the band height,
+ *  aspect kept, never stretched. [] when there is no (valid) logo, so a sheet
+ *  without a logo is written exactly as before. */
+export function titleLogo(m: ParamSheet): StyledImage[] {
+  const logo = sanitizeLogo(m.logo);
+  if (!logo) return [];
+  const bandPx = Math.round((TITLE_PT * 96) / 72);
+  const fit = fitToHeight(logo.w, logo.h, bandPx - 6, 220);
+  if (!fit) return [];
+  // The logo ends 6 px inside column K. Its left edge is found column by column
+  // from I, so the anchor offset always stays inside its own anchor cell.
+  const room = colPx(PARAM_COLS[8]) + colPx(PARAM_COLS[9]) + colPx(PARAM_COLS[10]);
+  let x = Math.max(0, room - fit.w - 6);
+  let col = 8;
+  while (col < 10 && x >= colPx(PARAM_COLS[col])) { x -= colPx(PARAM_COLS[col]); col++; }
+  return [{
+    data: logoBytes(logo), format: logo.format, widthPx: logo.w, heightPx: logo.h, displayWidthPx: fit.w,
+    col, row: 0, offsetXPx: x, offsetYPx: Math.max(0, Math.round((bandPx - fit.h) / 2)), name: 'Logo',
+  }];
+}
+
 /** The `Parameters` sheet: a title block, then one band per section that has
  *  anything in it. A fully empty model gives the title block alone. */
 export function parametersSheet(m: ParamSheet, area: AreaInfo | null, meta: LayoutMeta): StyledSheet {
   const d = deriveSheet(m);
   const j = m.job, g = m.geom, s = m.source, r = m.receiver, rec = m.recording, t = m.totals;
   const G = new Grid();
-  G.band('Parameter Sheet', S_TITLE, 32);
+  G.band('Parameter Sheet', S_TITLE, TITLE_PT);
   const head = [txt(j.jobType), txt(j.prospect)].filter(Boolean).join(' - ');
   if (head) G.band(head, S_HEAD2, 22);
   G.line(`Planned (dry) values, not field measurements. Derived values are nominal.${meta.preparedDate ? ` Prepared ${meta.preparedDate}.` : ''}`, S_SUB);
@@ -339,7 +367,7 @@ export function parametersSheet(m: ParamSheet, area: AreaInfo | null, meta: Layo
   return {
     name: 'Parameters',
     rows: G.rows,
-    cols: [22, 24, 6, 2, 22, 24, 6, 2, 24, 24, 6],
+    cols: PARAM_COLS,
     merges: G.merges,
     rowHeights: G.heights,
     landscape: true,
@@ -347,6 +375,7 @@ export function parametersSheet(m: ParamSheet, area: AreaInfo | null, meta: Layo
     fitPage: true,
     printArea: true,
     hideGrid: true,
+    images: titleLogo(m),
     footer: '&L&8SeisConv parameter sheet - planned values&R&8Page &P of &N',
   };
 }

@@ -2545,6 +2545,46 @@ ipcMain.handle('seisconv:paramSheetCoords', async (_e, args: { code?: string; po
   return { ok: true, crsName: crs.name, geographic: crs.subtype === 'GEO', gridCode: grid.code, gridName: grid.name, latlon, en };
 });
 
+// The optional sheet logo: PNG or JPEG only, at most 5 MB on disk, decoded here
+// with nativeImage (an undecodable or empty picture is refused with a reason),
+// downscaled to fit 600 x 300 px with the aspect kept, and re-encoded: JPEG
+// stays JPEG (it has no alpha), everything else becomes PNG. The renderer only
+// ever receives the normalised bytes, never a path.
+const PS_LOGO_MAX_FILE = 5 * 1024 * 1024;
+const PS_LOGO_MAX_OUT = 1_000_000;
+ipcMain.handle('seisconv:paramSheetPickLogo', async () => {
+  if (!win) return null;
+  const res = await dialog.showOpenDialog(win, {
+    title: 'Choose a logo (PNG or JPEG)',
+    properties: ['openFile'],
+    filters: [{ name: 'Logo picture (PNG, JPEG)', extensions: ['png', 'jpg', 'jpeg'] }],
+  });
+  if (res.canceled || !res.filePaths.length) return null;
+  const p = res.filePaths[0];
+  try {
+    const st = await stat(p);
+    if (!st.isFile()) return { ok: false, error: 'That is not a file.' };
+    if (st.size > PS_LOGO_MAX_FILE) return { ok: false, error: `The logo file is ${(st.size / 1048576).toFixed(1)} MB; the limit is 5 MB.` };
+    const buf = await readFile(p);
+    const png = buf.length > 8 && buf[0] === 0x89 && buf[1] === 0x50 && buf[2] === 0x4e && buf[3] === 0x47;
+    const jpeg = buf.length > 3 && buf[0] === 0xff && buf[1] === 0xd8 && buf[2] === 0xff;
+    if (!png && !jpeg) return { ok: false, error: 'Only PNG or JPEG pictures can be used as a logo.' };
+    let img = nativeImage.createFromBuffer(buf);
+    if (img.isEmpty()) return { ok: false, error: 'The picture could not be read (damaged or not really a PNG / JPEG).' };
+    const { width, height } = img.getSize();
+    if (!(width > 0 && height > 0)) return { ok: false, error: 'The picture has no size.' };
+    const k = Math.min(1, 600 / width, 300 / height);
+    const w = Math.max(1, Math.round(width * k)), h = Math.max(1, Math.round(height * k));
+    if (k < 1) img = img.resize({ width: w, height: h, quality: 'best' });
+    const out = jpeg ? img.toJPEG(90) : img.toPNG();
+    if (!out.length) return { ok: false, error: 'The picture could not be re-encoded.' };
+    if (out.length > PS_LOGO_MAX_OUT) return { ok: false, error: 'The logo is still larger than 1 MB after resizing; use a simpler picture.' };
+    return { ok: true, data: new Uint8Array(out), format: jpeg ? 'jpeg' : 'png', w, h, name: path.basename(p).slice(0, 120) };
+  } catch (e) {
+    return { ok: false, error: `The logo could not be read: ${e instanceof Error ? e.message : String(e)}` };
+  }
+});
+
 ipcMain.handle('seisconv:paramSheetBasemap', async (_e, args: {
   code?: string;
   grid?: { width?: number; height?: number; originX?: number; originY?: number; pixelSize?: number };
