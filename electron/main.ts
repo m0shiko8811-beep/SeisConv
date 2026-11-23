@@ -2659,6 +2659,7 @@ async function psLayoutList(): Promise<{ list: LayoutEntry[]; skipped: number }>
 async function psLayoutWrite(id: string, text: string): Promise<void> {
   const p = psLayoutPath(id);
   if (!p) throw new Error('invalid layout id');
+  if (Buffer.byteLength(text, 'utf8') > LAYOUT_MAX_BYTES) throw new Error('the layout is larger than 5 MB');
   await mkdir(psLayoutDir(), { recursive: true });
   const tmp = `${p}.${randomBytes(4).toString('hex')}.tmp`;   // never matches <id>.json
   await writeFile(tmp, text, 'utf8');

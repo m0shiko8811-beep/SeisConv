@@ -600,6 +600,7 @@ const globalPageErrors = [];
       await sleep(250);
     };
     const fill = async (id, v) => { await win.fill('#' + id, String(v)); await win.locator('#' + id).dispatchEvent('change'); };
+    let layoutsBefore = null;                            // ids present before the layout flow (cleanup on failure)
     try {
       // A small two-colour logo, encoded by Electron itself.
       await app.evaluate(async ({ nativeImage }) => {
@@ -758,6 +759,7 @@ const globalPageErrors = [];
       // list ends as it started. Only the layouts made here are touched.
       const lay = async () => win.evaluate(async () => (await window.seisconvAPI.paramSheetLayoutList()).layouts.map((l) => ({ id: l.id, name: l.name })));
       const before = await lay();
+      layoutsBefore = before.map((l) => l.id);
       const toastIs = async (re, what) => {
         await win.waitForFunction((src) => new RegExp(src).test(document.getElementById('undoToastMsg')?.textContent || ''), re.source, { timeout: 10000 })
           .catch(() => fails.push(`no "${what}" toast`));
@@ -825,6 +827,16 @@ const globalPageErrors = [];
       await win.waitForFunction((id) => document.querySelector(`#psLayoutsList [data-id="${id}"] .ps-layout-name`)?.textContent === 'QA layout Renamed', aId, { timeout: 5000 })
         .catch(() => fails.push('the rename did not show in the list'));
       if (!(await lay()).some((l) => l.id === aId && l.name === 'QA layout Renamed')) fails.push('the rename was not stored');
+      // Export one row to a .seisparams file (the save dialog is mocked to cfgPath).
+      rmSync(cfgPath, { force: true });
+      await app.evaluate(async ({ dialog }, p) => { dialog.showSaveDialog = async () => ({ canceled: false, filePath: p }); }, cfgPath);
+      await win.click(`#psLayoutsList [data-id="${aId}"] [data-act=export]`);
+      await toastIs(/Exported layout: QA layout Renamed/, 'Exported layout');
+      if (!existsSync(cfgPath)) fails.push('Manage > Export wrote no file');
+      else {
+        const ex = JSON.parse(readFileSync(cfgPath, 'utf8'));
+        if (ex.format !== 'seisconv-paramsheet-config' || ex.name !== 'QA layout Renamed' || ex.model?.geom?.lines?.length !== 3) fails.push('the exported layout file is wrong');
+      }
       for (const l of mine) {
         await win.click(`#psLayoutsList [data-id="${l.id}"] [data-act=delete]`);
         await win.waitForSelector('#confirmBack.open', { timeout: 5000 }).catch(() => fails.push('Delete did not ask first'));
@@ -847,6 +859,13 @@ const globalPageErrors = [];
       const kept = await win.inputValue('#ps-job-jobType').catch(() => '');
       if (kept !== 'Vibroseis 2D Reflection' || !(await win.isVisible('#psLogoThumb').catch(() => false))) fails.push('switching tabs lost the sheet within the session');
     } finally {
+      // Never leave QA layouts behind (a failed run on a real profile would add them to the user's list).
+      if (layoutsBefore) {
+        await win.evaluate(async (keep) => {
+          const api = window.seisconvAPI;
+          for (const l of (await api.paramSheetLayoutList()).layouts) if (!keep.includes(l.id)) await api.paramSheetLayoutDelete(l.id);
+        }, layoutsBefore).catch(() => {});
+      }
       await app.evaluate(() => { if (globalThis.__qaRealFetch) { globalThis.fetch = globalThis.__qaRealFetch; delete globalThis.__qaRealFetch; } }).catch(() => {});
       await mockDialogs(app, []).catch(() => {});
     }
