@@ -11,6 +11,13 @@ updates:
         update-types:
           - "minor"
           - "patch"
+    ignore:
+      # @types/node follows the Node line the app actually runs on (Electron's
+      # bundled Node and the CI runner), not the newest Node release. A major
+      # bump would type APIs that do not exist at runtime, so majors are moved
+      # by hand when Electron and CI move.
+      - dependency-name: "@types/node"
+        update-types: ["version-update:semver-major"]
 
   - package-ecosystem: "github-actions"
     directory: "/"
