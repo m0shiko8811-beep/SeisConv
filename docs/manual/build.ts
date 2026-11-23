@@ -27,7 +27,7 @@ const strict = process.argv.includes('--strict');
 
 /** Same topic order the Help modal's nav uses: 'general' first, then app tab order. */
 const ORDER = ['general', 'conv', 'trace', 'section', 'sps', 'spscreate', 'vel',
-  'spectrum', 'workbench', 'obslog', 'geomqc', 'sweeps', 'field'];
+  'spectrum', 'workbench', 'obslog', 'geomqc', 'sweeps', 'field', 'paramsheet'];
 
 function esc(s: string): string {
   return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');

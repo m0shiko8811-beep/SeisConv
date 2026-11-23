@@ -1469,6 +1469,11 @@ canvas.sec-attr{height:172px;margin-top:8px;}
         <path d="M5 12.5a10 10 0 0 1 14 0M8 15.5a6 6 0 0 1 8 0"/><circle cx="12" cy="19" r="1.1" fill="currentColor" stroke="none"/><path d="M2 9.5a15 15 0 0 1 20 0" opacity=".55"/></svg>
       <span class="lbl">WiFiSync</span>
     </button>
+    <button class="nav-item" id="tab-paramsheet" title="Parameters Sheet - plan a job and export its parameter sheet (XLSX)">
+      <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">
+        <rect x="4" y="3" width="16" height="18" rx="2"/><path d="M4 8h16M10 8v13M4 13h16M4 17.5h16" opacity=".6"/></svg>
+      <span class="lbl">Parameters Sheet</span>
+    </button>
 
     <div class="spacer"></div>
     <button class="nav-item" id="railHelp" title="Help / Manual">
@@ -3261,6 +3266,134 @@ canvas.sec-attr{height:172px;margin-top:8px;}
           </div>
         </div>
 
+      </section>
+
+      <!-- ===================== PARAMETERS SHEET ===================== -->
+      <style>
+        #panel-paramsheet .ps-grid{display:grid;grid-template-columns:250px minmax(0,1fr);gap:14px;align-items:start;}
+        #panel-paramsheet .ps-step{cursor:pointer;padding:9px 0;}
+        #panel-paramsheet .ps-step .ws{white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+        #panel-paramsheet .ps-step.err .wiz-num{border-color:var(--red);color:var(--red);background:var(--red-tint);}
+        #panel-paramsheet .ps-form{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px 16px;}
+        #panel-paramsheet .ps-form .olog-field.wide{grid-column:1 / -1;}
+        #panel-paramsheet .ps-form .olog-field.bad input,#panel-paramsheet .ps-form .olog-field.bad select,#panel-paramsheet .ps-form .olog-field.bad textarea{border-color:var(--red);}
+        #panel-paramsheet .ps-in{display:flex;align-items:center;gap:6px;}
+        #panel-paramsheet .ps-in input,#panel-paramsheet .ps-in select,#panel-paramsheet .ps-in textarea{flex:1;min-width:0;}
+        #panel-paramsheet .ps-in input[type=checkbox]{flex:none;width:16px;height:16px;accent-color:var(--teal);}
+        #panel-paramsheet .ps-note{font-size:11.5px;color:var(--ink-3);white-space:normal;}
+        #panel-paramsheet .ps-box .trace-label{white-space:normal;}
+        #panel-paramsheet .ps-unit{font-size:11.5px;color:var(--ink-3);font-family:var(--mono);min-width:22px;}
+        #panel-paramsheet .ps-hint{font-size:10.5px;color:var(--teal-deep);}
+        #panel-paramsheet textarea{background:var(--input-bg);color:var(--ink);border:1px solid var(--hair);border-radius:8px;padding:6px 9px;font-size:12.5px;font-family:inherit;resize:vertical;}
+        #panel-paramsheet textarea.mono{font-family:var(--mono);font-size:12px;}
+        #panel-paramsheet .ps-sub{margin:14px 0 6px;font-size:12px;font-weight:700;color:var(--ink);}
+        #panel-paramsheet .ps-box{border:1px solid var(--hair);border-radius:10px;padding:10px 12px;background:var(--surface);font-size:12px;color:var(--ink-2);}
+        #panel-paramsheet .ps-box b{color:var(--ink);}
+        #panel-paramsheet table.ps-tbl{width:100%;border-collapse:collapse;font-size:12px;}
+        #panel-paramsheet table.ps-tbl th,#panel-paramsheet table.ps-tbl td{text-align:left;padding:4px 7px;border-bottom:1px solid var(--hair-soft);}
+        #panel-paramsheet table.ps-tbl th{color:var(--ink-3);font-weight:600;font-size:11px;}
+        #panel-paramsheet table.ps-tbl input{width:100%;background:var(--input-bg);color:var(--ink);border:1px solid var(--hair);border-radius:7px;padding:4px 7px;font-size:12px;}
+        #panel-paramsheet .ps-issues{margin-top:12px;font-size:12px;}
+        #panel-paramsheet .ps-issues .e{color:var(--red);}
+        #panel-paramsheet .ps-issues .w{color:var(--amber);}
+        #panel-paramsheet .ps-issues div{padding:2px 0;}
+        #panel-paramsheet .ps-review h3{font-size:12px;font-weight:700;margin:12px 0 4px;display:flex;gap:8px;align-items:center;}
+        #panel-paramsheet .ps-review h3 button{font-size:11px;padding:2px 8px;}
+        #panel-paramsheet .ps-review dl{display:grid;grid-template-columns:repeat(3,minmax(0,1fr) minmax(0,1fr));gap:2px 10px;font-size:11.5px;margin:0;}
+        #panel-paramsheet .ps-review dt{color:var(--ink-3);}
+        #panel-paramsheet .ps-review dd{margin:0;color:var(--ink);font-family:var(--mono);}
+        #panel-paramsheet .ps-map{width:100%;height:auto;border:1px solid var(--hair);border-radius:8px;background:#ececec;display:block;}
+        #panel-paramsheet .ps-chips{display:flex;flex-wrap:wrap;gap:6px;margin-top:8px;}
+      </style>
+      <section id="panel-paramsheet" style="display:none;">
+        <div class="ps-grid">
+          <div class="card">
+            <div class="ch"><h2>Steps</h2><div class="right"><button class="btn sm ghost" id="psNewBtn" type="button" title="Start a new, empty sheet (asks first)">New sheet</button></div></div>
+            <div class="cb" id="psSteps">
+            <div class="wiz-step ps-step active" id="psStep-job" data-step="job" role="button" tabindex="0" title="Go to: Job">
+              <span class="wiz-num">1</span>
+              <div class="wiz-body">
+                <div class="wt">Job</div>
+                <div class="ws" id="psSum-job">Job type first: it fills the recommended defaults</div>
+              </div>
+            </div>
+            <div class="wiz-step ps-step" id="psStep-geometry" data-step="geometry" role="button" tabindex="0" title="Go to: Geometry">
+              <span class="wiz-num">2</span>
+              <div class="wiz-body">
+                <div class="wt">Geometry</div>
+                <div class="ws" id="psSum-geometry">Intervals, spread and the named lines</div>
+              </div>
+            </div>
+            <div class="wiz-step ps-step" id="psStep-source" data-step="source" role="button" tabindex="0" title="Go to: Source">
+              <span class="wiz-num">3</span>
+              <div class="wiz-body">
+                <div class="wt">Source</div>
+                <div class="ws" id="psSum-source">Source type, energy and stack</div>
+              </div>
+            </div>
+            <div class="wiz-step ps-step" id="psStep-receiver" data-step="receiver" role="button" tabindex="0" title="Go to: Receiver">
+              <span class="wiz-num">4</span>
+              <div class="wiz-body">
+                <div class="wt">Receiver</div>
+                <div class="ws" id="psSum-receiver">Geophones and how they are planted</div>
+              </div>
+            </div>
+            <div class="wiz-step ps-step" id="psStep-recording" data-step="recording" role="button" tabindex="0" title="Go to: Recording">
+              <span class="wiz-num">5</span>
+              <div class="wiz-body">
+                <div class="wt">Recording</div>
+                <div class="ws" id="psSum-recording">Instrument, sampling and filters</div>
+              </div>
+            </div>
+            <div class="wiz-step ps-step" id="psStep-totals" data-step="totals" role="button" tabindex="0" title="Go to: Totals and conditions">
+              <span class="wiz-num">6</span>
+              <div class="wiz-body">
+                <div class="wt">Totals and conditions</div>
+                <div class="ws" id="psSum-totals">Typed totals are compared with the plan</div>
+              </div>
+            </div>
+            <div class="wiz-step ps-step" id="psStep-coords" data-step="coords" role="button" tabindex="0" title="Go to: Coordinates">
+              <span class="wiz-num">7</span>
+              <div class="wiz-body">
+                <div class="wt">Coordinates</div>
+                <div class="ws" id="psSum-coords">Paste or load the area points (or skip)</div>
+              </div>
+            </div>
+            <div class="wiz-step ps-step" id="psStep-review" data-step="review" role="button" tabindex="0" title="Go to: Review and export">
+              <span class="wiz-num">8</span>
+              <div class="wiz-body">
+                <div class="wt">Review and export</div>
+                <div class="ws" id="psSum-review">Check everything, then save the XLSX</div>
+              </div>
+            </div>
+            </div>
+          </div>
+          <div class="card">
+            <div class="ch">
+              <h2 id="psStepTitle">Job</h2>
+              <span class="hint" id="psStepHint">Planned (dry) values only: typed or derived, never measured.</span>
+              <div class="right"><span class="pill teal" id="psStepPill">step 1 of 8</span></div>
+            </div>
+            <div class="cb">
+              <div id="psForm"></div>
+              <div class="ps-issues" id="psIssues" role="alert" aria-live="polite"></div>
+              <div class="wiz-actions">
+                <button class="btn" id="psBackBtn" type="button">Back</button>
+                <button class="btn btn-primary" id="psNextBtn" type="button">Next</button>
+                <span class="trace-label" id="psStatus"></span>
+              </div>
+            </div>
+          </div>
+        </div>
+        <!-- Parked controls the Coordinates step moves into its form (wired once at start). -->
+        <div id="psHold" style="display:none;">
+          <div id="psCrsBlock">
+            <input type="text" id="psCrsSearch" class="ctl crs-input" autocomplete="off" spellcheck="false" style="width:100%;"
+                   placeholder="Correct the CRS: search an EPSG code, a name or 'utm 36n'">
+            <div id="psCrsResults" class="crs-search-results"></div>
+            <div class="trace-label" id="psCrsPicked" style="margin-top:4px;"></div>
+          </div>
+        </div>
       </section>
 
     </div>

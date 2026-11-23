@@ -29,6 +29,7 @@ import { amplitudeSpectrum, fft, nextPow2 } from '../../core/dsp/fft';
 import { crossCorrelate, difference } from '../../core/dsp/correlate';
 import { resampleLinear } from '../../core/dsp/interpolate';
 import { MANUAL } from './manual';
+import { initParamSheet, paramSheetShown, paramSheetNew } from './paramsheet';
 import {
   classifyTrace, thresholdsForSensitivity, readEvidence, DETECTOR_IDS, NOISE_GUARD_MS,
   type DetectorId, type DetectorResult, type TraceFinding, type HealthThresholds, type Sensitivity,
@@ -473,6 +474,15 @@ declare global {
         total: number;
         rows: { code: string; name: string; method: string; units: string; deprecated: boolean; supported: boolean; reason?: string }[];
       }>;
+      // -- Parameters Sheet tab --
+      paramSheetCoords(args: { code: string; points: [number, number][]; gridCode?: string }): Promise<{
+        ok: boolean; error?: string; crsName?: string; geographic?: boolean; gridCode?: string; gridName?: string;
+        latlon?: ([number, number] | null)[]; en?: ([number, number] | null)[];
+      }>;
+      paramSheetBasemap(args: { code: string; grid: { width: number; height: number; originX: number; originY: number; pixelSize: number }; source: string }): Promise<{
+        ok: boolean; error?: string; rgb?: Uint8Array | null; attribution?: string; label?: string;
+        tilesTotal?: number; tilesFailed?: number; tilesBlank?: number; notes?: string[];
+      }>;
       semblance(opts: { velMin: number; velMax: number; velStep: number }): Promise<SemblanceData>;
       // -- Spectrum-analysis tab --
       // Mean amplitude spectrum of the open file (or a [traceStart,traceEnd) window).
@@ -504,7 +514,7 @@ declare global {
       // SURVEY-PLAN import: open a .csv/.txt/.tsv/.geojson/.json picker → the file's
       // RAW text + base name, or null if cancelled. Unparsed on purpose: the SPS
       // Creation wizard maps the real columns before anything is interpreted.
-      openPlanText(): Promise<{ name: string; text: string } | null>;
+      openPlanText(opts?: { coords?: boolean }): Promise<{ name: string; text: string } | null>;
       // Observer Log RELOAD: open a .json picker → {meta,columns,rows}, or null if cancelled.
       openLogJson(): Promise<LogJson | null>;
       // Observer Log TEMPLATE import: open a .json picker → the RAW parsed object
@@ -1402,6 +1412,7 @@ const TAB_META: Record<string, { title: string; desc: string }> = {
   obslog: { title: 'Observer Log', desc: 'Per-shot field log; wizard-configured, exportable to Excel.' },
   sweeps: { title: 'Sweeps', desc: 'Design vibroseis pilot sweeps (linear · dB/Hz · dB/Octave · T-Power · segmented), export the pilot / SCIO .SV / sweep sheet, and QC a measured sweep against the design.' },
   field: { title: 'WiFiSync', desc: 'Peer-to-peer folder sync over WiFi - no router, no cloud. Pick a shared folder, discover a peer (or host a hotspot), and keep both machines mirror-identical in the field.' },
+  paramsheet: { title: 'Parameters Sheet', desc: 'Plan a job step by step - job type, geometry, source, receiver, recording, coordinates - and export one XLSX parameter sheet with the area map for the field crew.' },
 };
 
 let summary: Summary | null = null;
@@ -1698,7 +1709,7 @@ const KEY_BATCH = `${MOD}+B`;
 // modifier) to TABS[idx]; only nine digits exist, so the tabs past the ninth
 // (Observer Log, Sweeps, WiFiSync) get no digit. switchTab iterates by name, so
 // nothing else depends on this order.
-const TABS = ['conv', 'trace', 'section', 'sps', 'spscreate', 'geomqc', 'vel', 'spectrum', 'workbench', 'obslog', 'sweeps', 'field'] as const;
+const TABS = ['conv', 'trace', 'section', 'sps', 'spscreate', 'geomqc', 'vel', 'spectrum', 'workbench', 'obslog', 'sweeps', 'field', 'paramsheet'] as const;
 type Tab = (typeof TABS)[number];
 /** How many tabs a bare digit key can reach (only 1..9 exist as digits). */
 const TAB_DIGITS = Math.min(9, TABS.length);
@@ -1755,6 +1766,7 @@ function switchTab(tab: Tab) {
   if (tab === 'obslog') renderLog();
   if (tab === 'sweeps') refreshSweeps();
   if (tab === 'field') void refreshField();
+  if (tab === 'paramsheet') paramSheetShown();
 }
 
 function fmtRate(si: number | null) {
@@ -3091,6 +3103,9 @@ function clearActiveTab() {
       audit('clear', 'cleared WiFiSync activity log', 'field');
       break;
     }
+    case 'paramsheet':
+      void paramSheetNew();   // own confirm + audit
+      break;
   }
 }
 
@@ -12421,6 +12436,8 @@ interface CrsPickerRow {
 interface CrsPicker {
   /** Currently selected EPSG code, or '' for none/native. */
   code: string;
+  /** Repaint the "picked" summary (set by initCrsPicker). */
+  show?: () => void;
 }
 
 const crsPickers: Record<string, CrsPicker> = {};
@@ -12430,7 +12447,7 @@ const crsPickers: Record<string, CrsPicker> = {};
  * `emptyLabel` is what an empty selection means for this control (the shapefile
  * picker treats it as "native"; the reprojection picker requires a choice).
  */
-function initCrsPicker(inputId: string, resultsId: string, pickedId: string, emptyLabel: string): void {
+function initCrsPicker(inputId: string, resultsId: string, pickedId: string, emptyLabel: string, onPick?: (code: string, name: string) => void): void {
   const input = $opt(inputId) as HTMLInputElement | null;
   const results = $opt(resultsId);
   const picked = $opt(pickedId);
@@ -12495,6 +12512,7 @@ function initCrsPicker(inputId: string, resultsId: string, pickedId: string, emp
           input.dataset.pickedName = r.name;
           showPicked();
           hide();
+          onPick?.(r.code, r.name);
         });
       }
       results.appendChild(row);
@@ -12536,6 +12554,7 @@ function initCrsPicker(inputId: string, resultsId: string, pickedId: string, emp
   });
   input.addEventListener('focus', () => { if (input.value.trim()) run(); });
   input.addEventListener('keydown', (ev) => { if ((ev as KeyboardEvent).key === 'Escape') hide(); });
+  state.show = showPicked;
   // A click anywhere else closes the list (the sandboxed renderer has no popups).
   document.addEventListener('click', (ev) => {
     if (ev.target !== input && !results.contains(ev.target as Node)) hide();
@@ -12546,6 +12565,17 @@ function initCrsPicker(inputId: string, resultsId: string, pickedId: string, emp
 /** The EPSG code chosen in a picker, or '' when none is selected. */
 function crsPickerCode(inputId: string): string {
   return crsPickers[inputId]?.code || '';
+}
+
+/** Set a picker's selection from code (e.g. a detected CRS), without a search. */
+function crsPickerSet(inputId: string, code: string, name: string): void {
+  const st = crsPickers[inputId];
+  const input = $opt(inputId) as HTMLInputElement | null;
+  if (!st || !input) return;
+  st.code = code;
+  input.value = code ? `${code} - ${name}` : '';
+  input.dataset.pickedName = code ? name : '';
+  st.show?.();
 }
 
 /**
@@ -22975,6 +23005,12 @@ function init() {
   // old built-in list of ~135 could not offer most of the world's grids.
   initCrsPicker('epsgSearch', 'epsgResults', 'epsgPicked', 'No target CRS chosen yet.');
   initCrsPicker('shpCrsSearch', 'shpCrsResults', 'shpCrsPicked', "Native: the survey's own coordinates, with a .prj describing them.");
+  // Parameters Sheet tab: its DOM lives in renderer/src/paramsheet.ts; app.ts only
+  // hands over the shared helpers (modals, toasts, progress, audit, CRS picker).
+  initParamSheet({
+    api, showProgress, hideProgress, infoToast, confirm: confirmDelete, audit,
+    initCrsPicker, crsPickerSet, errMsg, version: APP_VERSION,
+  });
   $opt('spsExpShpBtn')?.addEventListener('click', () => void exportShapefile());
   $('spsExportBtn').addEventListener('click', () => void exportReprojected());
   $('spsExpKmlBtn').addEventListener('click', () => void exportSPS('kml'));

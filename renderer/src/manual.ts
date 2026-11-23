@@ -632,4 +632,63 @@ export const MANUAL: Record<string, HelpTopic> = {
       'Hotspot and adapter/firewall changes only ever happen on your explicit click; nothing here mutates the network on its own.',
     ],
   },
+  paramsheet: {
+    title: 'Parameters Sheet',
+    what: 'Plan one seismic job step by step and save a single Excel workbook for the field crew: every planned (dry) parameter, the area coordinates, and an area map. Nothing here is measured; values are typed, picked from lists, or derived from what you typed.',
+    controls: [
+      '<b>Steps</b> - the eight wizard steps (Job, Geometry, Source, Receiver, Recording, Totals and conditions, Coordinates, Review and export). Click any step to go there; a green number means the step checks out, a red one that it has a problem. Back never loses data.',
+      '<b>Job type</b> - chosen first. Picking one of the listed job types fills the recommended defaults (intervals, sample rate, record length, low cut, source, stack, geophone frequency and type, spread type, channels). The recommended RANGE is shown under each field; every value stays editable and free typing is always allowed.',
+      '<b>Survey geometry</b> - 2D line(s), 3D grid, borehole / downhole, or passive / point. The 3D fields (line intervals, patch, azimuth) appear only for a 3D grid.',
+      '<b>Lines</b> - the named lines of the job, each with its length. The line count is derived, never typed. Stations and shots per line are shown beside each line.',
+      '<b>Source</b> - the fields follow the source type: a vibrator shows the sweep (start, end, length, tapers, type, fleet size); an impulsive source shows a generic size, depth, pattern and count per point.',
+      '<b>Coordinates</b> - paste a list or <b>Load file...</b> (TXT, CSV, KML, GeoJSON). The delimiter, header, columns, degrees vs degrees-minutes-seconds vs metres, and a proposed coordinate system are detected and SHOWN; nothing is applied until you press <b>Confirm</b>. When the numbers cannot tell (for example which UTM zone, or which column is latitude), you are asked. The CRS search box corrects the guess. <b>No area yet</b> skips the step.',
+      '<b>Map basemap</b> - Satellite, Streets, Light or Dark grey, or <b>No basemap</b> (works offline).',
+      '<b>Review and export</b> - everything on one page with an <b>Edit</b> link per step, the area map preview (<b>Preview with basemap</b> downloads the tiles), and <b>Save parameter sheet (XLSX)...</b>.',
+      '<b>New sheet</b> - starts over (asks first). The tab&rsquo;s draft is otherwise kept automatically between sessions.',
+    ],
+    steps: [
+      'Pick the <b>Job type</b>; check the filled values and type the job details.',
+      'On <b>Geometry</b>, set the intervals and channels, then <b>Add line</b> for each line with its length.',
+      'Walk Source, Receiver, Recording and Totals; fix anything listed in red, read anything listed as a check.',
+      'On <b>Coordinates</b>, paste or load the points, read what was detected, correct the CRS if needed and press <b>Confirm</b> (or tick <b>No area yet</b>).',
+      'On <b>Review and export</b>, press <b>Save parameter sheet (XLSX)...</b>.',
+    ],
+    sections: [
+      {
+        h: 'What is derived (nominal, planned)',
+        items: [
+          'Stations per line = line length / receiver interval + 1; shots per line = line length / source interval + 1.',
+          'Files = shots, or shots x 2 for SH work (one record per polarity).',
+          '2D nominal fold = channels x receiver interval / (2 x source interval). 3D: bin = RI/2 x SI/2, fold = (channels per patch line x RI / (2 x SLI)) x (patch lines / 2).',
+          'Nyquist = 500 / sample rate (ms); samples per trace = record length / sample rate + 1.',
+        ],
+      },
+      {
+        h: 'Checks it runs',
+        items: [
+          'High cut and the sweep frequencies must stay below Nyquist; low cut below high cut.',
+          'Active channels against the stations on the longest line.',
+          'Typed total shots and files against the plan (a mismatch is a check, not an error).',
+          'MASW and Vs30: the array should reach about 2x the target depth.',
+          'SH work: the geophones should be horizontal (or 3C).',
+        ],
+      },
+      {
+        h: 'The workbook',
+        items: [
+          '<b>Parameters</b> - a one-page layout, label / value / unit, one band per section; numbers are real numbers, dates are real dates, units sit in their own column.',
+          '<b>Area</b> - every point with Easting, Northing, latitude and longitude, the coordinate system, the extent and the area or line length.',
+          '<b>Map</b> - the area map as a picture: the named lines with start and end marked, the extent outline (or the closed polygon), a coordinate grid, scale bar, north arrow and title.',
+          '<b>About</b> - SeisConv version, dates, and the basemap attribution.',
+          'With <b>No area yet</b> there is no Area or Map sheet and the Parameters sheet says "Survey area: not provided".',
+        ],
+      },
+    ],
+    notes: [
+      'The map tiles come from the same servers as the SPS basemap, and only when the sheet is saved or you ask for a preview. Offline, or when tiles fail, the workbook is still saved: the map is drawn on grey with a visible note, and its coordinates are exact.',
+      'The basemap attribution is burned into the map picture and repeated on the About sheet.',
+      'A list in degrees gets its Easting / Northing in ITM inside Israel, otherwise in the UTM zone of the points.',
+      'The Client field remembers names you typed, on this computer only.',
+    ],
+  },
 };
