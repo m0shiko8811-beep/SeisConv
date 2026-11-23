@@ -43,8 +43,9 @@ elsewhere, and removing it later is a normal file or uninstall operation like
 any other app's local data.
 
 Files you explicitly convert or export (SEG-Y/SEG-D/SU conversions, SPS
-files, GeoTIFF exports, log exports) are written only to the folder you
-choose, through Windows' own save dialog.
+files, GeoTIFF exports, log exports, parameter sheets and `.seisparams`
+files) are written only to the folder you choose, through Windows' own
+save dialog.
 
 ## When SeisConv talks to the network, and why
 

@@ -5,6 +5,51 @@ All notable changes to SeisConv are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- **A new Parameters Sheet tab plans a seismic job and saves one Excel parameter sheet for
+  the field crew.** It is the thirteenth tab, last on the rail. An eight-step wizard (Job,
+  Geometry, Source, Receiver, Recording, Totals and conditions, Coordinates, Review and
+  export) collects the planned values: typed, picked from a list or derived from what you
+  typed, never measured. Nothing is mandatory: any step can be skipped or opened in any
+  order, and the saved sheet lists only what was filled in.
+- **Picking a job type fills recommended defaults.** The intervals, sample rate, record
+  length, low cut, source, stack, geophone frequency and type, spread type and channel
+  count are filled in, with the recommended range shown under each field. Every value
+  stays editable and free typing is always allowed. The line count, stations and shots per
+  line, files, Nyquist, samples per trace and the nominal fold are derived for you, and
+  hints point at a likely mistake (a high cut above Nyquist, typed totals that disagree
+  with the plan, an MASW array shorter than about twice the target depth, SH work with
+  vertical geophones) without ever blocking.
+- **Coordinates are understood, shown, and applied only when you confirm them.** Paste a
+  list or load TXT, CSV, KML or GeoJSON; the delimiter, columns, degrees or metres and a
+  proposed coordinate system are detected and shown, and nothing is applied until you press
+  Confirm. When the numbers cannot tell, it asks. When the point names describe different
+  lines from the Geometry step, it says so and offers to take the line names and lengths
+  from the coordinates.
+- **The workbook carries an area map.** It has a one-page Parameters sheet with real
+  numbers and real dates, an Area sheet with every point's Easting, Northing, latitude and
+  longitude, a Map sheet with the area map (named lines, extent, coordinate grid, scale bar
+  and north arrow) and an About sheet. An optional company logo (PNG or JPEG) goes beside
+  the title and on the map. The basemap behind the map is downloaded only when you save or
+  ask for a preview; No basemap fetches nothing, and with no connection the sheet is still
+  saved with the map drawn on grey.
+- **Saved layouts start the next similar job in one click.** Save as layout keeps the
+  parameters, the lines and the logo as a named layout on this computer, and adds the
+  coordinate list and the job-specific details only if you tick them. The list at the top
+  of the Job step loads a layout, and Manage renames, exports or deletes them. The same
+  configuration can be exported to, or imported from, a `.seisparams` file to keep
+  elsewhere or send to a colleague. The sheet itself still starts empty every time the app
+  opens. PRIVACY.md lists where layouts are kept.
+
+### Changed
+
+- **The build and release pipeline runs on the current GitHub Actions.** Checkout, setup,
+  cache and the artifact upload and download actions moved to their current major
+  versions. Nothing changes in the app itself.
+
 ## [0.8.8] - 2026-10-28
 
 ### Added
