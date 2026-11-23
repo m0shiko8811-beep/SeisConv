@@ -39,9 +39,9 @@ jobs:
         run: npm run test:core
 
   # The Playwright `_electron` end-to-end suite (`npm run qa`) is deliberately
-  # NOT run here. Seven of its twelve steps drive real SEG-Y, SEG-D and SPS
+  # NOT run here. Most of its fourteen steps drive real SEG-Y, SEG-D and SPS
   # survey files that are field data and are not in this repository, so on a
-  # hosted runner it can never reach 12/12. Running it here produced a red
+  # hosted runner it can never reach 14/14. Running it here produced a red
   # cross on every commit for an expected condition, which is worse than no
-  # signal at all: it trains everyone to ignore CI. The full 12/12 run is done
+  # signal at all: it trains everyone to ignore CI. The full 14/14 run is done
   # locally against real data before every release.
