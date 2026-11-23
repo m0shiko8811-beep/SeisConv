@@ -1032,6 +1032,8 @@ async function main() {
     // stale draft cannot leak in, and the title / dates are typed explicitly
     // (nothing from the clock or the app version reaches this canvas).
     await gotoTab(win, 'tab-paramsheet', 'panel-paramsheet');
+    // Keep a real draft (default profile) and put it back after the states.
+    const psSavedDraft = await win.evaluate(() => localStorage.getItem('seisconv.paramsheet'));
     const psNew = async () => {
       await win.click('#psNewBtn');
       await win.waitForSelector('#confirmBack.open', { timeout: 5000 });
@@ -1063,6 +1065,11 @@ async function main() {
     // Decimal degrees: converted to ITM in MAIN (paramSheetCoords) before drawing.
     await psMap('paramsheet:map:degrees:nobasemap', 'lat,lon\n31.7712,35.2101\n31.7720,35.2150\n31.7801,35.2155\n31.7790,35.2090\n');
     await psNew();
+    await sleep(700);   // past the draft save debounce
+    await win.evaluate((d) => {
+      if (d == null) localStorage.removeItem('seisconv.paramsheet');
+      else localStorage.setItem('seisconv.paramsheet', d);
+    }, psSavedDraft);
 
     console.log(`\nCaptured ${Object.keys(results).length} canvas states.`);
     if (errors.length) {

@@ -93,7 +93,7 @@ export const JOB_PRESETS: readonly JobPreset[] = [
     note: 'Clamp the tool at each depth; record both SH polarities.',
   },
   {
-    jobType: 'Crosshole', geometry: 'borehole', waveType: 'P + SH',
+    jobType: 'Crosshole', geometry: 'borehole', waveType: 'P + SV',
     rxIntervalM: 1, sxIntervalM: 1, sourceOffsetM: null, sampleRateMs: 0.0625, recordLengthS: 0.25, lowCutHz: null,
     sourceType: 'Sparker', stack: 3, geophoneFreqHz: 28, geophoneType: 'Borehole 3C', spreadType: 'N/A', channels: 3,
     hints: { rxInterval: '1 m (depth)', sxInterval: '1 m (depth)', sampleRate: '0.0625 ms', recordLength: '0.25 s', lowCut: 'None', source: 'Borehole source', stack: '3-5', geophoneFreq: '28-100 Hz', geophoneType: 'Borehole 3C', spreadType: 'Source and receiver at the same elevation', channels: '3-24' },

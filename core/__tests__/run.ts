@@ -8084,6 +8084,11 @@ async function paramSheetTests(): Promise<void> {
     assert.equal(r.points[0].x, 210000);
     assert.equal(r.points[0].y, 640100);
     assert.deepEqual([...new Set(r.points.map((p) => p.group))], ['L1', 'L2']);
+    // One line given by its two ends is a line; a numbered list is not.
+    const one = sniffCoords('M1-S,180000,662000\nM1-E,180046,662000\n');
+    assert.deepEqual(one.points.map((p) => p.group), ['M1', 'M1']);
+    const plain = sniffCoords('P1,180000,662000\nP2,180046,662000\nP3,180046,662050\n');
+    assert.ok(plain.points.every((p) => !p.group));
   });
   test('coordsniff: decimal degrees, latitude first, Israel', () => {
     const r = sniffCoords('31.7712,35.2101\n31.7720,35.2150\n31.7801,35.2155\n');
@@ -8159,6 +8164,31 @@ async function paramSheetTests(): Promise<void> {
     assert.equal(suggestGridCode(31.7, 35.2), 'EPSG:2039');
     assert.equal(suggestGridCode(48.1, 11.5), 'EPSG:32632');
     assert.equal(utmCodeFor(-33.9, 18.4), 'EPSG:32734');
+  });
+
+  test('coordsniff: a KML or GeoJSON polygon is one closed outline, not "1 line"', () => {
+    const kml = '<kml><Placemark><name>Site</name><Polygon><outerBoundaryIs><LinearRing><coordinates>'
+      + '35.1,31.5 35.2,31.5 35.2,31.6 35.1,31.6 35.1,31.5</coordinates></LinearRing></outerBoundaryIs></Polygon></Placemark></kml>';
+    const k = sniffCoords(kml);
+    assert.equal(k.closed, true);
+    assert.ok(/5 points, closed outline$/.test(k.summary), k.summary);
+    const gj = sniffCoords(JSON.stringify({ type: 'Feature', properties: { name: 'Area' }, geometry: { type: 'Polygon',
+      coordinates: [[[200000, 600000], [201000, 600000], [201000, 601000], [200000, 600000]]] } }));
+    assert.equal(gj.closed, true);
+    assert.equal(gj.crs?.code, 'EPSG:2039');
+    // Two closed rings are two lines, not one outline.
+    const two = sniffCoords(['id,E,N,line', 'a,200000,600000,A', 'b,200100,600000,A', 'c,200000,600000,A',
+      'd,200000,600000,B', 'e,200100,600000,B', 'f,200000,600000,B'].join('\n'));
+    assert.equal(two.closed, false);
+  });
+  test('sheet presets: Crosshole is P + SV, so it is not counted as SH work', () => {
+    const m = applyPreset(emptySheet(), 'Crosshole');
+    assert.equal(m.source.waveType, 'P + SV');
+    m.geom.sxIntervalM = 1;
+    m.geom.lines = [{ name: 'BH', lengthM: 10 }];
+    const d = deriveSheet(m);
+    assert.equal(d.polarities, 1);
+    assert.equal(d.files, d.shots);
   });
 
   // -- draft --

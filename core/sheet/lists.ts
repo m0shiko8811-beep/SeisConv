@@ -135,6 +135,7 @@ export const WAVE_TYPES: readonly string[] = [
   'SH-wave',
   'SV-wave',
   'P + SH',
+  'P + SV',
   'Surface wave (Rayleigh)',
   'Surface wave (Love)',
   'Passive / Ambient',

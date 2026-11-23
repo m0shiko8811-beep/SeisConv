@@ -596,6 +596,9 @@ const globalPageErrors = [];
       await sleep(250);
     };
     const fill = async (id, v) => { await win.fill('#' + id, String(v)); await win.locator('#' + id).dispatchEvent('change'); };
+    // `npm run qa` runs on the shared default profile: keep whatever draft the
+    // user has there and put it back afterwards (past the 400 ms save debounce).
+    const savedDraft = await win.evaluate(() => localStorage.getItem('seisconv.paramsheet'));
     try {
       await app.evaluate(async ({ dialog }, p) => { dialog.showSaveDialog = async () => ({ canceled: false, filePath: p }); }, out);
       await app.evaluate(() => {
@@ -657,6 +660,11 @@ const globalPageErrors = [];
     } finally {
       await app.evaluate(() => { if (globalThis.__qaRealFetch) { globalThis.fetch = globalThis.__qaRealFetch; delete globalThis.__qaRealFetch; } }).catch(() => {});
       await mockDialogs(app, []).catch(() => {});
+      await sleep(700);
+      await win.evaluate((d) => {
+        if (d == null) localStorage.removeItem('seisconv.paramsheet');
+        else localStorage.setItem('seisconv.paramsheet', d);
+      }, savedDraft).catch(() => {});
       try { rmSync(root, { recursive: true, force: true }); } catch { /* best effort */ }
     }
     return { assertFail: fails.length ? fails.join('; ') : null };

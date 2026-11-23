@@ -56,6 +56,11 @@ reach the network, only when you use them:
   export, SeisConv downloads the needed tiles from the same providers to
   build the image, and writes their attribution into the exported file (see
   NOTICE for the providers' own terms).
+- **Parameters Sheet area map.** When you save a parameter sheet with a
+  basemap chosen (or press "Preview with basemap"), SeisConv downloads the
+  tiles covering the survey area from the same providers, to draw the map
+  picture inside the workbook, and burns their attribution into it. Choose
+  "No basemap" and nothing is fetched.
 - **Observer's Log clock sync.** The "Sync clock" button queries a public
   time server (`pool.ntp.org` by default, or one you choose) over standard
   NTP, purely to read the time offset. Nothing about you or your survey is

@@ -569,13 +569,16 @@ async function computeArea(): Promise<AreaInfo | null> {
     }));
   }
   const xy: XY[] = pts.filter((p) => p.e != null && p.n != null).map((p) => ({ x: p.e as number, y: p.n as number }));
-  const hasGroups = pts.some((p) => p.group);
-  const closed = !hasGroups && isClosed(xy);
+  // A closed ring is an outline whether it came ungrouped (a pasted list) or as
+  // the one ring of a KML / GeoJSON polygon; several groups are lines.
+  const groupCount = new Set(pts.map((p) => p.group).filter(Boolean)).size;
+  const hasGroups = groupCount > 0;
+  const closed = groupCount <= 1 && isClosed(xy);
   let areaM2: number | null = null, lengthM: number | null = null;
   if (closed) { areaM2 = ringArea(xy); lengthM = ringPerimeter(xy); }
   else {
     areaM2 = xy.length >= 3 ? ringArea(convexHull(xy)) : 0;
-    if (hasGroups) {
+    if (hasGroups && !closed) {
       lengthM = 0;
       for (const g of groupsOf(pts)) lengthM += pathLength(g.pts.map((p) => ({ x: p.e as number, y: p.n as number })));
     }
@@ -653,7 +656,8 @@ function drawAreaMap(cv: HTMLCanvasElement, area: AreaInfo, grid: MapGrid, rgb: 
 
   const pts = area.points.filter((p) => fin(p.e) && fin(p.n));
   const pxOf = (p: AreaPoint) => toPx(grid, p.e as number, p.n as number);
-  const groups = groupsOf(pts);
+  // A closed outline is drawn as a polygon with numbered corners, never as a line.
+  const groups = area.closed ? [] : groupsOf(pts);
   // Extent outline (light) or the closed polygon (filled).
   if (area.closed && pts.length >= 3) {
     ctx.beginPath();
@@ -715,7 +719,7 @@ function drawAreaMap(cv: HTMLCanvasElement, area: AreaInfo, grid: MapGrid, rgb: 
     }
   });
   // Numbered points (ungrouped lists and polygon corners) - numbers match the Area sheet.
-  const loose = pts.filter((p) => !p.group);
+  const loose = area.closed ? pts : pts.filter((p) => !p.group);
   const lastDup = area.closed ? 1 : 0;
   if (loose.length <= 300) {
     loose.slice(0, loose.length - lastDup).forEach((p) => {

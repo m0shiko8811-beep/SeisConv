@@ -155,17 +155,22 @@ function proposeProjected(e: Range, n: Range, hint: string): { crs: CrsGuess | n
 // -- grouping -----------------------------------------------------------------------
 
 /** Group points into lines from their ids ("L1-S", "L1-E", "L2_1" ...) when that
- *  gives at least two groups of at least two points each. */
+ *  gives at least two groups of at least two points each - or ONE group whose
+ *  ids end in start / end words ("M1-S", "M1-E"), which is one line given by its
+ *  ends. A plain numbered list ("P1".."P5") stays ungrouped. */
 function groupFromIds(pts: SniffPoint[]): void {
   if (pts.some((p) => p.group)) return;
+  let endWords = true;
   const pre = pts.map((p) => {
     const m = /^(.*?[A-Za-z].*?)[-_ :.]?(start|end|s|e|a|b|\d+)$/i.exec(p.id.trim());
+    if (m && /^\d+$/.test(m[2])) endWords = false;
     return m && m[1] ? m[1].replace(/[-_ :.]+$/, '') : '';
   });
   if (pre.some((g) => !g)) return;
   const count = new Map<string, number>();
   for (const g of pre) count.set(g, (count.get(g) ?? 0) + 1);
-  if (count.size < 2 || [...count.values()].some((c) => c < 2)) return;
+  if ([...count.values()].some((c) => c < 2)) return;
+  if (count.size < 2 && !(count.size === 1 && endWords)) return;
   pts.forEach((p, i) => { p.group = pre[i]; });
 }
 
@@ -506,7 +511,9 @@ export function sniffCoords(input: string, opts: SniffOpts = {}): SniffResult {
   r.truncated = r.truncated || truncated;
   groupFromIds(r.points);
   const pts = r.points;
-  r.closed = pts.length >= 4 && pts[0].x === pts[pts.length - 1].x && pts[0].y === pts[pts.length - 1].y;
+  // Closed = first point == last point, for an ungrouped list or a single ring.
+  const nGroups = new Set(pts.map((p) => p.group).filter(Boolean)).size;
+  r.closed = nGroups <= 1 && pts.length >= 4 && pts[0].x === pts[pts.length - 1].x && pts[0].y === pts[pts.length - 1].y;
   r.summary = sniffSummary(r);
   return r;
 }
@@ -517,5 +524,7 @@ export function sniffSummary(r: SniffResult): string {
   const crs = r.crs ? `${r.crs.name}${r.crs.code ? ` (${r.crs.code})` : ''}` : 'coordinate system not recognised';
   const n = r.points.length;
   const groups = new Set(r.points.map((p) => p.group).filter(Boolean)).size;
-  return `${kind}, ${crs}, ${n} point${n === 1 ? '' : 's'}${groups ? ` on ${groups} line${groups === 1 ? '' : 's'}` : ''}${r.closed ? ', closed outline' : ''}`;
+  // One closed ring is an outline (a KML / GeoJSON polygon), not "1 line".
+  const lines = groups && !(r.closed && groups === 1) ? ` on ${groups} line${groups === 1 ? '' : 's'}` : '';
+  return `${kind}, ${crs}, ${n} point${n === 1 ? '' : 's'}${lines}${r.closed ? ', closed outline' : ''}`;
 }

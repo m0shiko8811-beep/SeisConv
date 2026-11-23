@@ -40,6 +40,7 @@ SeisConv is an offline desktop toolkit for seismic field data: convert between f
 - **Observer Log** - a per-shot field log, wizard-built and exportable.
 - **Sweeps** - design, inspect and export a vibroseis pilot sweep, and QC a recorded one against the design.
 - **WiFiSync** - keep a folder identical on two machines over WiFi, with no router, cloud or account.
+- **Parameters Sheet** - plan a job step by step and save one Excel parameter sheet with the area coordinates and an area map.
 
 ### Keyboard shortcuts
 
@@ -91,7 +92,7 @@ SeisConv is an offline desktop toolkit for seismic field data: convert between f
 ### Good to know
 
 - Amplitude in SEG-Y/SEG-D carries no physical unit - SeisConv labels it “Amplitude (sample value)” and never invents volts or millivolts.
-- SeisConv is offline-first. Four things can reach the internet, none of them required and none contacted unless you ask for it: the SPS “Real map” basemap and the optional basemap band in a GeoTIFF export (both fetch map tiles), the **NTP** time source in the Observer’s Log (queries a time server when you press **Sync**), and **Check for updates** at the foot of the Help panel (asks GitHub once, on your click; its **Update now** downloads the installer only when you click and confirm it). Everything else works with no connection.
+- SeisConv is offline-first. Four things can reach the internet, none of them required and none contacted unless you ask for it: the SPS “Real map” basemap, the optional basemap band in a GeoTIFF export and the area-map basemap of the Parameters Sheet (all three fetch map tiles), the **NTP** time source in the Observer’s Log (queries a time server when you press **Sync**), and **Check for updates** at the foot of the Help panel (asks GitHub once, on your click; its **Update now** downloads the installer only when you click and confirm it). Everything else works with no connection.
 
 ---
 
