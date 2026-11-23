@@ -100,7 +100,7 @@ export const MANUAL: Record<string, HelpTopic> = {
     ],
     notes: [
       'Amplitude in SEG-Y/SEG-D carries no physical unit - SeisConv labels it “Amplitude (sample value)” and never invents volts or millivolts.',
-      'SeisConv is offline-first. Four things can reach the internet, none of them required and none contacted unless you ask for it: the SPS “Real map” basemap, the optional basemap band in a GeoTIFF export and the area-map basemap of the Parameters Sheet (all three fetch map tiles), the <b>NTP</b> time source in the Observer’s Log (queries a time server when you press <b>Sync</b>), and <b>Check for updates</b> at the foot of the Help panel (asks GitHub once, on your click; its <b>Update now</b> downloads the installer only when you click and confirm it). Everything else works with no connection.',
+      'SeisConv is offline-first. Five things can reach the internet, none of them required and none contacted unless you ask for it: the SPS “Real map” basemap, the optional basemap band in a GeoTIFF export and the area-map basemap of the Parameters Sheet (all three fetch map tiles), the <b>NTP</b> time source in the Observer’s Log (queries a time server when you press <b>Sync</b>), and <b>Check for updates</b> at the foot of the Help panel (asks GitHub once, on your click; its <b>Update now</b> downloads the installer only when you click and confirm it). Everything else works with no connection.',
     ],
   },
   conv: {
