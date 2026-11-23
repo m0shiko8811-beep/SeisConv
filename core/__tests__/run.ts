@@ -180,6 +180,16 @@ import { bandStats, rasterGrid, rasterizeCounts, rasterizeIDW, rasterizeLayout }
 import { bytesToBase64, base64ToBytes } from '../base64';
 import { chooseCoordScalar, REV1_TRACE_WORDS, STD_TRACE_WORDS } from '../formats/traceheader';
 import JSZip from 'jszip';
+import { createHash } from 'node:crypto';
+import { buildStyledXlsx, xlsxCleanText } from '../export/xlsx';
+import { JOB_TYPES, SOURCE_TYPES, MANUFACTURER_MODELS, modelsFor, sourceKind, isHorizontalPhone } from '../sheet/lists';
+import { JOB_PRESETS, presetFor } from '../sheet/presets';
+import { emptySheet, applyPreset, deriveSheet, pointsAlong, validateStep, crossChecks, exportBlockers, isIsoDate, type ParamSheet } from '../sheet/model';
+import { ringArea, ringPerimeter, cleanRing, isClosed, pathLength, bbox, selfIntersects, convexHull } from '../gis/polygon';
+import { sniffCoords, parseCoordField, suggestGridCode, utmCodeFor, SNIFF_MAX_POINTS } from '../sheet/coordsniff';
+import { loadDraft, hasPollutionKey, PS_DRAFT_MAX_CHARS } from '../sheet/draft';
+import { buildSheetWorkbook, excelDateSerial } from '../sheet/layout';
+import { fitMapGrid, toPx, niceStep, scaleBarMetres, ticks, fmtDistance } from '../sheet/mapframe';
 import type { ParsedFile, SPSData, SPSPoint, Trace, TraceGeom } from '../index';
 import type { RGB } from '../render/colormaps';
 import {
@@ -6647,7 +6657,7 @@ function cyberSurveyHardeningTests(): void {
 }
 
 cyberSurveyHardeningTests();
-xlsxExportRegression().then(() => fieldHardeningTests()).then(() => {
+xlsxExportRegression().then(() => fieldHardeningTests()).then(() => paramSheetTests()).then(() => {
   console.log('\n----------------------');
   console.log(`passed: ${passed}   failed: ${failed}   skipped: ${skipped}\n`);
   process.exitCode = failed > 0 ? 1 : 0;
@@ -7879,3 +7889,400 @@ function versionTests(): void {
 reduceTests();
 traceAxisTests();
 versionTests();
+
+// ---------------------------------------------------------------------------
+// Parameters Sheet (core/sheet + core/gis/polygon + styled xlsx)
+// ---------------------------------------------------------------------------
+async function paramSheetTests(): Promise<void> {
+  console.log('\n[Parameters Sheet: model, polygon, coordsniff, draft, styled xlsx]');
+
+  // -- the observer-log writer is untouched: its parts are pinned byte for byte --
+  await atest('xlsx: observer-log parts are byte-identical to the pre-styling writer', async () => {
+    const tables: SheetTable[] = [
+      { name: 'Project', header: ['Field', 'Value'], rows: [['Job', 'Line 395 2026']] },
+      { name: 'Observer Log', header: ['SP', 'File', 'Time', 'Note'], rows: [[1001, 18, '08:14:03', 'FB-Shot-042'], [1002, 19, '08:15:41', 'ok'], [3.5, -0, ' a<b&"c\' ', '']] },
+    ];
+    const parts: [string, string][] = [];
+    const rec = { file(n: string, d: string | Uint8Array) { parts.push([n, typeof d === 'string' ? d : '<bytes>']); }, async generateAsync() { return new Uint8Array(0); } };
+    await buildXlsx(tables, rec);
+    const h = createHash('sha256');
+    for (const [n, d] of parts) { h.update(n); h.update('\0'); h.update(d); h.update('\0'); }
+    assert.equal(parts.map((p) => p[0]).join(','), '[Content_Types].xml,_rels/.rels,xl/workbook.xml,xl/_rels/workbook.xml.rels,xl/worksheets/sheet1.xml,xl/worksheets/sheet2.xml');
+    assert.equal(h.digest('hex'), '252b279add51f1688f940a9bf40201b26e339629571e53c0be84ee4bcc089d46');
+  });
+
+  // -- lists and presets --
+  test('sheet lists: 14 job types, each with a preset, no long dashes anywhere', () => {
+    assert.equal(JOB_TYPES.length, 14);
+    for (const jt of JOB_TYPES) assert.ok(presetFor(jt), `no preset for ${jt}`);
+    const blob = JSON.stringify([JOB_TYPES, JOB_PRESETS, SOURCE_TYPES, MANUFACTURER_MODELS]);
+    assert.ok(!/[–—]/.test(blob), 'a long dash slipped into the lists');
+    assert.deepEqual(modelsFor('sercel'), MANUFACTURER_MODELS.Sercel);
+    assert.deepEqual(modelsFor('nobody'), []);
+    assert.equal(sourceKind('Vibroseis'), 'vibrator');
+    assert.equal(sourceKind('my custom hammer'), 'surface');
+    assert.equal(isHorizontalPhone('Horizontal (H)'), true);
+    assert.equal(isHorizontalPhone('Vertical (Z)'), false);
+  });
+
+  // -- model: presets, derived values, checks --
+  const vib = (): ParamSheet => {
+    const m = applyPreset(emptySheet(), 'Vibroseis 2D Reflection');
+    m.geom.lines = [{ name: 'A-01', lengthM: 12000 }, { name: 'A-02', lengthM: 12000 }, { name: 'A-03', lengthM: 12000 }];
+    m.job.targetDepthM = 2000;
+    return m;
+  };
+  test('sheet model: a preset fills real numbers (not "2 ms" text)', () => {
+    const m = vib();
+    assert.equal(m.job.geometry, '2D');
+    assert.equal(m.recording.sampleRateMs, 2);
+    assert.equal(m.geom.rxIntervalM, 10);
+    assert.equal(m.geom.sxIntervalM, 20);
+    assert.equal(m.source.sweepEndHz, 90);
+    assert.equal(m.recording.correlation, 'Yes');
+  });
+  test('sheet derive: 3 x 12 km at 10 / 20 m with 480 channels gives 1803 shots and fold 120', () => {
+    const d = deriveSheet(vib());
+    assert.equal(d.lineCount, 3);
+    assert.equal(d.shots, 1803);
+    assert.equal(d.files, 1803);
+    assert.equal(d.maxStations, 1201);
+    assert.equal(d.fold2d, 120);
+    assert.equal(d.nyquistHz, 250);
+    assert.equal(d.totalLengthM, 36000);
+    assert.equal(d.samplesPerTrace, 2001);
+  });
+  test('sheet derive: SH work counts two polarities per shot', () => {
+    const m = applyPreset(emptySheet(), 'Shallow 2D Reflection (SH)');
+    m.geom.lines = [{ name: 'S1', lengthM: 100 }];
+    const d = deriveSheet(m);
+    assert.equal(d.shots, 51);
+    assert.equal(d.files, 102);
+  });
+  test('sheet derive: 3D nominal bin and fold', () => {
+    const m = emptySheet();
+    m.job.geometry = '3D';
+    Object.assign(m.geom, { rxIntervalM: 25, sxIntervalM: 50, sliM: 250, rliM: 300, patchLines: 10, patchChannelsPerLine: 120 });
+    const d = deriveSheet(m);
+    assert.equal(d.binInlineM, 12.5);
+    assert.equal(d.binCrosslineM, 25);
+    assert.equal(d.fold3dInline, 6);
+    assert.equal(d.fold3dCrossline, 5);
+    assert.equal(d.fold3d, 30);
+    assert.equal(d.channels3d, 1200);
+  });
+  test('sheet derive: non-finite and missing values give null, never NaN', () => {
+    const m = emptySheet();
+    m.geom.lines = [{ name: 'x', lengthM: NaN as unknown as number }];
+    m.geom.rxIntervalM = 0;
+    const d = deriveSheet(m);
+    for (const v of [d.shots, d.fold2d, d.maxStations, d.nyquistHz, d.spreadLengthM]) assert.equal(v, null);
+    assert.equal(pointsAlong(10, -1), null);
+    assert.equal(pointsAlong(10, 2.5), 5);
+  });
+  test('sheet validate: job type required, dates checked, end before start refused', () => {
+    const m = emptySheet();
+    assert.ok(validateStep('job', m).errors.some((e) => e.field === 'job.jobType'));
+    m.job.jobType = 'Downhole';
+    m.job.startDate = '2026-12-10';
+    m.job.endDate = '2026-12-01';
+    assert.ok(validateStep('job', m).errors.some((e) => e.field === 'job.endDate'));
+    m.job.endDate = '2026-02-30';
+    assert.ok(validateStep('job', m).errors.some((e) => /not a valid date/.test(e.msg)));
+    m.job.endDate = '2026-12-12';
+    assert.equal(validateStep('job', m).errors.length, 0);
+    assert.equal(isIsoDate('2028-02-29'), true);
+    assert.equal(isIsoDate('2027-02-29'), false);
+  });
+  test('sheet validate: geometry needs a named line, duplicate names refused, fold < 1 in 3D is an error', () => {
+    const m = vib();
+    assert.equal(validateStep('geometry', m).errors.length, 0);
+    m.geom.lines.push({ name: 'a-01', lengthM: 10 });
+    assert.ok(validateStep('geometry', m).errors.some((e) => /used twice/.test(e.msg)));
+    m.geom.lines = [];
+    assert.ok(validateStep('geometry', m).errors.some((e) => e.field === 'geom.lines'));
+    const t = emptySheet();
+    t.job.geometry = '3D';
+    Object.assign(t.geom, { rxIntervalM: 25, sxIntervalM: 50, sliM: 5000, rliM: 300, patchLines: 1, patchChannelsPerLine: 10, lines: [{ name: 'L', lengthM: 100 }] });
+    assert.ok(validateStep('geometry', t).errors.some((e) => /below 1/.test(e.msg)));
+  });
+  test('sheet validate: high cut at Nyquist and low >= high are errors', () => {
+    const m = vib();
+    m.recording.highCutHz = 250;
+    assert.ok(validateStep('recording', m).errors.some((e) => /Nyquist/.test(e.msg)));
+    m.recording.highCutHz = 200;
+    m.recording.lowCutHz = 300;
+    assert.ok(validateStep('recording', m).errors.some((e) => e.field === 'recording.lowCutHz'));
+  });
+  test('sheet cross-checks: sweep above Nyquist, typed totals, MASW depth, SH phones', () => {
+    const m = vib();
+    m.recording.sampleRateMs = 4; // Nyquist 125
+    m.source.sweepEndHz = 150;
+    assert.ok(crossChecks(m).errors.some((e) => e.field === 'source.sweepEndHz'));
+    m.recording.sampleRateMs = 2;
+    m.totals.totalShots = 1800;
+    assert.ok(crossChecks(m).warnings.some((w) => /1800.*1803/.test(w.msg)));
+    const masw = applyPreset(emptySheet(), 'Vs30 Site Classification (SI 413)');
+    masw.job.targetDepthM = 30;
+    masw.geom.lines = [{ name: 'M1', lengthM: 46 }];
+    assert.ok(crossChecks(masw).warnings.some((w) => /2x the target depth/.test(w.msg)));
+    masw.source.waveType = 'SH-wave';
+    masw.receiver.geophoneType = 'Vertical (Z)';
+    assert.ok(crossChecks(masw).warnings.some((w) => /horizontal/.test(w.msg)));
+    masw.receiver.geophoneType = 'Horizontal (H)';
+    assert.ok(!crossChecks(masw).warnings.some((w) => /horizontal/.test(w.msg)));
+  });
+  test('sheet export blockers: coordinates must be confirmed unless skipped', () => {
+    const m = vib();
+    m.coords.points = [{ id: 'a', x: 1, y: 2 }];
+    assert.ok(exportBlockers(m).some((e) => e.field === 'coords.crs'));
+    m.coords.skip = true;
+    assert.ok(!exportBlockers(m).some((e) => e.field.startsWith('coords')));
+  });
+
+  // -- polygon --
+  test('polygon: square area, perimeter, closing vertex, NaN dropped', () => {
+    const sq = [{ x: 0, y: 0 }, { x: 100, y: 0 }, { x: 100, y: 100 }, { x: 0, y: 100 }, { x: 0, y: 0 }];
+    assert.equal(ringArea(sq), 10000);
+    assert.equal(ringPerimeter(sq), 400);
+    assert.equal(cleanRing(sq).length, 4);
+    assert.equal(isClosed(sq), true);
+    assert.equal(ringArea([...sq, { x: NaN, y: 5 }]), 10000);
+    assert.equal(ringArea([{ x: 1, y: 1 }, { x: 2, y: 2 }]), 0);
+    assert.equal(pathLength([{ x: 0, y: 0 }, { x: 3, y: 4 }]), 5);
+    assert.deepEqual(bbox([{ x: 5, y: -1 }, { x: -2, y: 7 }]), { minX: -2, minY: -1, maxX: 5, maxY: 7 });
+    assert.equal(bbox([]), null);
+  });
+  test('polygon: a real ITM rectangle keeps its area at large coordinates', () => {
+    const r = [{ x: 200000.5, y: 600000.25 }, { x: 201500.5, y: 600000.25 }, { x: 201500.5, y: 600800.25 }, { x: 200000.5, y: 600800.25 }];
+    assert.equal(ringArea(r), 1500 * 800);
+  });
+  test('polygon: self-intersection (bow tie) found, simple ring passes, hull is convex', () => {
+    assert.equal(selfIntersects([{ x: 0, y: 0 }, { x: 10, y: 10 }, { x: 10, y: 0 }, { x: 0, y: 10 }]), true);
+    assert.equal(selfIntersects([{ x: 0, y: 0 }, { x: 10, y: 0 }, { x: 10, y: 10 }, { x: 0, y: 10 }]), false);
+    const h = convexHull([{ x: 0, y: 0 }, { x: 10, y: 0 }, { x: 5, y: 2 }, { x: 10, y: 10 }, { x: 0, y: 10 }]);
+    assert.equal(h.length, 4);
+    assert.equal(ringArea(h), 100);
+  });
+
+  // -- coordinate sniffing --
+  test('coordsniff: CSV with header in ITM metres', () => {
+    const r = sniffCoords('id,E,N\nA,200000,600000\nB,200500,600000\nC,200500,600400\nD,200000,600400\n');
+    assert.equal(r.delimiter, 'comma');
+    assert.equal(r.hasHeader, true);
+    assert.equal(r.kind, 'projected');
+    assert.equal(r.crs?.code, 'EPSG:2039');
+    assert.equal(r.confident, true);
+    assert.equal(r.points.length, 4);
+    assert.deepEqual(r.points[1], { id: 'B', x: 200500, y: 600000, group: undefined });
+    assert.ok(/projected metres, .*EPSG:2039.*4 points/.test(r.summary));
+  });
+  test('coordsniff: whitespace list, Northing first, line ends grouped by id', () => {
+    const r = sniffCoords('L1-S 640100.0 210000.0\nL1-E 641100.0 210000.0\nL2-S 640100.0 210300.0\nL2-E 641100.0 210300.0');
+    assert.equal(r.delimiter, 'space');
+    assert.equal(r.crs?.code, 'EPSG:2039');
+    assert.equal(r.points[0].x, 210000);
+    assert.equal(r.points[0].y, 640100);
+    assert.deepEqual([...new Set(r.points.map((p) => p.group))], ['L1', 'L2']);
+  });
+  test('coordsniff: decimal degrees, latitude first, Israel', () => {
+    const r = sniffCoords('31.7712,35.2101\n31.7720,35.2150\n31.7801,35.2155\n');
+    assert.equal(r.kind, 'degrees');
+    assert.equal(r.crs?.code, 'EPSG:4326');
+    assert.equal(r.points[0].x, 35.2101);
+    assert.equal(r.points[0].y, 31.7712);
+    assert.equal(r.orderAmbiguous, false);
+  });
+  test('coordsniff: degrees whose order cannot be told are flagged, and order can be forced', () => {
+    const r = sniffCoords('45.1,10.2\n45.2,10.3\n');
+    assert.equal(r.orderAmbiguous, true);
+    assert.equal(r.confident, false);
+    const f = sniffCoords('45.1,10.2\n45.2,10.3\n', { order: 'xy' });
+    assert.equal(f.points[0].x, 45.1);
+    assert.equal(f.orderAmbiguous, false);
+  });
+  test('coordsniff: degrees-minutes-seconds with hemisphere letters', () => {
+    const r = sniffCoords('P1;31°46\'16.3"N;35°12\'36.4"E\nP2;31°46\'20"N;35°12\'40"E\n');
+    assert.equal(r.kind, 'dms');
+    assert.ok(Math.abs(r.points[0].y - (31 + 46 / 60 + 16.3 / 3600)) < 1e-9);
+    assert.ok(Math.abs(r.points[0].x - (35 + 12 / 60 + 36.4 / 3600)) < 1e-9);
+    assert.equal(parseCoordField('35°12\'36"W')?.v, -(35 + 12 / 60 + 36 / 3600));
+  });
+  test('coordsniff: UTM metres ask for the zone unless the job already named it', () => {
+    const txt = 'x y\n690000 3520000\n691000 3520500\n';
+    const r = sniffCoords(txt);
+    assert.equal(r.confident, false);
+    assert.deepEqual(r.candidates.map((c) => c.code), ['EPSG:32636', 'EPSG:32637']);
+    const h = sniffCoords(txt, { hintCode: 'EPSG:32636' });
+    assert.equal(h.confident, true);
+    assert.equal(h.crs?.code, 'EPSG:32636');
+  });
+  test('coordsniff: KML line strings are WGS84 and keep their names', () => {
+    const kml = '<?xml version="1.0"?><kml><Document><Placemark><name>Line &amp; A</name><LineString><coordinates>35.1,31.5,0 35.2,31.5,0</coordinates></LineString></Placemark>'
+      + '<Placemark><name>Well</name><Point><coordinates>35.15,31.52</coordinates></Point></Placemark></Document></kml>';
+    const r = sniffCoords(kml, { fileName: 'plan.kml' });
+    assert.equal(r.format, 'kml');
+    assert.equal(r.crs?.code, 'EPSG:4326');
+    assert.equal(r.points.length, 3);
+    assert.equal(r.points[0].group, 'Line & A');
+    assert.equal(r.points[2].id, 'Well');
+  });
+  test('coordsniff: GeoJSON with a named CRS, and without one', () => {
+    const named = JSON.stringify({ type: 'FeatureCollection', crs: { type: 'name', properties: { name: 'urn:ogc:def:crs:EPSG::2039' } },
+      features: [{ type: 'Feature', properties: { name: 'R1' }, geometry: { type: 'LineString', coordinates: [[200000, 600000], [201000, 600000]] } }] });
+    const r = sniffCoords(named);
+    assert.equal(r.format, 'geojson');
+    assert.equal(r.crs?.code, 'EPSG:2039');
+    assert.equal(r.confident, true);
+    assert.equal(r.points[0].group, 'R1');
+    const plain = sniffCoords(JSON.stringify({ type: 'Point', coordinates: [35.2, 31.7] }));
+    assert.equal(plain.crs?.code, 'EPSG:4326');
+    assert.equal(plain.points[0].x, 35.2);
+  });
+  test('coordsniff: junk lines are skipped, not thrown; decimal comma with semicolons', () => {
+    const r = sniffCoords('E;N\n200000,5;600000,25\nhello world\n200100,5;600100,25\n;;;\n');
+    assert.equal(r.points.length, 2);
+    assert.equal(r.points[0].x, 200000.5);
+    assert.ok(r.skipped.length >= 1);
+    for (const junk of ['', '\u0000\u0001', '{not json', '<kml><Placemark><coordinates>a,b</coordinates></Placemark></kml>', 'x\n'.repeat(70000)]) {
+      const j = sniffCoords(junk);
+      assert.ok(Array.isArray(j.points));
+    }
+  });
+  test('coordsniff: input is bounded (points capped, long lines skipped)', () => {
+    const many = Array.from({ length: 2500 }, (_, i) => `${200000 + i},${600000 + i}`).join('\n');
+    const r = sniffCoords(many);
+    assert.equal(r.points.length, SNIFF_MAX_POINTS);
+    assert.equal(r.truncated, true);
+    const long = sniffCoords(`${'9'.repeat(3000)},1\n200000,600000\n200001,600001`);
+    assert.ok(long.skipped.some((s) => /too long/.test(s.reason)));
+    assert.equal(suggestGridCode(31.7, 35.2), 'EPSG:2039');
+    assert.equal(suggestGridCode(48.1, 11.5), 'EPSG:32632');
+    assert.equal(utmCodeFor(-33.9, 18.4), 'EPSG:32734');
+  });
+
+  // -- draft --
+  test('sheet draft: a saved model round-trips through loadDraft', () => {
+    const m = vib();
+    m.coords.points = [{ id: 'a', x: 200000, y: 600000 }];
+    m.coords.crsCode = 'EPSG:2039';
+    m.coords.confirmed = true;
+    const back = loadDraft(JSON.stringify(m));
+    assert.deepEqual(back, JSON.parse(JSON.stringify(m)));
+  });
+  test('sheet draft: pollution keys refused, junk clamped, unknown fields dropped', () => {
+    assert.equal(loadDraft('{"v":1,"job":{"__proto__":{"polluted":1}}}'), null);
+    assert.equal(loadDraft('{"v":1,"geom":{"lines":[{"constructor":{"x":1}}]}}'), null);
+    assert.equal(loadDraft('{"v":1,"prototype":{}}'), null);
+    assert.equal(loadDraft('{"v":2}'), null);
+    assert.equal(loadDraft('not json'), null);
+    assert.equal(loadDraft('x'.repeat(PS_DRAFT_MAX_CHARS + 1)), null);
+    assert.equal(({} as Record<string, unknown>).polluted, undefined);
+    const lines = Array.from({ length: 500 }, (_, i) => ({ name: `L${i}`, lengthM: 10 }));
+    const d = loadDraft(JSON.stringify({ v: 1, evil: 1, job: { jobType: 7, notes: 'n'.repeat(5000), startDate: '2026-13-40', geometry: 'cube' },
+      geom: { lines, rxIntervalM: 'ten', activeChannels: 1e12 }, coords: { crsCode: 'javascript:x', basemap: 'evil', points: [{ x: 'a', y: 1 }, { id: 'ok', x: 1, y: 2 }] } }));
+    assert.ok(d);
+    assert.equal(d!.job.jobType, '');
+    assert.equal(d!.job.notes.length, 1000);
+    assert.equal(d!.job.startDate, '');
+    assert.equal(d!.job.geometry, '2D');
+    assert.equal(d!.geom.lines.length, 200);
+    assert.equal(d!.geom.rxIntervalM, null);
+    assert.equal(d!.geom.activeChannels, 1e7);
+    assert.equal(d!.coords.crsCode, '');
+    assert.equal(d!.coords.basemap, 'satellite');
+    assert.equal(d!.coords.points.length, 1);
+    assert.ok(!('evil' in (d as unknown as Record<string, unknown>)));
+    assert.equal(hasPollutionKey(JSON.parse('{"a":[{"b":{"__proto__":1}}]}')), true);
+  });
+
+  // -- map frame --
+  test('map frame: one point still gets a finite frame; nice steps and scale bar', () => {
+    const g = fitMapGrid({ minE: 200000, minN: 600000, maxE: 200000, maxN: 600000 }, 1600, 1130, { left: 90, top: 110, right: 40, bottom: 90 });
+    assert.ok(g && Number.isFinite(g.pixelSize) && g.pixelSize > 0);
+    const c = toPx(g!, 200000, 600000);
+    assert.ok(Math.abs(c.x - (90 + (1600 - 130) / 2)) < 1e-6);
+    assert.equal(fitMapGrid({ minE: NaN, minN: 0, maxE: 1, maxN: 1 }, 100, 100, { left: 0, top: 0, right: 0, bottom: 0 }), null);
+    assert.equal(niceStep(1000, 5), 200);
+    assert.equal(niceStep(0), 1);
+    assert.equal(scaleBarMetres(1, 300), 200);
+    assert.equal(scaleBarMetres(NaN, 300), 0);
+    assert.deepEqual(ticks(0, 1000, 250), [0, 250, 500, 750, 1000]);
+    assert.deepEqual(ticks(5, 1, 1), []);
+    assert.equal(fmtDistance(1500), '1.5 km');
+  });
+
+  // -- styled workbook --
+  const PNG1 = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0, 0, 0, 13, 0x49, 0x48, 0x44, 0x52, 0, 0, 0, 1, 0, 0, 0, 1, 8, 2, 0, 0, 0]);
+  const meta = { version: '0.0.0-test', preparedDate: '2026-11-23', generatedAt: '2026-11-23 10:00' };
+  const readSheets = async (bytes: Uint8Array) => {
+    const zip = await JSZip.loadAsync(bytes);
+    const get = async (n: string) => (zip.file(n) ? zip.file(n)!.async('string') : null);
+    return { zip, get };
+  };
+  await atest('styled xlsx: no area gives Parameters + About only, with "Survey area: not provided"', async () => {
+    const m = vib();
+    m.coords.skip = true;
+    m.job.startDate = '2027-01-05';
+    const sheets = buildSheetWorkbook(m, null, null, meta);
+    assert.deepEqual(sheets.map((s) => s.name), ['Parameters', 'About']);
+    const { zip, get } = await readSheets(await buildStyledXlsx(sheets, new JSZip()));
+    const wb = (await get('xl/workbook.xml'))!;
+    assert.ok(/name="Parameters"/.test(wb) && /name="About"/.test(wb) && !/name="Area"/.test(wb));
+    const s1 = (await get('xl/worksheets/sheet1.xml'))!;
+    assert.ok(s1.includes('Survey area: not provided'));
+    assert.ok(s1.includes('Vibroseis 2D Reflection'));
+    // Numbers are numbers: the 480 channels and the derived 1803 shots are <v> cells.
+    assert.ok(/<v>480<\/v>/.test(s1) && /<v>1803<\/v>/.test(s1));
+    // The start date is a real date serial (2027-01-05 = 46392) with a date format.
+    assert.ok(/<v>46392<\/v>/.test(s1));
+    const styles = (await get('xl/styles.xml'))!;
+    assert.ok(/formatCode="yyyy-mm-dd"/.test(styles));
+    assert.ok(zip.file('xl/styles.xml') && !zip.file('xl/media/image1.png'));
+    // Element order Excel requires: sheetPr, dimension, sheetViews, sheetFormatPr, cols, sheetData, mergeCells, pageMargins, pageSetup.
+    const order = ['<sheetPr>', '<dimension', '<sheetViews>', '<sheetFormatPr', '<cols>', '<sheetData>', '<mergeCells', '<pageMargins', '<pageSetup'];
+    const at = order.map((t) => s1.indexOf(t));
+    assert.ok(at.every((p) => p >= 0), `missing part: ${order[at.findIndex((p) => p < 0)]}`);
+    assert.deepEqual([...at].sort((a, b) => a - b), at);
+  });
+  await atest('styled xlsx: area + map adds Area and Map sheets with the embedded PNG', async () => {
+    const m = vib();
+    const area = {
+      crsCode: 'EPSG:2039', crsName: 'Israel 1993 / Israeli TM Grid', gridCode: 'EPSG:2039', gridName: 'Israel 1993 / Israeli TM Grid',
+      points: [{ id: 'A', x: 200000, y: 600000, e: 200000, n: 600000, lat: 31.73, lon: 35.21 }, { id: 'B', x: 201000, y: 600000, e: 201000, n: 600000, lat: 31.73, lon: 35.22 }],
+      closed: false, areaM2: 0, lengthM: 1000, extent: { minE: 200000, minN: 600000, maxE: 201000, maxN: 600000 },
+    };
+    const sheets = buildSheetWorkbook(m, area, { png: PNG1, widthPx: 1600, heightPx: 1130, attribution: 'Test tiles', note: '' }, meta);
+    assert.deepEqual(sheets.map((s) => s.name), ['Parameters', 'Area', 'Map', 'About']);
+    const { zip, get } = await readSheets(await buildStyledXlsx(sheets, new JSZip()));
+    const img = await zip.file('xl/media/image1.png')!.async('uint8array');
+    assert.deepEqual([...img], [...PNG1]);
+    const ct = (await get('[Content_Types].xml'))!;
+    assert.ok(/Extension="png" ContentType="image\/png"/.test(ct));
+    assert.ok(/\/xl\/drawings\/drawing1\.xml/.test(ct) && /\/xl\/styles\.xml/.test(ct));
+    const s3 = (await get('xl/worksheets/sheet3.xml'))!;
+    assert.ok(s3.indexOf('<pageSetup') < s3.indexOf('<drawing r:id="rId1"/>'));
+    assert.ok(/drawings\/drawing1\.xml/.test((await get('xl/worksheets/_rels/sheet3.xml.rels'))!));
+    assert.ok(/media\/image1\.png/.test((await get('xl/drawings/_rels/drawing1.xml.rels'))!));
+    const s2 = (await get('xl/worksheets/sheet2.xml'))!;
+    assert.ok(/<pane ySplit="9"/.test(s2));
+    assert.ok(/<v>31\.73<\/v>/.test(s2) && /<v>201000<\/v>/.test(s2));
+    const about = (await get('xl/worksheets/sheet4.xml'))!;
+    assert.ok(about.includes('Test tiles') && about.includes('PLANNED'));
+    const wbRels = (await get('xl/_rels/workbook.xml.rels'))!;
+    assert.ok(/Id="rId5"[^>]*styles/.test(wbRels));
+  });
+  await atest('styled xlsx: text is escaped and XML-illegal characters are stripped', async () => {
+    const bytes = await buildStyledXlsx([{ name: 'a/b:c', rows: [['<x>&"y"\u0001\u0007', 3.25, null, { v: 'z'.repeat(40000) }]] }, { name: 'a b c', rows: [] }], new JSZip());
+    const { get } = await readSheets(bytes);
+    const s1 = (await get('xl/worksheets/sheet1.xml'))!;
+    assert.ok(s1.includes('&lt;x&gt;&amp;&quot;y&quot;</t>'));
+    assert.ok(!/[\u0001\u0007]/.test(s1));
+    assert.ok(!s1.includes('z'.repeat(32768)));
+    const wb = (await get('xl/workbook.xml'))!;
+    assert.ok(/name="a b c"/.test(wb) && /name="a b c 2"/.test(wb), 'sanitized names collide and are made unique');
+    assert.equal(xlsxCleanText('ok\u0000'), 'ok');
+    assert.equal(excelDateSerial('1900-03-01'), 61);
+    assert.equal(excelDateSerial('nope'), null);
+  });
+}
