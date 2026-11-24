@@ -72,6 +72,12 @@
   "overrides": {
     "@electron/get": {
       "undici": "^7.30.1"
+    },
+    "app-builder-lib": {
+      "minimatch@^10.0.0": "^11.0.9"
+    },
+    "@electron/universal": {
+      "minimatch@^9.0.0": "^11.0.9"
     }
   },
   "build": {
