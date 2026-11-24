@@ -67,7 +67,7 @@
     "playwright": "^1.62.1",
     "png-to-ico": "^3.0.1",
     "tsx": "^4.19.2",
-    "typescript": "^5.6.0"
+    "typescript": "^7.0.2"
   },
   "overrides": {
     "@electron/get": {
